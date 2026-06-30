@@ -1,22 +1,34 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: SahamRadar AI - Indonesian Stock Screener API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: stocks
+    description: Stock data and screener
+  - name: market
+    description: Market overview and statistics
+  - name: watchlist
+    description: User watchlist management
+  - name: compare
+    description: Stock comparison
+  - name: risk
+    description: Risk radar
+  - name: ai
+    description: AI report generation
+  - name: admin
+    description: Admin operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +36,357 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /stocks:
+    get:
+      operationId: listStocks
+      tags: [stocks]
+      summary: List all stocks with screener data
+      parameters:
+        - name: sector
+          in: query
+          schema:
+            type: string
+        - name: label
+          in: query
+          schema:
+            type: string
+        - name: minScore
+          in: query
+          schema:
+            type: number
+        - name: maxScore
+          in: query
+          schema:
+            type: number
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+        - name: sortDir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of stocks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockListResponse"
+
+  /stocks/{ticker}:
+    get:
+      operationId: getStock
+      tags: [stocks]
+      summary: Get stock detail
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Stock detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockDetail"
+        "404":
+          description: Not found
+
+  /stocks/{ticker}/prices:
+    get:
+      operationId: getStockPrices
+      tags: [stocks]
+      summary: Get stock price history
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [1M, 3M, 6M, 1Y, 3Y]
+      responses:
+        "200":
+          description: Price history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StockPrice"
+
+  /stocks/{ticker}/ai-report:
+    get:
+      operationId: getAiReport
+      tags: [ai]
+      summary: Get AI report for a stock
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: AI report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiReport"
+        "404":
+          description: Not found
+    post:
+      operationId: generateAiReport
+      tags: [ai]
+      summary: Generate or regenerate AI report for a stock
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Generated AI report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiReport"
+
+  /stocks/{ticker}/technicals:
+    get:
+      operationId: getStockTechnicals
+      tags: [stocks]
+      summary: Get technical indicators (MA, RSI, support/resistance)
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Technical indicators
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicalIndicators"
+
+  /market/summary:
+    get:
+      operationId: getMarketSummary
+      tags: [market]
+      summary: Get market dashboard summary
+      responses:
+        "200":
+          description: Market summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketSummary"
+
+  /market/top-movers:
+    get:
+      operationId: getTopMovers
+      tags: [market]
+      summary: Get top gainers and losers
+      responses:
+        "200":
+          description: Top movers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopMovers"
+
+  /market/sector-performance:
+    get:
+      operationId: getSectorPerformance
+      tags: [market]
+      summary: Get sector performance breakdown
+      responses:
+        "200":
+          description: Sector performance
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SectorPerformance"
+
+  /market/label-distribution:
+    get:
+      operationId: getLabelDistribution
+      tags: [market]
+      summary: Get distribution of stock labels
+      responses:
+        "200":
+          description: Label distribution
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LabelCount"
+
+  /risk-radar:
+    get:
+      operationId: getRiskRadar
+      tags: [risk]
+      summary: Get speculative high-risk stocks
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Risk radar stocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RiskRadarStock"
+
+  /watchlist:
+    get:
+      operationId: getWatchlist
+      tags: [watchlist]
+      summary: Get user watchlist
+      parameters:
+        - name: userId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Watchlist
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WatchlistItem"
+    post:
+      operationId: addToWatchlist
+      tags: [watchlist]
+      summary: Add stock to watchlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WatchlistInput"
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WatchlistItem"
+
+  /watchlist/{ticker}:
+    delete:
+      operationId: removeFromWatchlist
+      tags: [watchlist]
+      summary: Remove stock from watchlist
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: userId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+
+  /compare:
+    post:
+      operationId: compareStocks
+      tags: [compare]
+      summary: Compare 2-5 stocks side by side
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompareInput"
+      responses:
+        "200":
+          description: Comparison data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StockDetail"
+
+  /admin/upload-csv:
+    post:
+      operationId: uploadCsv
+      tags: [admin]
+      summary: Upload CSV with stock data
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CsvUploadInput"
+      responses:
+        "200":
+          description: Upload result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CsvUploadResult"
+
+  /admin/recalculate-scores:
+    post:
+      operationId: recalculateScores
+      tags: [admin]
+      summary: Recalculate scores for all or specific stocks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecalculateInput"
+      responses:
+        "200":
+          description: Recalculation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecalculateResult"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +394,390 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    Stock:
+      type: object
+      required: [ticker, name, sector, currentPrice, priceChange, priceChangePct, volume, totalScore, label]
+      properties:
+        id:
+          type: integer
+        ticker:
+          type: string
+        name:
+          type: string
+        sector:
+          type: string
+        currentPrice:
+          type: number
+        priceChange:
+          type: number
+        priceChangePct:
+          type: number
+        volume:
+          type: integer
+        avgVolume:
+          type: ["integer", "null"]
+        marketCap:
+          type: ["number", "null"]
+        trendScore:
+          type: number
+        momentumScore:
+          type: number
+        volumeScore:
+          type: number
+        liquidityScore:
+          type: number
+        fundamentalScore:
+          type: number
+        valuationScore:
+          type: number
+        riskScore:
+          type: number
+        totalScore:
+          type: number
+        label:
+          type: string
+        updatedAt:
+          type: string
+
+    StockListResponse:
+      type: object
+      required: [stocks, total, page, limit]
+      properties:
+        stocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Stock"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    StockDetail:
+      type: object
+      required: [ticker, name, sector, currentPrice, priceChange, priceChangePct, volume, totalScore, label]
+      properties:
+        id:
+          type: integer
+        ticker:
+          type: string
+        name:
+          type: string
+        sector:
+          type: string
+        description:
+          type: ["string", "null"]
+        currentPrice:
+          type: number
+        priceChange:
+          type: number
+        priceChangePct:
+          type: number
+        volume:
+          type: integer
+        avgVolume:
+          type: ["integer", "null"]
+        marketCap:
+          type: ["number", "null"]
+        trendScore:
+          type: number
+        momentumScore:
+          type: number
+        volumeScore:
+          type: number
+        liquidityScore:
+          type: number
+        fundamentalScore:
+          type: number
+        valuationScore:
+          type: number
+        riskScore:
+          type: number
+        totalScore:
+          type: number
+        label:
+          type: string
+        fundamentals:
+          $ref: "#/components/schemas/Fundamentals"
+        technicals:
+          $ref: "#/components/schemas/TechnicalIndicators"
+        latestAiReport:
+          type: ["object", "null"]
+
+    StockPrice:
+      type: object
+      required: [date, open, high, low, close, volume]
+      properties:
+        date:
+          type: string
+        open:
+          type: number
+        high:
+          type: number
+        low:
+          type: number
+        close:
+          type: number
+        volume:
+          type: integer
+
+    Fundamentals:
+      type: object
+      properties:
+        pe:
+          type: ["number", "null"]
+        pb:
+          type: ["number", "null"]
+        roe:
+          type: ["number", "null"]
+        roa:
+          type: ["number", "null"]
+        eps:
+          type: ["number", "null"]
+        revenue:
+          type: ["number", "null"]
+        netIncome:
+          type: ["number", "null"]
+        debtEquity:
+          type: ["number", "null"]
+        currentRatio:
+          type: ["number", "null"]
+        dividendYield:
+          type: ["number", "null"]
+        beta:
+          type: ["number", "null"]
+        freeCashFlow:
+          type: ["number", "null"]
+
+    TechnicalIndicators:
+      type: object
+      properties:
+        ma20:
+          type: ["number", "null"]
+        ma50:
+          type: ["number", "null"]
+        ma200:
+          type: ["number", "null"]
+        rsi14:
+          type: ["number", "null"]
+        supportLevel:
+          type: ["number", "null"]
+        resistanceLevel:
+          type: ["number", "null"]
+        avgVolume20:
+          type: ["number", "null"]
+        priceVsMa20:
+          type: ["number", "null"]
+        priceVsMa50:
+          type: ["number", "null"]
+        priceVsMa200:
+          type: ["number", "null"]
+
+    AiReport:
+      type: object
+      required: [ticker, summary, riskAnalysis, bullishScenario, bearishScenario, conclusion, generatedAt]
+      properties:
+        id:
+          type: integer
+        ticker:
+          type: string
+        summary:
+          type: string
+        riskAnalysis:
+          type: string
+        bullishScenario:
+          type: string
+        bearishScenario:
+          type: string
+        conclusion:
+          type: string
+        generatedAt:
+          type: string
+        isStale:
+          type: boolean
+
+    MarketSummary:
+      type: object
+      required: [totalStocks, advancers, decliners, unchanged, avgTotalScore, strongWatchlistCount, watchlistCount, neutralCount, riskyCount, avoidCount]
+      properties:
+        totalStocks:
+          type: integer
+        advancers:
+          type: integer
+        decliners:
+          type: integer
+        unchanged:
+          type: integer
+        avgTotalScore:
+          type: number
+        strongWatchlistCount:
+          type: integer
+        watchlistCount:
+          type: integer
+        neutralCount:
+          type: integer
+        riskyCount:
+          type: integer
+        avoidCount:
+          type: integer
+        marketSentiment:
+          type: string
+
+    TopMovers:
+      type: object
+      required: [gainers, losers]
+      properties:
+        gainers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Stock"
+        losers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Stock"
+
+    SectorPerformance:
+      type: object
+      required: [sector, stockCount, avgScore, avgChange]
+      properties:
+        sector:
+          type: string
+        stockCount:
+          type: integer
+        avgScore:
+          type: number
+        avgChange:
+          type: number
+
+    LabelCount:
+      type: object
+      required: [label, count]
+      properties:
+        label:
+          type: string
+        count:
+          type: integer
+
+    RiskRadarStock:
+      type: object
+      required: [ticker, name, sector, currentPrice, priceChangePct, riskScore, totalScore, label, riskFlags]
+      properties:
+        ticker:
+          type: string
+        name:
+          type: string
+        sector:
+          type: string
+        currentPrice:
+          type: number
+        priceChangePct:
+          type: number
+        riskScore:
+          type: number
+        totalScore:
+          type: number
+        label:
+          type: string
+        riskFlags:
+          type: array
+          items:
+            type: string
+        volume:
+          type: integer
+        volatility:
+          type: ["number", "null"]
+
+    WatchlistItem:
+      type: object
+      required: [id, userId, ticker, addedAt]
+      properties:
+        id:
+          type: integer
+        userId:
+          type: string
+        ticker:
+          type: string
+        addedAt:
+          type: string
+        stock:
+          $ref: "#/components/schemas/Stock"
+
+    WatchlistInput:
+      type: object
+      required: [userId, ticker]
+      properties:
+        userId:
+          type: string
+        ticker:
+          type: string
+
+    DeleteResult:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+
+    CompareInput:
+      type: object
+      required: [tickers]
+      properties:
+        tickers:
+          type: array
+          items:
+            type: string
+          minItems: 2
+          maxItems: 5
+
+    CsvUploadInput:
+      type: object
+      required: [csvData, dataType]
+      properties:
+        csvData:
+          type: string
+        dataType:
+          type: string
+          enum: [stocks, prices, fundamentals]
+
+    CsvUploadResult:
+      type: object
+      required: [success, rowsProcessed, rowsInserted, rowsUpdated, errors]
+      properties:
+        success:
+          type: boolean
+        rowsProcessed:
+          type: integer
+        rowsInserted:
+          type: integer
+        rowsUpdated:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: string
+
+    RecalculateInput:
+      type: object
+      properties:
+        tickers:
+          type: array
+          items:
+            type: string
+
+    RecalculateResult:
+      type: object
+      required: [success, processed, errors]
+      properties:
+        success:
+          type: boolean
+        processed:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: string
