@@ -25,6 +25,9 @@ import type {
   CsvUploadInput,
   CsvUploadResult,
   DeleteResult,
+  GeneratePicksInput,
+  GeneratePicksResult,
+  GetPicksHistoryParams,
   GetRiskRadarParams,
   GetStockPricesParams,
   GetWatchlistParams,
@@ -32,6 +35,8 @@ import type {
   LabelCount,
   ListStocksParams,
   MarketSummary,
+  PicksHistory,
+  PicksReport,
   RecalculateInput,
   RecalculateResult,
   RemoveFromWatchlistParams,
@@ -1458,4 +1463,312 @@ export const useRecalculateScores = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getRecalculateScoresMutationOptions(options));
     }
+
+export const getGeneratePicksUrl = () => {
+
+
+
+
+  return `/api/picks/generate`
+}
+
+/**
+ * @summary Generate (or fetch existing) daily picks for a date, closing out stale open picks
+ */
+export const generatePicks = async (generatePicksInput?: GeneratePicksInput, options?: RequestInit): Promise<GeneratePicksResult> => {
+
+  return customFetch<GeneratePicksResult>(getGeneratePicksUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(generatePicksInput)
+  }
+);}
+
+
+
+
+export const getGeneratePicksMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generatePicks>>, TError,{data?: BodyType<GeneratePicksInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof generatePicks>>, TError,{data?: BodyType<GeneratePicksInput>}, TContext> => {
+
+const mutationKey = ['generatePicks'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof generatePicks>>, {data?: BodyType<GeneratePicksInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  generatePicks(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GeneratePicksMutationResult = NonNullable<Awaited<ReturnType<typeof generatePicks>>>
+    export type GeneratePicksMutationBody = BodyType<GeneratePicksInput> | undefined
+    export type GeneratePicksMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Generate (or fetch existing) daily picks for a date, closing out stale open picks
+ */
+export const useGeneratePicks = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generatePicks>>, TError,{data?: BodyType<GeneratePicksInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof generatePicks>>,
+        TError,
+        {data?: BodyType<GeneratePicksInput>},
+        TContext
+      > => {
+      return useMutation(getGeneratePicksMutationOptions(options));
+    }
+
+export const getGetTodayPicksUrl = () => {
+
+
+
+
+  return `/api/picks/today`
+}
+
+/**
+ * @summary Get today's AI-selected stock picks with full analysis
+ */
+export const getTodayPicks = async ( options?: RequestInit): Promise<PicksReport> => {
+
+  return customFetch<PicksReport>(getGetTodayPicksUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetTodayPicksQueryKey = () => {
+    return [
+    `/api/picks/today`
+    ] as const;
+    }
+
+
+export const getGetTodayPicksQueryOptions = <TData = Awaited<ReturnType<typeof getTodayPicks>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTodayPicks>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTodayPicksQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTodayPicks>>> = ({ signal }) => getTodayPicks({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTodayPicks>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetTodayPicksQueryResult = NonNullable<Awaited<ReturnType<typeof getTodayPicks>>>
+export type GetTodayPicksQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get today's AI-selected stock picks with full analysis
+ */
+
+export function useGetTodayPicks<TData = Awaited<ReturnType<typeof getTodayPicks>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTodayPicks>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetTodayPicksQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetPicksHistoryUrl = (params?: GetPicksHistoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/picks/history?${stringifiedParams}` : `/api/picks/history`
+}
+
+/**
+ * @summary Get daily profit/loss history across all past picks
+ */
+export const getPicksHistory = async (params?: GetPicksHistoryParams, options?: RequestInit): Promise<PicksHistory> => {
+
+  return customFetch<PicksHistory>(getGetPicksHistoryUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPicksHistoryQueryKey = (params?: GetPicksHistoryParams,) => {
+    return [
+    `/api/picks/history`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetPicksHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getPicksHistory>>, TError = ErrorType<unknown>>(params?: GetPicksHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPicksHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPicksHistoryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPicksHistory>>> = ({ signal }) => getPicksHistory(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPicksHistory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetPicksHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getPicksHistory>>>
+export type GetPicksHistoryQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get daily profit/loss history across all past picks
+ */
+
+export function useGetPicksHistory<TData = Awaited<ReturnType<typeof getPicksHistory>>, TError = ErrorType<unknown>>(
+ params?: GetPicksHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPicksHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetPicksHistoryQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetPicksReportUrl = (date: string,) => {
+
+
+
+
+  return `/api/picks/report/${date}`
+}
+
+/**
+ * @summary Get the detailed report (picks + profit analysis) for a specific date
+ */
+export const getPicksReport = async (date: string, options?: RequestInit): Promise<PicksReport> => {
+
+  return customFetch<PicksReport>(getGetPicksReportUrl(date),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPicksReportQueryKey = (date: string,) => {
+    return [
+    `/api/picks/report/${date}`
+    ] as const;
+    }
+
+
+export const getGetPicksReportQueryOptions = <TData = Awaited<ReturnType<typeof getPicksReport>>, TError = ErrorType<unknown>>(date: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPicksReport>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPicksReportQueryKey(date);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPicksReport>>> = ({ signal }) => getPicksReport(date, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: date !== null && date !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPicksReport>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetPicksReportQueryResult = NonNullable<Awaited<ReturnType<typeof getPicksReport>>>
+export type GetPicksReportQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get the detailed report (picks + profit analysis) for a specific date
+ */
+
+export function useGetPicksReport<TData = Awaited<ReturnType<typeof getPicksReport>>, TError = ErrorType<unknown>>(
+ date: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPicksReport>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetPicksReportQueryOptions(date,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 

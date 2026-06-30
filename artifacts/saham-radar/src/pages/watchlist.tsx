@@ -18,7 +18,7 @@ export default function Watchlist() {
   const { toast } = useToast();
 
   const handleRemove = (ticker: string) => {
-    removeFromWatchlist.mutate({ ticker, userId }, {
+    removeFromWatchlist.mutate({ ticker, params: { userId } }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ["/api/watchlist"] });
         toast({ title: "Dihapus", description: `${ticker} dihapus dari watchlist.` });

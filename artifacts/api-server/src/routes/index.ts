@@ -6,6 +6,7 @@ import watchlistRouter from "./watchlist";
 import compareRouter from "./compare";
 import riskRadarRouter from "./risk-radar";
 import adminRouter from "./admin";
+import picksRouter from "./picks";
 
 const router: IRouter = Router();
 
@@ -16,5 +17,6 @@ router.use("/watchlist", watchlistRouter);
 router.use("/compare", compareRouter);
 router.use("/risk-radar", riskRadarRouter);
 router.use("/admin", adminRouter);
+router.use("/picks", picksRouter);
 
 export default router;

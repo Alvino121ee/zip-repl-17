@@ -1,0 +1,1 @@
+- [Daily picks staleness bug](daily-picks-staleness.md) — "close stale picks" logic must compare against today's date, not the generation target date.

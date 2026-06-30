@@ -507,3 +507,125 @@ export const RecalculateScoresResponse = zod.object({
 })
 
 
+/**
+ * @summary Generate (or fetch existing) daily picks for a date, closing out stale open picks
+ */
+export const GeneratePicksBody = zod.object({
+  "date": zod.string().optional()
+})
+
+export const GeneratePicksResponse = zod.object({
+  "date": zod.string(),
+  "alreadyExisted": zod.boolean(),
+  "picksCreated": zod.number(),
+  "picksClosed": zod.number()
+})
+
+
+/**
+ * @summary Get today's AI-selected stock picks with full analysis
+ */
+export const GetTodayPicksResponse = zod.object({
+  "date": zod.string(),
+  "picks": zod.array(zod.object({
+  "id": zod.number(),
+  "pickDate": zod.string(),
+  "ticker": zod.string(),
+  "name": zod.string(),
+  "sector": zod.string(),
+  "rank": zod.number(),
+  "entryPrice": zod.number(),
+  "exitPrice": zod.number().nullish(),
+  "investmentAmount": zod.number(),
+  "profitAmount": zod.number().nullish(),
+  "profitPct": zod.number().nullish(),
+  "status": zod.string(),
+  "totalScoreAtPick": zod.number(),
+  "trendScoreAtPick": zod.number().nullish(),
+  "momentumScoreAtPick": zod.number().nullish(),
+  "volumeScoreAtPick": zod.number().nullish(),
+  "riskScoreAtPick": zod.number().nullish(),
+  "labelAtPick": zod.string(),
+  "reason": zod.string().nullish(),
+  "closedAt": zod.string().nullish(),
+  "createdAt": zod.string()
+})),
+  "summary": zod.object({
+  "totalPicks": zod.number(),
+  "closedPicks": zod.number(),
+  "openPicks": zod.number(),
+  "totalProfitAmount": zod.number(),
+  "avgProfitPct": zod.number(),
+  "winRate": zod.number(),
+  "winners": zod.number()
+})
+})
+
+
+/**
+ * @summary Get daily profit/loss history across all past picks
+ */
+export const GetPicksHistoryQueryParams = zod.object({
+  "limit": zod.coerce.number().optional()
+})
+
+export const GetPicksHistoryResponse = zod.object({
+  "days": zod.array(zod.object({
+  "date": zod.string(),
+  "totalPicks": zod.number(),
+  "closedPicks": zod.number(),
+  "openPicks": zod.number(),
+  "totalProfitAmount": zod.number(),
+  "avgProfitPct": zod.number(),
+  "winRate": zod.number(),
+  "winners": zod.number()
+})),
+  "cumulativeProfitAmount": zod.number(),
+  "totalDays": zod.number()
+})
+
+
+/**
+ * @summary Get the detailed report (picks + profit analysis) for a specific date
+ */
+export const GetPicksReportParams = zod.object({
+  "date": zod.coerce.string()
+})
+
+export const GetPicksReportResponse = zod.object({
+  "date": zod.string(),
+  "picks": zod.array(zod.object({
+  "id": zod.number(),
+  "pickDate": zod.string(),
+  "ticker": zod.string(),
+  "name": zod.string(),
+  "sector": zod.string(),
+  "rank": zod.number(),
+  "entryPrice": zod.number(),
+  "exitPrice": zod.number().nullish(),
+  "investmentAmount": zod.number(),
+  "profitAmount": zod.number().nullish(),
+  "profitPct": zod.number().nullish(),
+  "status": zod.string(),
+  "totalScoreAtPick": zod.number(),
+  "trendScoreAtPick": zod.number().nullish(),
+  "momentumScoreAtPick": zod.number().nullish(),
+  "volumeScoreAtPick": zod.number().nullish(),
+  "riskScoreAtPick": zod.number().nullish(),
+  "labelAtPick": zod.string(),
+  "reason": zod.string().nullish(),
+  "closedAt": zod.string().nullish(),
+  "createdAt": zod.string()
+})),
+  "summary": zod.object({
+  "totalPicks": zod.number(),
+  "closedPicks": zod.number(),
+  "openPicks": zod.number(),
+  "totalProfitAmount": zod.number(),
+  "avgProfitPct": zod.number(),
+  "winRate": zod.number(),
+  "winners": zod.number()
+})
+})
+
+

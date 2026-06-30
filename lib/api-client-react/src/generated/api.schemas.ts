@@ -251,6 +251,83 @@ export interface RecalculateResult {
   errors: string[];
 }
 
+export interface GeneratePicksInput {
+  date?: string;
+}
+
+export interface GeneratePicksResult {
+  date: string;
+  alreadyExisted: boolean;
+  picksCreated: number;
+  picksClosed: number;
+}
+
+export interface DailyPick {
+  id: number;
+  pickDate: string;
+  ticker: string;
+  name: string;
+  sector: string;
+  rank: number;
+  entryPrice: number;
+  /** @nullable */
+  exitPrice?: number | null;
+  investmentAmount: number;
+  /** @nullable */
+  profitAmount?: number | null;
+  /** @nullable */
+  profitPct?: number | null;
+  status: string;
+  totalScoreAtPick: number;
+  /** @nullable */
+  trendScoreAtPick?: number | null;
+  /** @nullable */
+  momentumScoreAtPick?: number | null;
+  /** @nullable */
+  volumeScoreAtPick?: number | null;
+  /** @nullable */
+  riskScoreAtPick?: number | null;
+  labelAtPick: string;
+  /** @nullable */
+  reason?: string | null;
+  /** @nullable */
+  closedAt?: string | null;
+  createdAt: string;
+}
+
+export interface PicksSummary {
+  totalPicks: number;
+  closedPicks: number;
+  openPicks: number;
+  totalProfitAmount: number;
+  avgProfitPct: number;
+  winRate: number;
+  winners: number;
+}
+
+export interface PicksReport {
+  date: string;
+  picks: DailyPick[];
+  summary: PicksSummary;
+}
+
+export interface PicksHistoryDay {
+  date: string;
+  totalPicks: number;
+  closedPicks: number;
+  openPicks: number;
+  totalProfitAmount: number;
+  avgProfitPct: number;
+  winRate: number;
+  winners: number;
+}
+
+export interface PicksHistory {
+  days: PicksHistoryDay[];
+  cumulativeProfitAmount: number;
+  totalDays: number;
+}
+
 export type ListStocksParams = {
 sector?: string;
 label?: string;
@@ -296,5 +373,9 @@ userId?: string;
 
 export type RemoveFromWatchlistParams = {
 userId?: string;
+};
+
+export type GetPicksHistoryParams = {
+limit?: number;
 };
 

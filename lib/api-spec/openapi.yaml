@@ -23,6 +23,8 @@ tags:
     description: AI report generation
   - name: admin
     description: Admin operations
+  - name: picks
+    description: Daily AI stock picks and profit reports
 paths:
   /healthz:
     get:
@@ -386,6 +388,75 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecalculateResult"
+
+  /picks/generate:
+    post:
+      operationId: generatePicks
+      tags: [picks]
+      summary: Generate (or fetch existing) daily picks for a date, closing out stale open picks
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GeneratePicksInput"
+      responses:
+        "200":
+          description: Generation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratePicksResult"
+
+  /picks/today:
+    get:
+      operationId: getTodayPicks
+      tags: [picks]
+      summary: Get today's AI-selected stock picks with full analysis
+      responses:
+        "200":
+          description: Today's picks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PicksReport"
+
+  /picks/history:
+    get:
+      operationId: getPicksHistory
+      tags: [picks]
+      summary: Get daily profit/loss history across all past picks
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Picks history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PicksHistory"
+
+  /picks/report/{date}:
+    get:
+      operationId: getPicksReport
+      tags: [picks]
+      summary: Get the detailed report (picks + profit analysis) for a specific date
+      parameters:
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Daily report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PicksReport"
 
 components:
   schemas:
@@ -781,3 +852,149 @@ components:
           type: array
           items:
             type: string
+
+    GeneratePicksInput:
+      type: object
+      properties:
+        date:
+          type: string
+
+    GeneratePicksResult:
+      type: object
+      required: [date, alreadyExisted, picksCreated, picksClosed]
+      properties:
+        date:
+          type: string
+        alreadyExisted:
+          type: boolean
+        picksCreated:
+          type: integer
+        picksClosed:
+          type: integer
+
+    DailyPick:
+      type: object
+      required:
+        [
+          id,
+          pickDate,
+          ticker,
+          name,
+          sector,
+          rank,
+          entryPrice,
+          investmentAmount,
+          status,
+          totalScoreAtPick,
+          labelAtPick,
+          createdAt,
+        ]
+      properties:
+        id:
+          type: integer
+        pickDate:
+          type: string
+        ticker:
+          type: string
+        name:
+          type: string
+        sector:
+          type: string
+        rank:
+          type: integer
+        entryPrice:
+          type: number
+        exitPrice:
+          type: ["number", "null"]
+        investmentAmount:
+          type: number
+        profitAmount:
+          type: ["number", "null"]
+        profitPct:
+          type: ["number", "null"]
+        status:
+          type: string
+        totalScoreAtPick:
+          type: number
+        trendScoreAtPick:
+          type: ["number", "null"]
+        momentumScoreAtPick:
+          type: ["number", "null"]
+        volumeScoreAtPick:
+          type: ["number", "null"]
+        riskScoreAtPick:
+          type: ["number", "null"]
+        labelAtPick:
+          type: string
+        reason:
+          type: ["string", "null"]
+        closedAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    PicksSummary:
+      type: object
+      required: [totalPicks, closedPicks, openPicks, totalProfitAmount, avgProfitPct, winRate, winners]
+      properties:
+        totalPicks:
+          type: integer
+        closedPicks:
+          type: integer
+        openPicks:
+          type: integer
+        totalProfitAmount:
+          type: number
+        avgProfitPct:
+          type: number
+        winRate:
+          type: number
+        winners:
+          type: integer
+
+    PicksReport:
+      type: object
+      required: [date, picks, summary]
+      properties:
+        date:
+          type: string
+        picks:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyPick"
+        summary:
+          $ref: "#/components/schemas/PicksSummary"
+
+    PicksHistoryDay:
+      type: object
+      required: [date, totalPicks, closedPicks, openPicks, totalProfitAmount, avgProfitPct, winRate, winners]
+      properties:
+        date:
+          type: string
+        totalPicks:
+          type: integer
+        closedPicks:
+          type: integer
+        openPicks:
+          type: integer
+        totalProfitAmount:
+          type: number
+        avgProfitPct:
+          type: number
+        winRate:
+          type: number
+        winners:
+          type: integer
+
+    PicksHistory:
+      type: object
+      required: [days, cumulativeProfitAmount, totalDays]
+      properties:
+        days:
+          type: array
+          items:
+            $ref: "#/components/schemas/PicksHistoryDay"
+        cumulativeProfitAmount:
+          type: number
+        totalDays:
+          type: integer

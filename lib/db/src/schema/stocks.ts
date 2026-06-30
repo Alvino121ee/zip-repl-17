@@ -105,6 +105,28 @@ export const watchlistsTable = pgTable("watchlists", {
   addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const dailyPicksTable = pgTable("daily_picks", {
+  id: serial("id").primaryKey(),
+  pickDate: text("pick_date").notNull(),
+  ticker: text("ticker").notNull(),
+  rank: integer("rank").notNull(),
+  entryPrice: numeric("entry_price", { precision: 18, scale: 2 }).notNull(),
+  exitPrice: numeric("exit_price", { precision: 18, scale: 2 }),
+  investmentAmount: numeric("investment_amount", { precision: 18, scale: 2 }).notNull().default("10000000"),
+  profitAmount: numeric("profit_amount", { precision: 18, scale: 2 }),
+  profitPct: numeric("profit_pct", { precision: 10, scale: 4 }),
+  status: text("status").notNull().default("open"),
+  totalScoreAtPick: numeric("total_score_at_pick", { precision: 6, scale: 2 }).notNull(),
+  trendScoreAtPick: numeric("trend_score_at_pick", { precision: 6, scale: 2 }),
+  momentumScoreAtPick: numeric("momentum_score_at_pick", { precision: 6, scale: 2 }),
+  volumeScoreAtPick: numeric("volume_score_at_pick", { precision: 6, scale: 2 }),
+  riskScoreAtPick: numeric("risk_score_at_pick", { precision: 6, scale: 2 }),
+  labelAtPick: text("label_at_pick").notNull(),
+  reason: text("reason"),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const insertStockSchema = createInsertSchema(stocksTable).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertStock = z.infer<typeof insertStockSchema>;
 export type Stock = typeof stocksTable.$inferSelect;
@@ -128,3 +150,7 @@ export type AiReport = typeof aiReportsTable.$inferSelect;
 export const insertWatchlistSchema = createInsertSchema(watchlistsTable).omit({ id: true, addedAt: true });
 export type InsertWatchlist = z.infer<typeof insertWatchlistSchema>;
 export type Watchlist = typeof watchlistsTable.$inferSelect;
+
+export const insertDailyPickSchema = createInsertSchema(dailyPicksTable).omit({ id: true, createdAt: true });
+export type InsertDailyPick = z.infer<typeof insertDailyPickSchema>;
+export type DailyPick = typeof dailyPicksTable.$inferSelect;

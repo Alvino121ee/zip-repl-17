@@ -12,6 +12,7 @@ import StockDetail from "@/pages/stock-detail";
 import Watchlist from "@/pages/watchlist";
 import Compare from "@/pages/compare";
 import RiskRadar from "@/pages/risk-radar";
+import Picks from "@/pages/picks";
 import AdminPanel from "@/pages/admin";
 
 const queryClient = new QueryClient({
@@ -33,6 +34,7 @@ function Router() {
         <Route path="/watchlist" component={Watchlist} />
         <Route path="/compare" component={Compare} />
         <Route path="/risk-radar" component={RiskRadar} />
+        <Route path="/picks" component={Picks} />
         <Route path="/admin" component={AdminPanel} />
         <Route component={NotFound} />
       </Switch>
