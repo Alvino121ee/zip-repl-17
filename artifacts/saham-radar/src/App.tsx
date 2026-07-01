@@ -15,6 +15,7 @@ import RiskRadar from "@/pages/risk-radar";
 import Picks from "@/pages/picks";
 import AdminPanel from "@/pages/admin";
 import AiAnalyst from "@/pages/ai-analyst";
+import AgentsPage from "@/pages/agents";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,6 +38,7 @@ function Router() {
         <Route path="/risk-radar" component={RiskRadar} />
         <Route path="/picks" component={Picks} />
         <Route path="/ai-analyst" component={AiAnalyst} />
+        <Route path="/agents" component={AgentsPage} />
         <Route path="/admin" component={AdminPanel} />
         <Route component={NotFound} />
       </Switch>

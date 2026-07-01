@@ -1,1 +1,3 @@
 - [Daily picks staleness bug](daily-picks-staleness.md) — "close stale picks" logic must compare against today's date, not the generation target date.
+- [Agent system architecture](agent-system.md) — 3 AI agents (fundamental/technical/screening) share 1 DeepSeek API; each has DB-stored system prompt + few-shot training + session memory.
+- [Orval codegen command](orval-codegen.md) — run `pnpm --filter @workspace/api-spec run codegen` to regenerate API client after openapi.yaml changes.

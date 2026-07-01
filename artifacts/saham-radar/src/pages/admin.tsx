@@ -20,7 +20,8 @@ function SyncPanel() {
   const { toast } = useToast();
   const syncMutation = useSyncRealtime();
   const { data: status, refetch } = useGetSyncStatus({
-    query: { refetchInterval: 5000 }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    query: { refetchInterval: 5000 } as any
   });
 
   const handleSync = () => {

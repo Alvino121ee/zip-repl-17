@@ -20,14 +20,21 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AgentChatInput,
+  AgentChatOutput,
+  AgentConfig,
+  AgentMemoryMessage,
   AiInsight,
   AiReport,
+  ClearAgentMemory200,
+  ClearAgentMemoryParams,
   CompareInput,
   CsvUploadInput,
   CsvUploadResult,
   DeleteResult,
   GeneratePicksInput,
   GeneratePicksResult,
+  GetAgentMemoryParams,
   GetAiStatus200,
   GetNewsLiveParams,
   GetPicksHistoryParams,
@@ -56,6 +63,7 @@ import type {
   SyncStatus,
   TechnicalIndicators,
   TopMovers,
+  UpdateAgentConfigInput,
   WatchlistInput,
   WatchlistItem
 } from './api.schemas';
@@ -1856,6 +1864,470 @@ export const useSendAiChat = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getSendAiChatMutationOptions(options));
+    }
+
+export const getListAgentsUrl = () => {
+
+
+
+
+  return `/api/agents`
+}
+
+/**
+ * @summary List all AI agents
+ */
+export const listAgents = async ( options?: RequestInit): Promise<AgentConfig[]> => {
+
+  return customFetch<AgentConfig[]>(getListAgentsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListAgentsQueryKey = () => {
+    return [
+    `/api/agents`
+    ] as const;
+    }
+
+
+export const getListAgentsQueryOptions = <TData = Awaited<ReturnType<typeof listAgents>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAgents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAgentsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAgents>>> = ({ signal }) => listAgents({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAgents>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListAgentsQueryResult = NonNullable<Awaited<ReturnType<typeof listAgents>>>
+export type ListAgentsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List all AI agents
+ */
+
+export function useListAgents<TData = Awaited<ReturnType<typeof listAgents>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAgents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListAgentsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetAgentUrl = (agentId: string,) => {
+
+
+
+
+  return `/api/agents/${agentId}`
+}
+
+/**
+ * @summary Get single agent config
+ */
+export const getAgent = async (agentId: string, options?: RequestInit): Promise<AgentConfig> => {
+
+  return customFetch<AgentConfig>(getGetAgentUrl(agentId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetAgentQueryKey = (agentId: string,) => {
+    return [
+    `/api/agents/${agentId}`
+    ] as const;
+    }
+
+
+export const getGetAgentQueryOptions = <TData = Awaited<ReturnType<typeof getAgent>>, TError = ErrorType<unknown>>(agentId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAgent>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAgentQueryKey(agentId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgent>>> = ({ signal }) => getAgent(agentId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: agentId !== null && agentId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAgent>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetAgentQueryResult = NonNullable<Awaited<ReturnType<typeof getAgent>>>
+export type GetAgentQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get single agent config
+ */
+
+export function useGetAgent<TData = Awaited<ReturnType<typeof getAgent>>, TError = ErrorType<unknown>>(
+ agentId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAgent>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetAgentQueryOptions(agentId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getChatWithAgentUrl = (agentId: string,) => {
+
+
+
+
+  return `/api/agents/${agentId}/chat`
+}
+
+/**
+ * @summary Chat with a specific AI agent (with memory)
+ */
+export const chatWithAgent = async (agentId: string,
+    agentChatInput: AgentChatInput, options?: RequestInit): Promise<AgentChatOutput> => {
+
+  return customFetch<AgentChatOutput>(getChatWithAgentUrl(agentId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(agentChatInput)
+  }
+);}
+
+
+
+
+export const getChatWithAgentMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof chatWithAgent>>, TError,{agentId: string;data: BodyType<AgentChatInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof chatWithAgent>>, TError,{agentId: string;data: BodyType<AgentChatInput>}, TContext> => {
+
+const mutationKey = ['chatWithAgent'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof chatWithAgent>>, {agentId: string;data: BodyType<AgentChatInput>}> = (props) => {
+          const {agentId,data} = props ?? {};
+
+          return  chatWithAgent(agentId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ChatWithAgentMutationResult = NonNullable<Awaited<ReturnType<typeof chatWithAgent>>>
+    export type ChatWithAgentMutationBody = BodyType<AgentChatInput>
+    export type ChatWithAgentMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Chat with a specific AI agent (with memory)
+ */
+export const useChatWithAgent = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof chatWithAgent>>, TError,{agentId: string;data: BodyType<AgentChatInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof chatWithAgent>>,
+        TError,
+        {agentId: string;data: BodyType<AgentChatInput>},
+        TContext
+      > => {
+      return useMutation(getChatWithAgentMutationOptions(options));
+    }
+
+export const getGetAgentMemoryUrl = (agentId: string,
+    params?: GetAgentMemoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/agents/${agentId}/memory?${stringifiedParams}` : `/api/agents/${agentId}/memory`
+}
+
+/**
+ * @summary Get agent conversation memory for a session
+ */
+export const getAgentMemory = async (agentId: string,
+    params?: GetAgentMemoryParams, options?: RequestInit): Promise<AgentMemoryMessage[]> => {
+
+  return customFetch<AgentMemoryMessage[]>(getGetAgentMemoryUrl(agentId,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetAgentMemoryQueryKey = (agentId: string,
+    params?: GetAgentMemoryParams,) => {
+    return [
+    `/api/agents/${agentId}/memory`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetAgentMemoryQueryOptions = <TData = Awaited<ReturnType<typeof getAgentMemory>>, TError = ErrorType<unknown>>(agentId: string,
+    params?: GetAgentMemoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAgentMemory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAgentMemoryQueryKey(agentId,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentMemory>>> = ({ signal }) => getAgentMemory(agentId,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: agentId !== null && agentId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAgentMemory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetAgentMemoryQueryResult = NonNullable<Awaited<ReturnType<typeof getAgentMemory>>>
+export type GetAgentMemoryQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get agent conversation memory for a session
+ */
+
+export function useGetAgentMemory<TData = Awaited<ReturnType<typeof getAgentMemory>>, TError = ErrorType<unknown>>(
+ agentId: string,
+    params?: GetAgentMemoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAgentMemory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetAgentMemoryQueryOptions(agentId,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getClearAgentMemoryUrl = (agentId: string,
+    params?: ClearAgentMemoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/agents/${agentId}/memory?${stringifiedParams}` : `/api/agents/${agentId}/memory`
+}
+
+/**
+ * @summary Clear agent conversation memory for a session
+ */
+export const clearAgentMemory = async (agentId: string,
+    params?: ClearAgentMemoryParams, options?: RequestInit): Promise<ClearAgentMemory200> => {
+
+  return customFetch<ClearAgentMemory200>(getClearAgentMemoryUrl(agentId,params),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getClearAgentMemoryMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof clearAgentMemory>>, TError,{agentId: string;params?: ClearAgentMemoryParams}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof clearAgentMemory>>, TError,{agentId: string;params?: ClearAgentMemoryParams}, TContext> => {
+
+const mutationKey = ['clearAgentMemory'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof clearAgentMemory>>, {agentId: string;params?: ClearAgentMemoryParams}> = (props) => {
+          const {agentId,params} = props ?? {};
+
+          return  clearAgentMemory(agentId,params,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ClearAgentMemoryMutationResult = NonNullable<Awaited<ReturnType<typeof clearAgentMemory>>>
+
+    export type ClearAgentMemoryMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Clear agent conversation memory for a session
+ */
+export const useClearAgentMemory = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof clearAgentMemory>>, TError,{agentId: string;params?: ClearAgentMemoryParams}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof clearAgentMemory>>,
+        TError,
+        {agentId: string;params?: ClearAgentMemoryParams},
+        TContext
+      > => {
+      return useMutation(getClearAgentMemoryMutationOptions(options));
+    }
+
+export const getUpdateAgentConfigUrl = (agentId: string,) => {
+
+
+
+
+  return `/api/agents/${agentId}/config`
+}
+
+/**
+ * @summary Update agent system prompt and training examples
+ */
+export const updateAgentConfig = async (agentId: string,
+    updateAgentConfigInput: UpdateAgentConfigInput, options?: RequestInit): Promise<AgentConfig> => {
+
+  return customFetch<AgentConfig>(getUpdateAgentConfigUrl(agentId),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(updateAgentConfigInput)
+  }
+);}
+
+
+
+
+export const getUpdateAgentConfigMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateAgentConfig>>, TError,{agentId: string;data: BodyType<UpdateAgentConfigInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateAgentConfig>>, TError,{agentId: string;data: BodyType<UpdateAgentConfigInput>}, TContext> => {
+
+const mutationKey = ['updateAgentConfig'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateAgentConfig>>, {agentId: string;data: BodyType<UpdateAgentConfigInput>}> = (props) => {
+          const {agentId,data} = props ?? {};
+
+          return  updateAgentConfig(agentId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateAgentConfigMutationResult = NonNullable<Awaited<ReturnType<typeof updateAgentConfig>>>
+    export type UpdateAgentConfigMutationBody = BodyType<UpdateAgentConfigInput>
+    export type UpdateAgentConfigMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Update agent system prompt and training examples
+ */
+export const useUpdateAgentConfig = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateAgentConfig>>, TError,{agentId: string;data: BodyType<UpdateAgentConfigInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateAgentConfig>>,
+        TError,
+        {agentId: string;data: BodyType<UpdateAgentConfigInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateAgentConfigMutationOptions(options));
     }
 
 export const getSyncRealtimeUrl = () => {

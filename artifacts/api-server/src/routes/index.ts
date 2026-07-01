@@ -9,6 +9,7 @@ import adminRouter from "./admin";
 import picksRouter from "./picks";
 import newsRouter from "./news";
 import aiAnalystRouter from "./ai-analyst";
+import agentsRouter from "./agents";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use("/admin", adminRouter);
 router.use("/picks", picksRouter);
 router.use("/news", newsRouter);
 router.use("/ai", aiAnalystRouter);
+router.use("/agents", agentsRouter);
 
 export default router;

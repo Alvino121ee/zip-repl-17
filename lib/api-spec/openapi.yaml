@@ -27,6 +27,8 @@ tags:
     description: Admin operations
   - name: picks
     description: Daily AI stock picks and profit reports
+  - name: agents
+    description: Specialized AI agents with memory and training
 paths:
   /healthz:
     get:
@@ -494,6 +496,139 @@ paths:
                 properties:
                   reply: { type: string }
                   aiPowered: { type: boolean }
+
+  /agents:
+    get:
+      operationId: listAgents
+      tags: [agents]
+      summary: List all AI agents
+      responses:
+        "200":
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentConfig"
+
+  /agents/{agentId}:
+    get:
+      operationId: getAgent
+      tags: [agents]
+      summary: Get single agent config
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentConfig"
+
+  /agents/{agentId}/chat:
+    post:
+      operationId: chatWithAgent
+      tags: [agents]
+      summary: Chat with a specific AI agent (with memory)
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentChatInput"
+      responses:
+        "200":
+          description: Agent reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentChatOutput"
+
+  /agents/{agentId}/memory:
+    get:
+      operationId: getAgentMemory
+      tags: [agents]
+      summary: Get agent conversation memory for a session
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Conversation history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentMemoryMessage"
+    delete:
+      operationId: clearAgentMemory
+      tags: [agents]
+      summary: Clear agent conversation memory for a session
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Memory cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+
+  /agents/{agentId}/config:
+    put:
+      operationId: updateAgentConfig
+      tags: [agents]
+      summary: Update agent system prompt and training examples
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAgentConfigInput"
+      responses:
+        "200":
+          description: Updated agent config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentConfig"
 
   /admin/sync-realtime:
     post:
@@ -1213,3 +1348,87 @@ components:
           type: boolean
         generatedAt:
           type: string
+
+    AgentTrainingExample:
+      type: object
+      required: [input, output]
+      properties:
+        input:
+          type: string
+        output:
+          type: string
+
+    AgentConfig:
+      type: object
+      required: [agentId, name, description, avatar, color, systemPrompt, trainingExamples, isActive, updatedAt]
+      properties:
+        agentId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        avatar:
+          type: string
+        color:
+          type: string
+        systemPrompt:
+          type: string
+        trainingExamples:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentTrainingExample"
+        isActive:
+          type: boolean
+        updatedAt:
+          type: string
+
+    AgentMemoryMessage:
+      type: object
+      required: [id, role, content, createdAt]
+      properties:
+        id:
+          type: integer
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        createdAt:
+          type: string
+
+    AgentChatInput:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        sessionId:
+          type: string
+
+    AgentChatOutput:
+      type: object
+      required: [reply, aiPowered, agentId, sessionId]
+      properties:
+        reply:
+          type: string
+        aiPowered:
+          type: boolean
+        agentId:
+          type: string
+        sessionId:
+          type: string
+
+    UpdateAgentConfigInput:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        systemPrompt:
+          type: string
+        trainingExamples:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentTrainingExample"

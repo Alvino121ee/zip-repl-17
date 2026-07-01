@@ -372,6 +372,57 @@ export interface AiInsight {
   generatedAt?: string;
 }
 
+export interface AgentTrainingExample {
+  input: string;
+  output: string;
+}
+
+export interface AgentConfig {
+  agentId: string;
+  name: string;
+  description: string;
+  avatar: string;
+  color: string;
+  systemPrompt: string;
+  trainingExamples: AgentTrainingExample[];
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export type AgentMemoryMessageRole = typeof AgentMemoryMessageRole[keyof typeof AgentMemoryMessageRole];
+
+
+export const AgentMemoryMessageRole = {
+  user: 'user',
+  assistant: 'assistant',
+} as const;
+
+export interface AgentMemoryMessage {
+  id: number;
+  role: AgentMemoryMessageRole;
+  content: string;
+  createdAt: string;
+}
+
+export interface AgentChatInput {
+  message: string;
+  sessionId?: string;
+}
+
+export interface AgentChatOutput {
+  reply: string;
+  aiPowered: boolean;
+  agentId: string;
+  sessionId: string;
+}
+
+export interface UpdateAgentConfigInput {
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  trainingExamples?: AgentTrainingExample[];
+}
+
 export type ListStocksParams = {
 sector?: string;
 label?: string;
@@ -437,6 +488,19 @@ export type SendAiChatBody = {
 export type SendAiChat200 = {
   reply: string;
   aiPowered: boolean;
+};
+
+export type GetAgentMemoryParams = {
+sessionId?: string;
+};
+
+export type ClearAgentMemoryParams = {
+sessionId?: string;
+};
+
+export type ClearAgentMemory200 = {
+  success?: boolean;
+  message?: string;
 };
 
 export type SyncRealtime200 = {

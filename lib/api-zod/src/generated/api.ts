@@ -592,6 +592,139 @@ export const SendAiChatResponse = zod.object({
 
 
 /**
+ * @summary List all AI agents
+ */
+export const ListAgentsResponseItem = zod.object({
+  "agentId": zod.string(),
+  "name": zod.string(),
+  "description": zod.string(),
+  "avatar": zod.string(),
+  "color": zod.string(),
+  "systemPrompt": zod.string(),
+  "trainingExamples": zod.array(zod.object({
+  "input": zod.string(),
+  "output": zod.string()
+})),
+  "isActive": zod.boolean(),
+  "updatedAt": zod.string()
+})
+export const ListAgentsResponse = zod.array(ListAgentsResponseItem)
+
+
+/**
+ * @summary Get single agent config
+ */
+export const GetAgentParams = zod.object({
+  "agentId": zod.coerce.string()
+})
+
+export const GetAgentResponse = zod.object({
+  "agentId": zod.string(),
+  "name": zod.string(),
+  "description": zod.string(),
+  "avatar": zod.string(),
+  "color": zod.string(),
+  "systemPrompt": zod.string(),
+  "trainingExamples": zod.array(zod.object({
+  "input": zod.string(),
+  "output": zod.string()
+})),
+  "isActive": zod.boolean(),
+  "updatedAt": zod.string()
+})
+
+
+/**
+ * @summary Chat with a specific AI agent (with memory)
+ */
+export const ChatWithAgentParams = zod.object({
+  "agentId": zod.coerce.string()
+})
+
+export const ChatWithAgentBody = zod.object({
+  "message": zod.string(),
+  "sessionId": zod.string().optional()
+})
+
+export const ChatWithAgentResponse = zod.object({
+  "reply": zod.string(),
+  "aiPowered": zod.boolean(),
+  "agentId": zod.string(),
+  "sessionId": zod.string()
+})
+
+
+/**
+ * @summary Get agent conversation memory for a session
+ */
+export const GetAgentMemoryParams = zod.object({
+  "agentId": zod.coerce.string()
+})
+
+export const GetAgentMemoryQueryParams = zod.object({
+  "sessionId": zod.coerce.string().optional()
+})
+
+export const GetAgentMemoryResponseItem = zod.object({
+  "id": zod.number(),
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string(),
+  "createdAt": zod.string()
+})
+export const GetAgentMemoryResponse = zod.array(GetAgentMemoryResponseItem)
+
+
+/**
+ * @summary Clear agent conversation memory for a session
+ */
+export const ClearAgentMemoryParams = zod.object({
+  "agentId": zod.coerce.string()
+})
+
+export const ClearAgentMemoryQueryParams = zod.object({
+  "sessionId": zod.coerce.string().optional()
+})
+
+export const ClearAgentMemoryResponse = zod.object({
+  "success": zod.boolean().optional(),
+  "message": zod.string().optional()
+})
+
+
+/**
+ * @summary Update agent system prompt and training examples
+ */
+export const UpdateAgentConfigParams = zod.object({
+  "agentId": zod.coerce.string()
+})
+
+export const UpdateAgentConfigBody = zod.object({
+  "name": zod.string().optional(),
+  "description": zod.string().optional(),
+  "systemPrompt": zod.string().optional(),
+  "trainingExamples": zod.array(zod.object({
+  "input": zod.string(),
+  "output": zod.string()
+})).optional()
+})
+
+export const UpdateAgentConfigResponse = zod.object({
+  "agentId": zod.string(),
+  "name": zod.string(),
+  "description": zod.string(),
+  "avatar": zod.string(),
+  "color": zod.string(),
+  "systemPrompt": zod.string(),
+  "trainingExamples": zod.array(zod.object({
+  "input": zod.string(),
+  "output": zod.string()
+})),
+  "isActive": zod.boolean(),
+  "updatedAt": zod.string()
+})
+
+
+/**
  * @summary Sync real-time price data from Yahoo Finance for all active stocks
  */
 export const SyncRealtimeResponse = zod.object({
