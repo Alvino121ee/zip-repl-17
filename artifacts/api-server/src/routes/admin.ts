@@ -11,6 +11,8 @@ import { UploadCsvBody, RecalculateScoresBody } from "@workspace/api-zod";
 import { calculateScores } from "../lib/scoring";
 import { logger } from "../lib/logger";
 import { fetchAllPriceHistories } from "../lib/yahoo-finance";
+import { generateDailyPicks, todayStr } from "../lib/picks";
+import { dailyPicksTable } from "@workspace/db";
 
 const router = Router();
 
