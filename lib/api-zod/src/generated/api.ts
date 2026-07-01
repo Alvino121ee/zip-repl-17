@@ -508,6 +508,90 @@ export const RecalculateScoresResponse = zod.object({
 
 
 /**
+ * @summary Fetch latest market news live from RSS feeds
+ */
+export const getNewsLiveQueryLimitDefault = 50;
+
+export const GetNewsLiveQueryParams = zod.object({
+  "limit": zod.coerce.number().default(getNewsLiveQueryLimitDefault),
+  "ticker": zod.coerce.string().optional()
+})
+
+export const GetNewsLiveResponseItem = zod.object({
+  "id": zod.number().optional(),
+  "title": zod.string(),
+  "link": zod.string(),
+  "summary": zod.string().optional(),
+  "source": zod.string(),
+  "publishedAt": zod.string(),
+  "tickers": zod.array(zod.string())
+})
+export const GetNewsLiveResponse = zod.array(GetNewsLiveResponseItem)
+
+
+/**
+ * @summary Get news articles mentioning a specific ticker
+ */
+export const GetNewsForStockParams = zod.object({
+  "ticker": zod.coerce.string()
+})
+
+export const GetNewsForStockResponseItem = zod.object({
+  "id": zod.number().optional(),
+  "title": zod.string(),
+  "link": zod.string(),
+  "summary": zod.string().optional(),
+  "source": zod.string(),
+  "publishedAt": zod.string(),
+  "tickers": zod.array(zod.string())
+})
+export const GetNewsForStockResponse = zod.array(GetNewsForStockResponseItem)
+
+
+/**
+ * @summary Check if AI is enabled
+ */
+export const GetAiStatusResponse = zod.object({
+  "aiEnabled": zod.boolean(),
+  "provider": zod.string()
+})
+
+
+/**
+ * @summary Get AI analysis and recommendation for a stock
+ */
+export const GetAiInsightsParams = zod.object({
+  "ticker": zod.coerce.string()
+})
+
+export const GetAiInsightsResponse = zod.object({
+  "ticker": zod.string(),
+  "recommendation": zod.enum(['BELI', 'TAHAN', 'JUAL']),
+  "confidence": zod.number(),
+  "insight": zod.string(),
+  "reasoning": zod.string(),
+  "bullish": zod.string(),
+  "bearish": zod.string(),
+  "aiPowered": zod.boolean().optional(),
+  "generatedAt": zod.string().optional()
+})
+
+
+/**
+ * @summary Chat with AI analyst about the market
+ */
+export const SendAiChatBody = zod.object({
+  "message": zod.string(),
+  "ticker": zod.string().optional()
+})
+
+export const SendAiChatResponse = zod.object({
+  "reply": zod.string(),
+  "aiPowered": zod.boolean()
+})
+
+
+/**
  * @summary Sync real-time price data from Yahoo Finance for all active stocks
  */
 export const SyncRealtimeResponse = zod.object({

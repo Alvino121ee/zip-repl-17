@@ -341,6 +341,37 @@ export interface PicksHistory {
   totalDays: number;
 }
 
+export interface NewsArticle {
+  id?: number;
+  title: string;
+  link: string;
+  summary?: string;
+  source: string;
+  publishedAt: string;
+  tickers: string[];
+}
+
+export type AiInsightRecommendation = typeof AiInsightRecommendation[keyof typeof AiInsightRecommendation];
+
+
+export const AiInsightRecommendation = {
+  BELI: 'BELI',
+  TAHAN: 'TAHAN',
+  JUAL: 'JUAL',
+} as const;
+
+export interface AiInsight {
+  ticker: string;
+  recommendation: AiInsightRecommendation;
+  confidence: number;
+  insight: string;
+  reasoning: string;
+  bullish: string;
+  bearish: string;
+  aiPowered?: boolean;
+  generatedAt?: string;
+}
+
 export type ListStocksParams = {
 sector?: string;
 label?: string;
@@ -386,6 +417,26 @@ userId?: string;
 
 export type RemoveFromWatchlistParams = {
 userId?: string;
+};
+
+export type GetNewsLiveParams = {
+limit?: number;
+ticker?: string;
+};
+
+export type GetAiStatus200 = {
+  aiEnabled: boolean;
+  provider: string;
+};
+
+export type SendAiChatBody = {
+  message: string;
+  ticker?: string;
+};
+
+export type SendAiChat200 = {
+  reply: string;
+  aiPowered: boolean;
 };
 
 export type SyncRealtime200 = {

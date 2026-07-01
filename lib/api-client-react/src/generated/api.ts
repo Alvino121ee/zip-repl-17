@@ -20,6 +20,7 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AiInsight,
   AiReport,
   CompareInput,
   CsvUploadInput,
@@ -27,6 +28,8 @@ import type {
   DeleteResult,
   GeneratePicksInput,
   GeneratePicksResult,
+  GetAiStatus200,
+  GetNewsLiveParams,
   GetPicksHistoryParams,
   GetRiskRadarParams,
   GetStockPricesParams,
@@ -35,6 +38,7 @@ import type {
   LabelCount,
   ListStocksParams,
   MarketSummary,
+  NewsArticle,
   PicksHistory,
   PicksReport,
   RecalculateInput,
@@ -42,6 +46,8 @@ import type {
   RemoveFromWatchlistParams,
   RiskRadarStock,
   SectorPerformance,
+  SendAiChat200,
+  SendAiChatBody,
   StockDetail,
   StockListResponse,
   StockPrice,
@@ -1465,6 +1471,391 @@ export const useRecalculateScores = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getRecalculateScoresMutationOptions(options));
+    }
+
+export const getGetNewsLiveUrl = (params?: GetNewsLiveParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/news/live?${stringifiedParams}` : `/api/news/live`
+}
+
+/**
+ * @summary Fetch latest market news live from RSS feeds
+ */
+export const getNewsLive = async (params?: GetNewsLiveParams, options?: RequestInit): Promise<NewsArticle[]> => {
+
+  return customFetch<NewsArticle[]>(getGetNewsLiveUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetNewsLiveQueryKey = (params?: GetNewsLiveParams,) => {
+    return [
+    `/api/news/live`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetNewsLiveQueryOptions = <TData = Awaited<ReturnType<typeof getNewsLive>>, TError = ErrorType<unknown>>(params?: GetNewsLiveParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getNewsLive>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetNewsLiveQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getNewsLive>>> = ({ signal }) => getNewsLive(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getNewsLive>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetNewsLiveQueryResult = NonNullable<Awaited<ReturnType<typeof getNewsLive>>>
+export type GetNewsLiveQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Fetch latest market news live from RSS feeds
+ */
+
+export function useGetNewsLive<TData = Awaited<ReturnType<typeof getNewsLive>>, TError = ErrorType<unknown>>(
+ params?: GetNewsLiveParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getNewsLive>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetNewsLiveQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetNewsForStockUrl = (ticker: string,) => {
+
+
+
+
+  return `/api/news/stock/${ticker}`
+}
+
+/**
+ * @summary Get news articles mentioning a specific ticker
+ */
+export const getNewsForStock = async (ticker: string, options?: RequestInit): Promise<NewsArticle[]> => {
+
+  return customFetch<NewsArticle[]>(getGetNewsForStockUrl(ticker),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetNewsForStockQueryKey = (ticker: string,) => {
+    return [
+    `/api/news/stock/${ticker}`
+    ] as const;
+    }
+
+
+export const getGetNewsForStockQueryOptions = <TData = Awaited<ReturnType<typeof getNewsForStock>>, TError = ErrorType<unknown>>(ticker: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getNewsForStock>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetNewsForStockQueryKey(ticker);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getNewsForStock>>> = ({ signal }) => getNewsForStock(ticker, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: ticker !== null && ticker !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getNewsForStock>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetNewsForStockQueryResult = NonNullable<Awaited<ReturnType<typeof getNewsForStock>>>
+export type GetNewsForStockQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get news articles mentioning a specific ticker
+ */
+
+export function useGetNewsForStock<TData = Awaited<ReturnType<typeof getNewsForStock>>, TError = ErrorType<unknown>>(
+ ticker: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getNewsForStock>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetNewsForStockQueryOptions(ticker,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetAiStatusUrl = () => {
+
+
+
+
+  return `/api/ai/status`
+}
+
+/**
+ * @summary Check if AI is enabled
+ */
+export const getAiStatus = async ( options?: RequestInit): Promise<GetAiStatus200> => {
+
+  return customFetch<GetAiStatus200>(getGetAiStatusUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetAiStatusQueryKey = () => {
+    return [
+    `/api/ai/status`
+    ] as const;
+    }
+
+
+export const getGetAiStatusQueryOptions = <TData = Awaited<ReturnType<typeof getAiStatus>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAiStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAiStatusQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiStatus>>> = ({ signal }) => getAiStatus({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAiStatus>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetAiStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getAiStatus>>>
+export type GetAiStatusQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Check if AI is enabled
+ */
+
+export function useGetAiStatus<TData = Awaited<ReturnType<typeof getAiStatus>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAiStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetAiStatusQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetAiInsightsUrl = (ticker: string,) => {
+
+
+
+
+  return `/api/ai/insights/${ticker}`
+}
+
+/**
+ * @summary Get AI analysis and recommendation for a stock
+ */
+export const getAiInsights = async (ticker: string, options?: RequestInit): Promise<AiInsight> => {
+
+  return customFetch<AiInsight>(getGetAiInsightsUrl(ticker),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetAiInsightsQueryKey = (ticker: string,) => {
+    return [
+    `/api/ai/insights/${ticker}`
+    ] as const;
+    }
+
+
+export const getGetAiInsightsQueryOptions = <TData = Awaited<ReturnType<typeof getAiInsights>>, TError = ErrorType<unknown>>(ticker: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAiInsights>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAiInsightsQueryKey(ticker);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiInsights>>> = ({ signal }) => getAiInsights(ticker, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: ticker !== null && ticker !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAiInsights>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetAiInsightsQueryResult = NonNullable<Awaited<ReturnType<typeof getAiInsights>>>
+export type GetAiInsightsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get AI analysis and recommendation for a stock
+ */
+
+export function useGetAiInsights<TData = Awaited<ReturnType<typeof getAiInsights>>, TError = ErrorType<unknown>>(
+ ticker: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAiInsights>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetAiInsightsQueryOptions(ticker,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getSendAiChatUrl = () => {
+
+
+
+
+  return `/api/ai/chat`
+}
+
+/**
+ * @summary Chat with AI analyst about the market
+ */
+export const sendAiChat = async (sendAiChatBody: SendAiChatBody, options?: RequestInit): Promise<SendAiChat200> => {
+
+  return customFetch<SendAiChat200>(getSendAiChatUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(sendAiChatBody)
+  }
+);}
+
+
+
+
+export const getSendAiChatMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sendAiChat>>, TError,{data: BodyType<SendAiChatBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof sendAiChat>>, TError,{data: BodyType<SendAiChatBody>}, TContext> => {
+
+const mutationKey = ['sendAiChat'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof sendAiChat>>, {data: BodyType<SendAiChatBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  sendAiChat(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SendAiChatMutationResult = NonNullable<Awaited<ReturnType<typeof sendAiChat>>>
+    export type SendAiChatMutationBody = BodyType<SendAiChatBody>
+    export type SendAiChatMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Chat with AI analyst about the market
+ */
+export const useSendAiChat = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sendAiChat>>, TError,{data: BodyType<SendAiChatBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof sendAiChat>>,
+        TError,
+        {data: BodyType<SendAiChatBody>},
+        TContext
+      > => {
+      return useMutation(getSendAiChatMutationOptions(options));
     }
 
 export const getSyncRealtimeUrl = () => {

@@ -366,17 +366,30 @@ router.post("/sync-realtime", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "sync-realtime: fatal error");
     errors.push(String(err));
-  } finally {
-    syncInProgress = false;
-    lastSyncResult = {
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      updated,
-      skipped,
-      errors,
-    };
-    logger.info({ updated, skipped, errorCount: errors.length }, "sync-realtime: selesai");
   }
+
+  // Setelah semua harga diperbarui, hapus picks hari ini dan generate ulang pakai harga nyata
+  if (updated > 0) {
+    try {
+      const today = todayStr();
+      await db.delete(dailyPicksTable).where(eq(dailyPicksTable.pickDate, today));
+      await generateDailyPicks(today);
+      logger.info({ today }, "sync-realtime: daily picks di-regenerate dengan harga realtime");
+    } catch (err) {
+      logger.error({ err }, "sync-realtime: gagal regenerate daily picks");
+      errors.push(`regenerate-picks: ${String(err)}`);
+    }
+  }
+
+  syncInProgress = false;
+  lastSyncResult = {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    updated,
+    skipped,
+    errors,
+  };
+  logger.info({ updated, skipped, errorCount: errors.length }, "sync-realtime: selesai");
 });
 
 export default router;

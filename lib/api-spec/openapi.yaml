@@ -20,7 +20,9 @@ tags:
   - name: risk
     description: Risk radar
   - name: ai
-    description: AI report generation
+    description: AI analysis and chat
+  - name: news
+    description: Market news feed
   - name: admin
     description: Admin operations
   - name: picks
@@ -388,6 +390,110 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecalculateResult"
+
+  /news/live:
+    get:
+      operationId: getNewsLive
+      tags: [news]
+      summary: Fetch latest market news live from RSS feeds
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: ticker
+          schema: { type: string }
+      responses:
+        "200":
+          description: News articles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NewsArticle"
+
+  /news/stock/{ticker}:
+    get:
+      operationId: getNewsForStock
+      tags: [news]
+      summary: Get news articles mentioning a specific ticker
+      parameters:
+        - in: path
+          name: ticker
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: News for this stock
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NewsArticle"
+
+  /ai/status:
+    get:
+      operationId: getAiStatus
+      tags: [ai]
+      summary: Check if AI is enabled
+      responses:
+        "200":
+          description: AI status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [aiEnabled, provider]
+                properties:
+                  aiEnabled: { type: boolean }
+                  provider: { type: string }
+
+  /ai/insights/{ticker}:
+    get:
+      operationId: getAiInsights
+      tags: [ai]
+      summary: Get AI analysis and recommendation for a stock
+      parameters:
+        - in: path
+          name: ticker
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: AI insight
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiInsight"
+
+  /ai/chat:
+    post:
+      operationId: sendAiChat
+      tags: [ai]
+      summary: Chat with AI analyst about the market
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                ticker: { type: string }
+      responses:
+        "200":
+          description: AI reply
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reply, aiPowered]
+                properties:
+                  reply: { type: string }
+                  aiPowered: { type: boolean }
 
   /admin/sync-realtime:
     post:
@@ -1062,3 +1168,48 @@ components:
           type: number
         totalDays:
           type: integer
+
+    NewsArticle:
+      type: object
+      required: [title, link, source, publishedAt, tickers]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        link:
+          type: string
+        summary:
+          type: string
+        source:
+          type: string
+        publishedAt:
+          type: string
+        tickers:
+          type: array
+          items:
+            type: string
+
+    AiInsight:
+      type: object
+      required: [ticker, recommendation, confidence, insight, reasoning, bullish, bearish]
+      properties:
+        ticker:
+          type: string
+        recommendation:
+          type: string
+          enum: [BELI, TAHAN, JUAL]
+        confidence:
+          type: integer
+        insight:
+          type: string
+        reasoning:
+          type: string
+        bullish:
+          type: string
+        bearish:
+          type: string
+        aiPowered:
+          type: boolean
+        generatedAt:
+          type: string
