@@ -251,6 +251,19 @@ export interface RecalculateResult {
   errors: string[];
 }
 
+export type SyncStatusLastSync = {
+  startedAt: string;
+  finishedAt: string;
+  updated: number;
+  skipped: number;
+  errors: string[];
+} | null;
+
+export interface SyncStatus {
+  inProgress: boolean;
+  lastSync?: SyncStatusLastSync;
+}
+
 export interface GeneratePicksInput {
   date?: string;
 }
@@ -373,6 +386,14 @@ userId?: string;
 
 export type RemoveFromWatchlistParams = {
 userId?: string;
+};
+
+export type SyncRealtime200 = {
+  message: string;
+};
+
+export type SyncRealtime409 = {
+  error: string;
 };
 
 export type GetPicksHistoryParams = {

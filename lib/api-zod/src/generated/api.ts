@@ -508,6 +508,29 @@ export const RecalculateScoresResponse = zod.object({
 
 
 /**
+ * @summary Sync real-time price data from Yahoo Finance for all active stocks
+ */
+export const SyncRealtimeResponse = zod.object({
+  "message": zod.string()
+})
+
+
+/**
+ * @summary Get current sync status and last sync result
+ */
+export const GetSyncStatusResponse = zod.object({
+  "inProgress": zod.boolean(),
+  "lastSync": zod.object({
+  "startedAt": zod.string(),
+  "finishedAt": zod.string(),
+  "updated": zod.number(),
+  "skipped": zod.number(),
+  "errors": zod.array(zod.string())
+}).nullish()
+})
+
+
+/**
  * @summary Generate (or fetch existing) daily picks for a date, closing out stale open picks
  */
 export const GeneratePicksBody = zod.object({

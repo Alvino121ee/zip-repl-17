@@ -389,6 +389,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/RecalculateResult"
 
+  /admin/sync-realtime:
+    post:
+      operationId: syncRealtime
+      tags: [admin]
+      summary: Sync real-time price data from Yahoo Finance for all active stocks
+      responses:
+        "200":
+          description: Sync started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message:
+                    type: string
+        "409":
+          description: Sync already in progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+
+  /admin/sync-status:
+    get:
+      operationId: getSyncStatus
+      tags: [admin]
+      summary: Get current sync status and last sync result
+      responses:
+        "200":
+          description: Sync status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncStatus"
+
   /picks/generate:
     post:
       operationId: generatePicks
@@ -852,6 +892,30 @@ components:
           type: array
           items:
             type: string
+
+    SyncStatus:
+      type: object
+      required: [inProgress]
+      properties:
+        inProgress:
+          type: boolean
+        lastSync:
+          type: object
+          nullable: true
+          required: [startedAt, finishedAt, updated, skipped, errors]
+          properties:
+            startedAt:
+              type: string
+            finishedAt:
+              type: string
+            updated:
+              type: integer
+            skipped:
+              type: integer
+            errors:
+              type: array
+              items:
+                type: string
 
     GeneratePicksInput:
       type: object

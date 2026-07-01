@@ -45,6 +45,9 @@ import type {
   StockDetail,
   StockListResponse,
   StockPrice,
+  SyncRealtime200,
+  SyncRealtime409,
+  SyncStatus,
   TechnicalIndicators,
   TopMovers,
   WatchlistInput,
@@ -1463,6 +1466,153 @@ export const useRecalculateScores = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getRecalculateScoresMutationOptions(options));
     }
+
+export const getSyncRealtimeUrl = () => {
+
+
+
+
+  return `/api/admin/sync-realtime`
+}
+
+/**
+ * @summary Sync real-time price data from Yahoo Finance for all active stocks
+ */
+export const syncRealtime = async ( options?: RequestInit): Promise<SyncRealtime200> => {
+
+  return customFetch<SyncRealtime200>(getSyncRealtimeUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getSyncRealtimeMutationOptions = <TError = ErrorType<SyncRealtime409>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncRealtime>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof syncRealtime>>, TError,void, TContext> => {
+
+const mutationKey = ['syncRealtime'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof syncRealtime>>, void> = () => {
+
+
+          return  syncRealtime(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SyncRealtimeMutationResult = NonNullable<Awaited<ReturnType<typeof syncRealtime>>>
+
+    export type SyncRealtimeMutationError = ErrorType<SyncRealtime409>
+
+    /**
+ * @summary Sync real-time price data from Yahoo Finance for all active stocks
+ */
+export const useSyncRealtime = <TError = ErrorType<SyncRealtime409>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncRealtime>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof syncRealtime>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getSyncRealtimeMutationOptions(options));
+    }
+
+export const getGetSyncStatusUrl = () => {
+
+
+
+
+  return `/api/admin/sync-status`
+}
+
+/**
+ * @summary Get current sync status and last sync result
+ */
+export const getSyncStatus = async ( options?: RequestInit): Promise<SyncStatus> => {
+
+  return customFetch<SyncStatus>(getGetSyncStatusUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetSyncStatusQueryKey = () => {
+    return [
+    `/api/admin/sync-status`
+    ] as const;
+    }
+
+
+export const getGetSyncStatusQueryOptions = <TData = Awaited<ReturnType<typeof getSyncStatus>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSyncStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSyncStatusQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSyncStatus>>> = ({ signal }) => getSyncStatus({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSyncStatus>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSyncStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getSyncStatus>>>
+export type GetSyncStatusQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get current sync status and last sync result
+ */
+
+export function useGetSyncStatus<TData = Awaited<ReturnType<typeof getSyncStatus>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSyncStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSyncStatusQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getGeneratePicksUrl = () => {
 
