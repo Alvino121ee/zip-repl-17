@@ -1,0 +1,23 @@
+kind = "mobile"
+previewPath = "/mobile/"
+title = "SahamRadar Mobile"
+version = "1.0.0"
+id = "artifacts/saham-radar-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/mobile/" ]
+localPort = 23823
+
+[services.development]
+run = "pnpm --filter @workspace/saham-radar-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/saham-radar-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/saham-radar-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "23823"
+BASE_PATH = "/mobile/"
