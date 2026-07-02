@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startXauusdBrainEngine } from "./lib/xauusd-brain-engine.js";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,7 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Start XAUUSD autonomous learning engine
+  startXauusdBrainEngine();
 });

@@ -16,6 +16,7 @@ import Picks from "@/pages/picks";
 import AdminPanel from "@/pages/admin";
 import AiAnalyst from "@/pages/ai-analyst";
 import AgentsPage from "@/pages/agents";
+import XauusdAi from "@/pages/xauusd-ai";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +40,7 @@ function Router() {
         <Route path="/picks" component={Picks} />
         <Route path="/ai-analyst" component={AiAnalyst} />
         <Route path="/agents" component={AgentsPage} />
+        <Route path="/xauusd-ai" component={XauusdAi} />
         <Route path="/admin" component={AdminPanel} />
         <Route component={NotFound} />
       </Switch>

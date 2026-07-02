@@ -10,6 +10,7 @@ import picksRouter from "./picks";
 import newsRouter from "./news";
 import aiAnalystRouter from "./ai-analyst";
 import agentsRouter from "./agents";
+import { xauusdRouter } from "./xauusd";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use("/picks", picksRouter);
 router.use("/news", newsRouter);
 router.use("/ai", aiAnalystRouter);
 router.use("/agents", agentsRouter);
+router.use("/xauusd", xauusdRouter);
 
 export default router;

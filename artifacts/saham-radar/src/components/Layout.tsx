@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Activity, BarChart2, Eye, GitCompare, AlertTriangle, Settings, Target, Bot, Cpu } from "lucide-react";
+import { Activity, BarChart2, Eye, GitCompare, AlertTriangle, Settings, Target, Bot, Cpu, TrendingUp } from "lucide-react";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -10,6 +10,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/picks", label: "Daily Picks", icon: Target },
     { href: "/ai-analyst", label: "AI Analyst", icon: Bot },
     { href: "/agents", label: "AI Agents", icon: Cpu },
+    { href: "/xauusd-ai", label: "Gold AI (XAUUSD)", icon: TrendingUp },
     { href: "/watchlist", label: "Watchlist", icon: Eye },
     { href: "/compare", label: "Compare", icon: GitCompare },
     { href: "/risk-radar", label: "Risk Radar", icon: AlertTriangle },
