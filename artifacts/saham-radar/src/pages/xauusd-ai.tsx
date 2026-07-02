@@ -15,7 +15,8 @@ import {
   TrendingUp, TrendingDown, Minus, Brain, BookOpen,
   MessageSquare, Newspaper, Activity, Zap, RefreshCw,
   Send, Play, ChevronDown, ChevronUp, Target, History,
-  CheckCircle2, XCircle, Clock, Loader2, Settings, KeyRound
+  CheckCircle2, XCircle, Clock, Loader2, Settings, KeyRound,
+  Calendar, BarChart2, Trophy
 } from "lucide-react";
 
 // ─── TradingView Widgets ────────────────────────────────────────────────────
@@ -75,6 +76,298 @@ function TradingViewSymbolInfo() {
   }, []);
 
   return <div className="tradingview-widget-container" ref={containerRef} style={{ minHeight: 56 }} />;
+}
+
+function TradingViewEconomicCalendar() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.innerHTML = `<div class="tradingview-widget-container__widget"></div>`;
+    const script = document.createElement("script");
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-events.js";
+    script.type = "text/javascript";
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      colorTheme: "dark",
+      isTransparent: true,
+      width: "100%",
+      height: "600",
+      locale: "id",
+      importanceFilter: "-1,0,1",
+      currencyFilter: "USD,XAU,EUR,GBP,JPY",
+    });
+    el.appendChild(script);
+    return () => { el.innerHTML = ""; };
+  }, []);
+  return <div className="tradingview-widget-container" ref={containerRef} style={{ height: 600 }} />;
+}
+
+function WinratePanel({ preds }: { preds: Prediction[] }) {
+  const verified = preds.filter(p => p.status === "verified");
+  const correct = verified.filter(p => p.isCorrect === true);
+  const wrong = verified.filter(p => p.isCorrect === false);
+
+  const byDir = (dir: string) => {
+    const v = verified.filter(p => p.direction === dir);
+    const c = v.filter(p => p.isCorrect === true).length;
+    return { total: v.length, correct: c, pct: v.length > 0 ? Math.round(c / v.length * 100) : null };
+  };
+  const byConf = (min: number, max: number) => {
+    const v = verified.filter(p => p.confidence >= min && p.confidence < max);
+    const c = v.filter(p => p.isCorrect === true).length;
+    return { total: v.length, correct: c, pct: v.length > 0 ? Math.round(c / v.length * 100) : null };
+  };
+
+  let streak = 0;
+  let streakType: "win" | "loss" | null = null;
+  for (const p of verified) {
+    if (streakType === null) { streakType = p.isCorrect ? "win" : "loss"; streak = 1; }
+    else if ((p.isCorrect && streakType === "win") || (!p.isCorrect && streakType === "loss")) streak++;
+    else break;
+  }
+
+  const totalWinRate = verified.length > 0 ? Math.round(correct.length / verified.length * 100) : null;
+  const up = byDir("up"); const down = byDir("down"); const side = byDir("sideways");
+
+  if (verified.length === 0) return (
+    <div className="text-center py-16 text-muted-foreground">
+      <Trophy className="w-12 h-12 mx-auto mb-3 opacity-30" />
+      <p>Belum ada prediksi terverifikasi.</p>
+      <p className="text-xs mt-1">AI perlu membuat prediksi dan menunggu verifikasi setelah timeframe berlalu.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="text-center py-4">
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Total Win Rate</p>
+        {totalWinRate !== null ? (
+          <p className={`text-7xl font-black ${totalWinRate >= 60 ? "text-emerald-400" : totalWinRate >= 40 ? "text-amber-400" : "text-red-400"}`}>
+            {totalWinRate}%
+          </p>
+        ) : <p className="text-4xl font-bold text-muted-foreground">—</p>}
+        <p className="text-sm text-muted-foreground mt-1">{correct.length} benar dari {verified.length} prediksi terverifikasi</p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: "Menang ✓", value: correct.length, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/30" },
+          { label: "Kalah ✗", value: wrong.length, color: "text-red-400", bg: "bg-red-500/10 border-red-500/30" },
+          { label: "Pending ⏳", value: preds.filter(p => p.status === "pending").length, color: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/30" },
+        ].map(s => (
+          <div key={s.label} className={`rounded-lg p-3 border text-center ${s.bg}`}>
+            <p className={`text-3xl font-bold ${s.color}`}>{s.value}</p>
+            <p className="text-xs text-muted-foreground mt-1">{s.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {streakType && streak > 1 && (
+        <div className={`rounded-lg p-3 border text-center ${streakType === "win" ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"}`}>
+          <p className="text-sm font-medium">
+            {streakType === "win" ? "🔥" : "❄️"} Streak saat ini:{" "}
+            <span className={`font-bold ${streakType === "win" ? "text-emerald-400" : "text-red-400"}`}>
+              {streak} {streakType === "win" ? "kemenangan" : "kekalahan"} berturut-turut
+            </span>
+          </p>
+        </div>
+      )}
+
+      <div>
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Win Rate per Arah Prediksi</p>
+        <div className="space-y-3">
+          {[
+            { label: "▲ NAIK (Bullish)", data: up, color: "bg-emerald-500" },
+            { label: "▼ TURUN (Bearish)", data: down, color: "bg-red-500" },
+            { label: "↔ SIDEWAYS", data: side, color: "bg-amber-500" },
+          ].map(item => (
+            <div key={item.label} className="flex items-center gap-3">
+              <p className="text-xs w-36 text-muted-foreground shrink-0">{item.label}</p>
+              <div className="flex-1 bg-muted/30 rounded-full h-2.5">
+                <div className={`h-2.5 rounded-full transition-all ${item.color}`} style={{ width: `${item.data.pct ?? 0}%` }} />
+              </div>
+              <p className="text-xs w-24 text-right text-foreground shrink-0">
+                {item.data.pct !== null ? `${item.data.pct}% (${item.data.correct}/${item.data.total})` : "—"}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Win Rate per Tingkat Kepercayaan AI</p>
+        <div className="space-y-3">
+          {[
+            { label: "Tinggi (>80%)", data: byConf(0.8, 1.01), color: "bg-blue-500" },
+            { label: "Sedang (60–80%)", data: byConf(0.6, 0.8), color: "bg-purple-500" },
+            { label: "Rendah (<60%)", data: byConf(0, 0.6), color: "bg-slate-500" },
+          ].map(item => (
+            <div key={item.label} className="flex items-center gap-3">
+              <p className="text-xs w-36 text-muted-foreground shrink-0">{item.label}</p>
+              <div className="flex-1 bg-muted/30 rounded-full h-2.5">
+                <div className={`h-2.5 rounded-full transition-all ${item.color}`} style={{ width: `${item.data.pct ?? 0}%` }} />
+              </div>
+              <p className="text-xs w-24 text-right text-foreground shrink-0">
+                {item.data.pct !== null ? `${item.data.pct}% (${item.data.correct}/${item.data.total})` : "—"}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {verified.length > 0 && (
+        <div>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Riwayat Prediksi Terverifikasi (terbaru)</p>
+          <div className="flex flex-wrap gap-1.5">
+            {verified.slice(0, 20).map(p => (
+              <div
+                key={p.id}
+                title={`${p.direction === "up" ? "▲ NAIK" : p.direction === "down" ? "▼ TURUN" : "↔"} • ${p.isCorrect ? "Benar" : "Salah"} • ${(p.confidence * 100).toFixed(0)}% confidence`}
+                className={`w-8 h-8 rounded flex items-center justify-center text-sm font-bold cursor-help ${p.isCorrect ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-red-500/20 text-red-400 border border-red-500/30"}`}
+              >
+                {p.isCorrect ? "✓" : "✗"}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BacktestPanel({ preds }: { preds: Prediction[] }) {
+  const verified = preds.filter(p => p.status === "verified" && p.isCorrect !== null);
+
+  if (verified.length === 0) return (
+    <div className="text-center py-16 text-muted-foreground">
+      <BarChart2 className="w-12 h-12 mx-auto mb-3 opacity-30" />
+      <p>Belum ada data prediksi terverifikasi untuk backtest.</p>
+      <p className="text-xs mt-1">Diperlukan minimal 1 prediksi yang sudah diverifikasi.</p>
+    </div>
+  );
+
+  const INITIAL_CAPITAL = 10000;
+  let capital = INITIAL_CAPITAL;
+  let peak = INITIAL_CAPITAL;
+  let maxDrawdown = 0;
+  let wins = 0, losses = 0, totalProfit = 0, totalLoss = 0;
+  const equity: number[] = [INITIAL_CAPITAL];
+
+  const chrono = [...verified].reverse();
+  for (const p of chrono) {
+    const risk = capital * 0.02;
+    let pnl: number;
+    if (p.isCorrect) {
+      let rr = 2;
+      if (p.targetPrice && p.stopLoss && p.priceAtPrediction) {
+        const reward = Math.abs(p.targetPrice - p.priceAtPrediction);
+        const riskPts = Math.abs(p.priceAtPrediction - p.stopLoss);
+        if (riskPts > 0) rr = Math.min(reward / riskPts, 5);
+      }
+      pnl = risk * rr; wins++; totalProfit += pnl;
+    } else {
+      pnl = -risk; losses++; totalLoss += Math.abs(pnl);
+    }
+    capital += pnl;
+    if (capital > peak) peak = capital;
+    const dd = (peak - capital) / peak * 100;
+    if (dd > maxDrawdown) maxDrawdown = dd;
+    equity.push(capital);
+  }
+
+  const totalReturn = (capital - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100;
+  const winRate = wins + losses > 0 ? Math.round(wins / (wins + losses) * 100) : 0;
+  const profitFactor = totalLoss > 0 ? totalProfit / totalLoss : totalProfit > 0 ? 99 : 0;
+  const avgWin = wins > 0 ? totalProfit / wins : 0;
+  const avgLoss = losses > 0 ? totalLoss / losses : 0;
+
+  const minEq = Math.min(...equity);
+  const maxEq = Math.max(...equity);
+  const range = maxEq - minEq || 1;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+        <p className="text-xs text-amber-300">
+          📊 Simulasi: Modal awal <strong>$10,000</strong> · Risiko <strong>2% per trade</strong> · Mengikuti setiap sinyal AI terverifikasi · Target aktual jika tersedia, else 2R default
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: "Total Return", value: `${totalReturn >= 0 ? "+" : ""}${totalReturn.toFixed(1)}%`, color: totalReturn >= 0 ? "text-emerald-400" : "text-red-400" },
+          { label: "Modal Akhir", value: `$${Math.round(capital).toLocaleString()}`, color: capital >= INITIAL_CAPITAL ? "text-emerald-400" : "text-red-400" },
+          { label: "Win Rate", value: `${winRate}%`, color: winRate >= 50 ? "text-emerald-400" : "text-red-400" },
+          { label: "Profit Factor", value: profitFactor.toFixed(2), color: profitFactor >= 1 ? "text-emerald-400" : "text-red-400" },
+        ].map(m => (
+          <div key={m.label} className="bg-card/50 rounded-lg p-3 border border-border/50 text-center">
+            <p className="text-xs text-muted-foreground">{m.label}</p>
+            <p className={`text-xl font-bold ${m.color}`}>{m.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: "Total Trade", value: `${wins + losses}` },
+          { label: "Max Drawdown", value: `-${maxDrawdown.toFixed(1)}%` },
+          { label: "Avg Profit/Trade", value: `$${avgWin.toFixed(0)}` },
+          { label: "Avg Loss/Trade", value: `-$${avgLoss.toFixed(0)}` },
+        ].map(m => (
+          <div key={m.label} className="bg-card/50 rounded-lg p-3 border border-border/50 text-center">
+            <p className="text-xs text-muted-foreground">{m.label}</p>
+            <p className="text-lg font-bold text-foreground">{m.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Kurva Ekuitas</p>
+        <div className="bg-card/40 rounded-lg p-4 border border-border/50">
+          <div className="flex items-end gap-px h-36">
+            {equity.map((e, i) => {
+              const h = Math.max(((e - minEq) / range) * 100, 1);
+              return (
+                <div
+                  key={i}
+                  title={`Trade ${i}: $${Math.round(e).toLocaleString()}`}
+                  className={`flex-1 rounded-t min-w-[3px] ${e >= INITIAL_CAPITAL ? "bg-emerald-500/70" : "bg-red-500/70"}`}
+                  style={{ height: `${h}%` }}
+                />
+              );
+            })}
+          </div>
+          <div className="flex justify-between text-[10px] text-muted-foreground mt-2">
+            <span>Mulai: ${INITIAL_CAPITAL.toLocaleString()}</span>
+            <span>Akhir: ${Math.round(capital).toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Riwayat Trade Simulasi</p>
+        <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+          {chrono.map((p, i) => {
+            const risk = 200;
+            const pnlDisplay = p.isCorrect ? `+$${(risk * 2).toFixed(0)}` : `-$${risk.toFixed(0)}`;
+            return (
+              <div key={p.id} className="flex items-center gap-3 text-xs py-1.5 px-2 rounded bg-card/30 border border-border/30">
+                <span className="text-muted-foreground w-5 shrink-0">#{i + 1}</span>
+                <span className={`w-16 font-medium shrink-0 ${p.direction === "up" ? "text-emerald-400" : p.direction === "down" ? "text-red-400" : "text-amber-400"}`}>
+                  {p.direction === "up" ? "▲ NAIK" : p.direction === "down" ? "▼ TURUN" : "↔ SIDE"}
+                </span>
+                <span className="text-muted-foreground flex-1 truncate">{new Date(p.predictedAt).toLocaleDateString("id", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                <span className="text-muted-foreground shrink-0">{(p.confidence * 100).toFixed(0)}%</span>
+                <span className={`font-bold w-14 text-right shrink-0 ${p.isCorrect ? "text-emerald-400" : "text-red-400"}`}>{pnlDisplay}</span>
+                <span className={`shrink-0 ${p.isCorrect ? "text-emerald-400" : "text-red-400"}`}>{p.isCorrect ? "✓" : "✗"}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TradingViewAdvancedChart() {
@@ -804,7 +1097,7 @@ function SettingsPanel({
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings";
+type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings" | "calendar" | "winrate" | "backtest";
 
 export default function XauusdAi() {
   const [activeTab, setActiveTab] = useState<Tab>("chart");
@@ -870,6 +1163,12 @@ export default function XauusdAi() {
     refetchInterval: 30_000,
   });
 
+  const allPredictionsQ = useQuery({
+    queryKey: ["xauusd-all-predictions"],
+    queryFn: () => apiGet<Prediction[]>("/predictions?limit=500"),
+    refetchInterval: 60_000,
+  });
+
   const learnNowMutation = useMutation({
     mutationFn: () => apiPost("/learn-now"),
     onSuccess: () => {
@@ -923,6 +1222,9 @@ export default function XauusdAi() {
     { id: "questions", label: `Pertanyaan (${statsQ.data?.totalQuestionsAsked ?? 0})`, icon: <BookOpen className="w-3.5 h-3.5" /> },
     { id: "news", label: "Berita", icon: <Newspaper className="w-3.5 h-3.5" /> },
     { id: "log", label: `Log Belajar (${logQ.data?.length ?? 0})`, icon: <History className="w-3.5 h-3.5" /> },
+    { id: "calendar", label: "Kalender Ekonomi", icon: <Calendar className="w-3.5 h-3.5" /> },
+    { id: "winrate", label: "Win Rate", icon: <Trophy className="w-3.5 h-3.5" /> },
+    { id: "backtest", label: "Backtest", icon: <BarChart2 className="w-3.5 h-3.5" /> },
     { id: "settings", label: "Pengaturan", icon: <Settings className="w-3.5 h-3.5" /> },
   ];
 
@@ -1114,6 +1416,23 @@ export default function XauusdAi() {
           {activeTab === "news" && <NewsPanel news={newsQ.data ?? []} />}
 
           {activeTab === "log" && <LearningLogPanel logs={logQ.data ?? []} />}
+
+          {activeTab === "calendar" && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-3">
+                Kalender ekonomi global dari TradingView — event berita yang mempengaruhi pergerakan gold (USD, inflasi, NFP, FOMC, dll).
+              </p>
+              <TradingViewEconomicCalendar />
+            </div>
+          )}
+
+          {activeTab === "winrate" && (
+            <WinratePanel preds={allPredictionsQ.data ?? []} />
+          )}
+
+          {activeTab === "backtest" && (
+            <BacktestPanel preds={allPredictionsQ.data ?? []} />
+          )}
 
           {activeTab === "settings" && (
             <SettingsPanel
