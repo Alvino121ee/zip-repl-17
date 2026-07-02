@@ -1,6 +1,0 @@
-kind = "mobile"
-previewPath = "/mobile/"
-title = "SahamRadar Mobile"
-version = "1.0.0"
-id = "artifacts/saham-radar-mobile"
-router = "expo-domain"
