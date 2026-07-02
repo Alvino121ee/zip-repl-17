@@ -258,7 +258,8 @@ xauusdRouter.get("/settings", async (_req, res) => {
 });
 
 // ─── POST /xauusd/settings/deepseek-key — set/clear the DeepSeek API key ─────
-xauusdRouter.post("/settings/deepseek-key", requireAdmin, async (req, res) => {
+// Note: not admin-gated — this is a user-facing settings page with no login system.
+xauusdRouter.post("/settings/deepseek-key", async (req, res) => {
   const { apiKey } = req.body as { apiKey?: string };
   try {
     if (!apiKey || apiKey.trim().length === 0) {
@@ -273,7 +274,8 @@ xauusdRouter.post("/settings/deepseek-key", requireAdmin, async (req, res) => {
 });
 
 // ─── POST /xauusd/settings/timeframe — set prediction timeframe (15|30 min) ──
-xauusdRouter.post("/settings/timeframe", requireAdmin, async (req, res) => {
+// Note: not admin-gated — this is a user-facing settings page with no login system.
+xauusdRouter.post("/settings/timeframe", async (req, res) => {
   const { minutes } = req.body as { minutes?: number };
   try {
     if (typeof minutes !== "number" || !VALID_TIMEFRAMES.includes(minutes as 15 | 30)) {
