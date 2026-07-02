@@ -1,8 +1,11 @@
 /**
  * AI Analyst menggunakan DeepSeek API (OpenAI-compatible)
- * Set DEEPSEEK_API_KEY di Secrets untuk mengaktifkan analisis AI.
+ * API key bisa diset lewat halaman Pengaturan di website (disimpan di DB),
+ * atau via DEEPSEEK_API_KEY di Secrets sebagai fallback.
  * Jika key tidak ada, sistem tetap jalan dengan analisis berbasis aturan.
  */
+
+import { getDeepseekApiKey } from "./xauusd-settings.js";
 
 export interface StockAnalysisInput {
   ticker: string;
@@ -73,7 +76,7 @@ function ruleBasedAnalysis(input: StockAnalysisInput): StockAnalysisResult {
 }
 
 async function deepseekAnalysis(input: StockAnalysisInput): Promise<StockAnalysisResult> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = await getDeepseekApiKey();
   if (!apiKey) return ruleBasedAnalysis(input);
 
   const newsSection = input.recentNews && input.recentNews.length > 0
@@ -153,6 +156,7 @@ export async function analyzeStock(input: StockAnalysisInput): Promise<StockAnal
   return deepseekAnalysis(input);
 }
 
-export function isAiEnabled(): boolean {
-  return !!process.env.DEEPSEEK_API_KEY;
+export async function isAiEnabled(): Promise<boolean> {
+  const key = await getDeepseekApiKey();
+  return !!key;
 }

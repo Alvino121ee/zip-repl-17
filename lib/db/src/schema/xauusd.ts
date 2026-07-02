@@ -75,9 +75,12 @@ export const xauusdQuestionsLogTable = pgTable("xauusd_questions_log", {
 export const xauusdPredictionsTable = pgTable("xauusd_predictions", {
   id: serial("id").primaryKey(),
   predictedAt: timestamp("predicted_at").notNull().defaultNow(),
-  timeframe: text("timeframe").notNull(), // '1h'|'4h'|'24h'
+  timeframe: text("timeframe").notNull(), // '15m'|'30m'|'1h'|'4h'|'24h'
   direction: text("direction").notNull(), // 'up'|'down'|'sideways'
   targetPrice: real("target_price"),
+  entryLow: real("entry_low"), // bottom of suggested entry range
+  entryHigh: real("entry_high"), // top of suggested entry range
+  stopLoss: real("stop_loss"),
   confidence: real("confidence").notNull(),
   reasoning: text("reasoning").notNull(),
   priceAtPrediction: real("price_at_prediction").notNull(),
@@ -104,6 +107,14 @@ export const xauusdNewsTable = pgTable("xauusd_news", {
   sentiment: text("sentiment"), // 'bullish'|'bearish'|'neutral'
   aiAnalysis: text("ai_analysis"),
   fetchedAt: timestamp("fetched_at").notNull().defaultNow(),
+});
+
+// ─── App settings — key/value store, editable from the website (e.g. DeepSeek API key) ──
+export const xauusdSettingsTable = pgTable("xauusd_settings", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(), // e.g. 'deepseek_api_key', 'prediction_timeframe_minutes'
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // ─── Learning log — one row per autonomous learning cycle ─────────────────────

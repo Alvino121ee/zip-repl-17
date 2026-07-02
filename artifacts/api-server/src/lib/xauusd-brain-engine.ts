@@ -31,8 +31,8 @@ import {
   fetchXauusdNews,
   type XauusdIndicators,
 } from "./xauusd-data.js";
+import { getDeepseekApiKey, getPredictionTimeframeMinutes } from "./xauusd-settings.js";
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY ?? "";
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 const LEARN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const SPIKE_THRESHOLD = 0.003; // 0.3% price change = spike
@@ -52,8 +52,9 @@ async function queryDeepSeek(
   userMessage: string,
   maxTokens = 800
 ): Promise<string> {
-  if (!DEEPSEEK_API_KEY) {
-    return "[AI tidak aktif — DEEPSEEK_API_KEY belum diset]";
+  const apiKey = await getDeepseekApiKey();
+  if (!apiKey) {
+    return "[AI tidak aktif — DeepSeek API key belum diset. Atur di halaman Pengaturan.]";
   }
 
   const controller = new AbortController();
@@ -65,7 +66,7 @@ async function queryDeepSeek(
       signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: "deepseek-chat",
@@ -235,15 +236,95 @@ function extractMarketTags(indicators: XauusdIndicators): string {
   return tags.join(",");
 }
 
+// ─── Rule-based prediction fallback (ATR + support/resistance based) ──────────
+// Used when the AI call is unavailable or returns unparseable output, so the
+// entry range / stop loss are always derived from real technical analysis
+// rather than being invented arbitrarily.
+
+interface RuleBasedPrediction {
+  direction: "up" | "down" | "sideways";
+  targetPrice: number;
+  entryLow: number;
+  entryHigh: number;
+  stopLoss: number;
+  confidence: number;
+  reasoning: string;
+}
+
+function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPrediction {
+  const price = indicators.price;
+  const atr = indicators.atr14 ?? price * 0.003; // fallback ~0.3% if ATR unavailable
+
+  let direction: "up" | "down" | "sideways" = "sideways";
+  let score = 0;
+  if (indicators.emaAlignment === "bullish_stack") score += 2;
+  else if (indicators.emaAlignment === "bearish_stack") score -= 2;
+  if (indicators.rsiSignal === "oversold") score += 1;
+  else if (indicators.rsiSignal === "overbought") score -= 1;
+  if (indicators.macdSignalType === "bullish_cross") score += 1;
+  else if (indicators.macdSignalType === "bearish_cross") score -= 1;
+  if (indicators.macdHistogram != null) {
+    if (indicators.macdHistogram > 0) score += 0.5;
+    else if (indicators.macdHistogram < 0) score -= 0.5;
+  }
+  if (score >= 1.5) direction = "up";
+  else if (score <= -1.5) direction = "down";
+
+  const confidence = Math.min(0.85, 0.45 + Math.abs(score) * 0.12);
+
+  // Entry zone = a small pullback band around current price (0.15–0.4 ATR),
+  // anchored toward support (for longs) or resistance (for shorts).
+  const pullback = atr * 0.3;
+  let entryLow: number;
+  let entryHigh: number;
+  let stopLoss: number;
+  let targetPrice: number;
+
+  const support = indicators.supportLevel ?? price - atr * 2;
+  const resistance = indicators.resistanceLevel ?? price + atr * 2;
+
+  if (direction === "up") {
+    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryHigh = parseFloat((price + pullback * 0.3).toFixed(2));
+    stopLoss = parseFloat(
+      Math.min(support - atr * 0.3, price - atr * 1.5).toFixed(2)
+    );
+    targetPrice = parseFloat((price + atr * 2.5).toFixed(2));
+  } else if (direction === "down") {
+    entryLow = parseFloat((price - pullback * 0.3).toFixed(2));
+    entryHigh = parseFloat((price + pullback).toFixed(2));
+    stopLoss = parseFloat(
+      Math.max(resistance + atr * 0.3, price + atr * 1.5).toFixed(2)
+    );
+    targetPrice = parseFloat((price - atr * 2.5).toFixed(2));
+  } else {
+    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryHigh = parseFloat((price + pullback).toFixed(2));
+    stopLoss = parseFloat((price - atr * 1.5).toFixed(2));
+    targetPrice = parseFloat(price.toFixed(2));
+  }
+
+  const reasoning = `Analisis rule-based: trend=${indicators.trend}, EMA alignment=${indicators.emaAlignment}, RSI=${indicators.rsi14?.toFixed(1) ?? "-"} (${indicators.rsiSignal}), MACD=${indicators.macdSignalType}. ATR14=${atr.toFixed(2)} dipakai untuk menentukan rentang entry dan stop loss di sekitar support $${indicators.supportLevel} / resistance $${indicators.resistanceLevel}.`;
+
+  return { direction, targetPrice, entryLow, entryHigh, stopLoss, confidence, reasoning };
+}
+
 // ─── Prediction maker ──────────────────────────────────────────────────────────
 
 async function makePrediction(indicators: XauusdIndicators): Promise<void> {
+  const timeframeMinutes = await getPredictionTimeframeMinutes();
+  const timeframeLabel = `${timeframeMinutes}m`;
+
   const systemPrompt = `Kamu adalah AI trading system untuk XAUUSD. 
-Buat prediksi arah harga untuk 4 jam ke depan berdasarkan indikator teknikal.
+Buat prediksi arah harga untuk ${timeframeMinutes} menit ke depan berdasarkan indikator teknikal.
+Selain arah, tentukan juga rentang harga entry (entryLow-entryHigh) yang ideal untuk masuk posisi, dan level stop loss (stopLoss) untuk membatasi kerugian.
 Jawab SELALU dalam format JSON:
 {
   "direction": "up" | "down" | "sideways",
-  "targetPrice": <harga dalam USD>,
+  "targetPrice": <harga target dalam USD>,
+  "entryLow": <batas bawah rentang harga entry dalam USD>,
+  "entryHigh": <batas atas rentang harga entry dalam USD>,
+  "stopLoss": <harga stop loss dalam USD>,
   "confidence": <0.0-1.0>,
   "reasoning": "<2-3 kalimat alasan>"
 }`;
@@ -258,35 +339,76 @@ ATR14: ${indicators.atr14}
 Trend: ${indicators.trend}, EMA Alignment: ${indicators.emaAlignment}
 Support: $${indicators.supportLevel}, Resistance: $${indicators.resistanceLevel}
 
-Buat prediksi 4 jam ke depan dalam format JSON.`;
+Buat prediksi ${timeframeMinutes} menit ke depan dalam format JSON, termasuk entryLow, entryHigh, dan stopLoss.`;
+
+  // Always compute the rule-based prediction first (real technical analysis
+  // from ATR/support/resistance/EMA/RSI/MACD) — this is the source of truth
+  // for entry range + stop loss when the AI is unavailable or unparseable,
+  // and also used to sanity-check the AI's numbers.
+  const ruleBased = computeRuleBasedPrediction(indicators);
+
+  let pred: {
+    direction: string;
+    targetPrice: number;
+    entryLow?: number;
+    entryHigh?: number;
+    stopLoss?: number;
+    confidence: number;
+    reasoning: string;
+  } = ruleBased;
+  let aiPowered = false;
 
   try {
     const raw = await queryDeepSeek(systemPrompt, userMsg, 400);
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return;
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        direction: string;
+        targetPrice: number;
+        entryLow?: number;
+        entryHigh?: number;
+        stopLoss?: number;
+        confidence: number;
+        reasoning: string;
+      };
+      // Only trust the AI response if it actually supplied numeric entry/SL
+      // levels — otherwise fall back to the rule-based analysis so we never
+      // save arbitrary/missing numbers.
+      if (
+        typeof parsed.entryLow === "number" &&
+        typeof parsed.entryHigh === "number" &&
+        typeof parsed.stopLoss === "number" &&
+        typeof parsed.targetPrice === "number"
+      ) {
+        pred = parsed;
+        aiPowered = true;
+      }
+    }
+  } catch (err) {
+    console.error("[XAUUSD Brain] AI prediction parse error, using rule-based fallback:", err);
+  }
 
-    const pred = JSON.parse(jsonMatch[0]) as {
-      direction: string;
-      targetPrice: number;
-      confidence: number;
-      reasoning: string;
-    };
-
-    const verifyAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4h from now
+  try {
+    const verifyAt = new Date(Date.now() + timeframeMinutes * 60 * 1000);
 
     await db.insert(xauusdPredictionsTable).values({
-      timeframe: "4h",
-      direction: pred.direction ?? "sideways",
-      targetPrice: pred.targetPrice ?? null,
-      confidence: Math.min(1, Math.max(0, pred.confidence ?? 0.5)),
-      reasoning: pred.reasoning ?? "",
+      timeframe: timeframeLabel,
+      direction: pred.direction ?? ruleBased.direction,
+      targetPrice: pred.targetPrice ?? ruleBased.targetPrice,
+      entryLow: pred.entryLow ?? ruleBased.entryLow,
+      entryHigh: pred.entryHigh ?? ruleBased.entryHigh,
+      stopLoss: pred.stopLoss ?? ruleBased.stopLoss,
+      confidence: Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence)),
+      reasoning: aiPowered
+        ? (pred.reasoning ?? ruleBased.reasoning)
+        : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`,
       priceAtPrediction: indicators.price,
       indicatorsAtPrediction: indicators as unknown as Record<string, unknown>,
       verifyAt,
       status: "pending",
     });
   } catch (err) {
-    console.error("[XAUUSD Brain] Prediction error:", err);
+    console.error("[XAUUSD Brain] Prediction save error:", err);
   }
 }
 
@@ -381,13 +503,14 @@ async function analyzeAndSaveNews(): Promise<void> {
     if (newsItems.length === 0) return;
 
     const sysPr = `Kamu adalah analis berita gold/XAUUSD. Untuk setiap berita, tentukan sentiment (bullish/bearish/neutral) dan berikan analisis singkat dampaknya pada harga gold.`;
+    const hasKey = !!(await getDeepseekApiKey());
 
     for (const item of newsItems.slice(0, 5)) {
       // Only analyze first 5 to save API calls
       let sentiment: string = "neutral";
       let aiAnalysis: string | null = null;
 
-      if (DEEPSEEK_API_KEY) {
+      if (hasKey) {
         try {
           const raw = await queryDeepSeek(
             sysPr,

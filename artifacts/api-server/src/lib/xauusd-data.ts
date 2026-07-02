@@ -353,6 +353,66 @@ export function calculateIndicators(
   };
 }
 
+// ─── Live price ticker (lightweight, safe to call every second) ──────────────
+
+export interface XauusdLivePrice {
+  price: number;
+  change: number | null; // absolute change vs previous close
+  changePct: number | null;
+  timestamp: number; // unix ms of the quote
+}
+
+/**
+ * Fetch just the latest traded price for GC=F using Yahoo Finance's
+ * lightweight 1-minute chart endpoint (much cheaper than the full 60d/1h
+ * candle history used for indicators). Safe to poll frequently.
+ */
+export async function fetchXauusdLivePrice(): Promise<XauusdLivePrice> {
+  const ticker = "GC=F";
+  const url = `${YAHOO_BASE}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`;
+
+  let res = await fetch(url, { headers: HEADERS });
+  if (!res.ok) {
+    res = await fetch(
+      `${YAHOO_BASE2}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`,
+      { headers: HEADERS }
+    );
+  }
+  if (!res.ok) throw new Error(`Yahoo Finance live price HTTP ${res.status}`);
+
+  const json = (await res.json()) as {
+    chart: {
+      result?: Array<{
+        meta: {
+          regularMarketPrice?: number;
+          previousClose?: number;
+          chartPreviousClose?: number;
+          regularMarketTime?: number;
+        };
+      }>;
+      error?: { message: string };
+    };
+  };
+
+  if (json.chart.error) throw new Error(json.chart.error.message);
+  const meta = json.chart.result?.[0]?.meta;
+  if (!meta || meta.regularMarketPrice == null) {
+    throw new Error("No live price data from Yahoo Finance");
+  }
+
+  const price = meta.regularMarketPrice;
+  const prevClose = meta.previousClose ?? meta.chartPreviousClose ?? null;
+  const change = prevClose != null ? price - prevClose : null;
+  const changePct = prevClose != null && prevClose !== 0 ? (change! / prevClose) * 100 : null;
+
+  return {
+    price: parseFloat(price.toFixed(2)),
+    change: change != null ? parseFloat(change.toFixed(2)) : null,
+    changePct: changePct != null ? parseFloat(changePct.toFixed(3)) : null,
+    timestamp: meta.regularMarketTime ? meta.regularMarketTime * 1000 : Date.now(),
+  };
+}
+
 // ─── News fetcher ──────────────────────────────────────────────────────────────
 
 export interface XauusdNewsItem {

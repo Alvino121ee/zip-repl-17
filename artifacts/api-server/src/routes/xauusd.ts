@@ -24,8 +24,21 @@ import {
   stopXauusdBrainEngine,
 } from "../lib/xauusd-brain-engine.js";
 import { chatWithAgent } from "../lib/agent-engine.js";
+import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
+import {
+  getSettingsSummary,
+  setDeepseekApiKey,
+  clearDeepseekApiKey,
+  setPredictionTimeframeMinutes,
+  VALID_TIMEFRAMES,
+} from "../lib/xauusd-settings.js";
 
 export const xauusdRouter = Router();
+
+// ─── GET /xauusd/live-price — realtime price ticker (polled every 1s) ────────
+xauusdRouter.get("/live-price", (_req, res) => {
+  return res.json(getLatestLivePrice());
+});
 
 // ─── GET /xauusd/snapshot — current price + all indicators ───────────────────
 xauusdRouter.get("/snapshot", async (_req, res) => {
@@ -114,9 +127,9 @@ xauusdRouter.get("/brain/stats", async (_req, res) => {
     .from(xauusdPredictionsTable);
 
   const verifiedPreds = totalPredictions.filter(
-    (p) => p.status === "verified" || p.status === "revised"
+    (p: { isCorrect: boolean | null; status: string }) => p.status === "verified" || p.status === "revised"
   );
-  const correctPreds = verifiedPreds.filter((p) => p.isCorrect === true);
+  const correctPreds = verifiedPreds.filter((p: { isCorrect: boolean | null }) => p.isCorrect === true);
   const accuracy =
     verifiedPreds.length > 0
       ? Math.round((correctPreds.length / verifiedPreds.length) * 100)
@@ -234,6 +247,45 @@ xauusdRouter.post("/learn-now", requireAdmin, async (_req, res) => {
   }
 });
 
+// ─── GET /xauusd/settings — current settings summary (no raw key exposed) ────
+xauusdRouter.get("/settings", async (_req, res) => {
+  try {
+    const summary = await getSettingsSummary();
+    return res.json({ ...summary, validTimeframes: VALID_TIMEFRAMES });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /xauusd/settings/deepseek-key — set/clear the DeepSeek API key ─────
+xauusdRouter.post("/settings/deepseek-key", requireAdmin, async (req, res) => {
+  const { apiKey } = req.body as { apiKey?: string };
+  try {
+    if (!apiKey || apiKey.trim().length === 0) {
+      await clearDeepseekApiKey();
+      return res.json({ ok: true, cleared: true });
+    }
+    await setDeepseekApiKey(apiKey);
+    return res.json({ ok: true, cleared: false });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /xauusd/settings/timeframe — set prediction timeframe (15|30 min) ──
+xauusdRouter.post("/settings/timeframe", requireAdmin, async (req, res) => {
+  const { minutes } = req.body as { minutes?: number };
+  try {
+    if (typeof minutes !== "number" || !VALID_TIMEFRAMES.includes(minutes as 15 | 30)) {
+      return res.status(400).json({ error: `minutes must be one of ${VALID_TIMEFRAMES.join(", ")}` });
+    }
+    await setPredictionTimeframeMinutes(minutes);
+    return res.json({ ok: true, predictionTimeframeMinutes: minutes });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── POST /xauusd/chat — chat with the XAUUSD AI agent ───────────────────────
 xauusdRouter.post("/chat", async (req, res) => {
   const { message, sessionId } = req.body as {
@@ -280,7 +332,7 @@ ATR14: ${ind.atr14}
 Trend: ${ind.trend} | EMA Alignment: ${ind.emaAlignment}
 Support: $${ind.supportLevel} | Resistance: $${ind.resistanceLevel}
 ${lastPred[0] ? `\n=== PREDIKSI TERAKHIR AI ===\nArah: ${lastPred[0].direction} | Confidence: ${((lastPred[0].confidence ?? 0) * 100).toFixed(0)}% | Status: ${lastPred[0].status}` : ""}
-${topInsights.length > 0 ? `\n=== PENGETAHUAN AI (Top Insights) ===\n${topInsights.map((i) => `• ${i.title}`).join("\n")}` : ""}`;
+${topInsights.length > 0 ? `\n=== PENGETAHUAN AI (Top Insights) ===\n${topInsights.map((i: { title: string }) => `• ${i.title}`).join("\n")}` : ""}`;
       }
     } catch {
       // context injection optional

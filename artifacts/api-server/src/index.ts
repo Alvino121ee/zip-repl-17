@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startXauusdBrainEngine } from "./lib/xauusd-brain-engine.js";
+import { startXauusdLivePriceTicker } from "./lib/xauusd-live-price.js";
 
 const rawPort = process.env["PORT"];
 
@@ -26,4 +27,7 @@ app.listen(port, (err) => {
 
   // Start XAUUSD autonomous learning engine
   startXauusdBrainEngine();
+
+  // Start realtime (1s) live price ticker
+  startXauusdLivePriceTicker();
 });

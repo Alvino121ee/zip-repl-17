@@ -15,8 +15,9 @@ import { logger } from "../lib/logger";
 const router = Router();
 
 // ── GET /ai/status ─────────────────────────────────────────────────────────
-router.get("/status", (_req, res) => {
-  res.json({ aiEnabled: isAiEnabled(), provider: isAiEnabled() ? "DeepSeek" : "Rule-based" });
+router.get("/status", async (_req, res) => {
+  const enabled = await isAiEnabled();
+  res.json({ aiEnabled: enabled, provider: enabled ? "DeepSeek" : "Rule-based" });
 });
 
 // ── GET /ai/insights/:ticker ──────────────────────────────────────────────────
@@ -104,7 +105,7 @@ router.get("/insights/:ticker", async (req, res) => {
         },
       });
 
-    res.json({ ...result, aiPowered: isAiEnabled() });
+    res.json({ ...result, aiPowered: await isAiEnabled() });
   } catch (err) {
     req.log.error({ err, ticker }, "ai insight error");
     res.status(500).json({ error: "Gagal menganalisis saham" });

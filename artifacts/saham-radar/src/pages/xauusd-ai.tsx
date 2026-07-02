@@ -9,11 +9,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   TrendingUp, TrendingDown, Minus, Brain, BookOpen,
   MessageSquare, Newspaper, Activity, Zap, RefreshCw,
   Send, Play, ChevronDown, ChevronUp, Target, History,
-  CheckCircle2, XCircle, Clock, Loader2
+  CheckCircle2, XCircle, Clock, Loader2, Settings, KeyRound
 } from "lucide-react";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -69,7 +71,20 @@ interface Prediction {
   id: number; direction: string; targetPrice: number | null; confidence: number;
   reasoning: string; priceAtPrediction: number; predictedAt: string;
   actualPrice: number | null; isCorrect: boolean | null;
-  status: string; revisionNote: string | null;
+  status: string; revisionNote: string | null; timeframe: string;
+  entryLow: number | null; entryHigh: number | null; stopLoss: number | null;
+}
+
+interface LivePrice {
+  price: number | null; change: number | null; changePct: number | null;
+  timestamp: number | null; stale: boolean; error: string | null;
+}
+
+interface XauusdSettings {
+  hasDeepseekKey: boolean;
+  deepseekKeySource: "database" | "environment" | "none";
+  predictionTimeframeMinutes: number;
+  validTimeframes: number[];
 }
 
 interface NewsItem {
@@ -442,12 +457,26 @@ function PredictionPanel({ preds }: { preds: Prediction[] }) {
                 <Badge className={`border text-[10px] ${p.direction === "up" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" : p.direction === "down" ? "bg-red-500/20 text-red-300 border-red-500/30" : "bg-amber-500/20 text-amber-300 border-amber-500/30"}`}>
                   {p.direction === "up" ? "▲ NAIK" : p.direction === "down" ? "▼ TURUN" : "↔ SIDEWAYS"}
                 </Badge>
+                <Badge className="text-[10px] border bg-slate-500/20 text-slate-300 border-slate-500/30">{p.timeframe}</Badge>
                 <span className="text-xs text-muted-foreground">dari ${p.priceAtPrediction.toFixed(2)}</span>
                 <span className="text-[11px] text-amber-400">{(p.confidence * 100).toFixed(0)}% confidence</span>
                 <Badge className={`text-[10px] border ${p.status === "pending" ? "bg-slate-500/20 text-slate-300 border-slate-500/30" : p.status === "verified" ? "bg-blue-500/20 text-blue-300 border-blue-500/30" : "bg-orange-500/20 text-orange-300 border-orange-500/30"}`}>
                   {p.status}
                 </Badge>
               </div>
+              {(p.entryLow != null || p.entryHigh != null || p.stopLoss != null) && (
+                <div className="flex flex-wrap gap-3 mt-1">
+                  {p.entryLow != null && p.entryHigh != null && (
+                    <span className="text-[11px] text-blue-400">Entry: ${p.entryLow.toFixed(2)} – ${p.entryHigh.toFixed(2)}</span>
+                  )}
+                  {p.stopLoss != null && (
+                    <span className="text-[11px] text-red-400">SL: ${p.stopLoss.toFixed(2)}</span>
+                  )}
+                  {p.targetPrice != null && (
+                    <span className="text-[11px] text-emerald-400">TP: ${p.targetPrice.toFixed(2)}</span>
+                  )}
+                </div>
+              )}
               <p className="text-xs text-muted-foreground mt-0.5">{timeAgo(p.predictedAt)}</p>
             </div>
             {expanded === p.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
@@ -455,6 +484,22 @@ function PredictionPanel({ preds }: { preds: Prediction[] }) {
 
           {expanded === p.id && (
             <div className="px-3 pb-3 space-y-2">
+              {(p.entryLow != null || p.stopLoss != null) && (
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-blue-500/10 border border-blue-500/20 rounded p-2 text-center">
+                    <p className="text-[10px] text-blue-400 uppercase tracking-wide mb-0.5">Rentang Entry</p>
+                    <p className="text-sm font-semibold">{p.entryLow != null && p.entryHigh != null ? `$${p.entryLow.toFixed(2)} – $${p.entryHigh.toFixed(2)}` : "-"}</p>
+                  </div>
+                  <div className="bg-red-500/10 border border-red-500/20 rounded p-2 text-center">
+                    <p className="text-[10px] text-red-400 uppercase tracking-wide mb-0.5">Stop Loss</p>
+                    <p className="text-sm font-semibold">{p.stopLoss != null ? `$${p.stopLoss.toFixed(2)}` : "-"}</p>
+                  </div>
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded p-2 text-center">
+                    <p className="text-[10px] text-emerald-400 uppercase tracking-wide mb-0.5">Target</p>
+                    <p className="text-sm font-semibold">{p.targetPrice != null ? `$${p.targetPrice.toFixed(2)}` : "-"}</p>
+                  </div>
+                </div>
+              )}
               <div className="bg-background/50 rounded p-2">
                 <p className="text-xs font-medium text-muted-foreground mb-1">Alasan Prediksi:</p>
                 <p className="text-sm">{p.reasoning}</p>
@@ -568,8 +613,106 @@ function NewsPanel({ news }: { news: NewsItem[] }) {
   );
 }
 
+// ─── Settings Panel ─────────────────────────────────────────────────────────
+function SettingsPanel({
+  settings,
+  onSaveKey,
+  onClearKey,
+  onSaveTimeframe,
+  savingKey,
+  savingTimeframe,
+}: {
+  settings: XauusdSettings | undefined;
+  onSaveKey: (key: string) => void;
+  onClearKey: () => void;
+  onSaveTimeframe: (minutes: number) => void;
+  savingKey: boolean;
+  savingTimeframe: boolean;
+}) {
+  const [apiKeyInput, setApiKeyInput] = useState("");
+
+  return (
+    <div className="space-y-6 max-w-xl">
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <KeyRound className="w-4 h-4 text-amber-400" />
+          <h3 className="text-sm font-semibold">DeepSeek API Key</h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Atur API key DeepSeek langsung dari website (disimpan aman di database), tanpa perlu mengubah Secrets.
+        </p>
+        <div className="flex items-center gap-2 mb-2">
+          <Badge
+            className={`text-[10px] border ${
+              settings?.hasDeepseekKey
+                ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                : "bg-red-500/20 text-red-300 border-red-500/30"
+            }`}
+          >
+            {settings?.hasDeepseekKey
+              ? `Aktif (sumber: ${settings.deepseekKeySource === "database" ? "website" : "secrets"})`
+              : "Belum diset"}
+          </Badge>
+        </div>
+        <div className="flex gap-2">
+          <Input
+            type="password"
+            placeholder="sk-xxxxxxxxxxxxxxxx"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            className="flex-1"
+          />
+          <Button
+            size="sm"
+            onClick={() => onSaveKey(apiKeyInput)}
+            disabled={savingKey || apiKeyInput.trim().length === 0}
+            className="bg-amber-500 hover:bg-amber-600 text-black"
+          >
+            {savingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Simpan"}
+          </Button>
+        </div>
+        {settings?.deepseekKeySource === "database" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-2 text-xs text-red-400 hover:text-red-300"
+            onClick={onClearKey}
+            disabled={savingKey}
+          >
+            Hapus key dari website
+          </Button>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Target className="w-4 h-4 text-amber-400" />
+          <h3 className="text-sm font-semibold">Interval Prediksi</h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Seberapa jauh ke depan AI membuat prediksi harga (dan kapan diverifikasi).
+        </p>
+        <div className="flex gap-2">
+          {(settings?.validTimeframes ?? [15, 30]).map((m) => (
+            <Button
+              key={m}
+              size="sm"
+              variant={settings?.predictionTimeframeMinutes === m ? "default" : "outline"}
+              className={settings?.predictionTimeframeMinutes === m ? "bg-amber-500 hover:bg-amber-600 text-black" : ""}
+              onClick={() => onSaveTimeframe(m)}
+              disabled={savingTimeframe}
+            >
+              {m} menit
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
-type Tab = "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log";
+type Tab = "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings";
 
 export default function XauusdAi() {
   const [activeTab, setActiveTab] = useState<Tab>("indicators");
@@ -623,6 +766,18 @@ export default function XauusdAi() {
     refetchInterval: 15_000,
   });
 
+  const livePriceQ = useQuery({
+    queryKey: ["xauusd-live-price"],
+    queryFn: () => apiGet<LivePrice>("/live-price"),
+    refetchInterval: 1_000,
+  });
+
+  const settingsQ = useQuery({
+    queryKey: ["xauusd-settings"],
+    queryFn: () => apiGet<XauusdSettings>("/settings"),
+    refetchInterval: 30_000,
+  });
+
   const learnNowMutation = useMutation({
     mutationFn: () => apiPost("/learn-now"),
     onSuccess: () => {
@@ -636,8 +791,36 @@ export default function XauusdAi() {
     onError: (err) => toast({ title: "Error", description: String(err), variant: "destructive" }),
   });
 
+  const saveKeyMutation = useMutation({
+    mutationFn: (apiKey: string) => apiPost("/settings/deepseek-key", { apiKey }),
+    onSuccess: () => {
+      toast({ title: "✅ API Key Disimpan", description: "DeepSeek API key berhasil disimpan." });
+      void qc.invalidateQueries({ queryKey: ["xauusd-settings"] });
+    },
+    onError: (err) => toast({ title: "Error", description: String(err), variant: "destructive" }),
+  });
+
+  const clearKeyMutation = useMutation({
+    mutationFn: () => apiPost("/settings/deepseek-key", { apiKey: "" }),
+    onSuccess: () => {
+      toast({ title: "Key Dihapus", description: "DeepSeek API key dari website sudah dihapus." });
+      void qc.invalidateQueries({ queryKey: ["xauusd-settings"] });
+    },
+    onError: (err) => toast({ title: "Error", description: String(err), variant: "destructive" }),
+  });
+
+  const saveTimeframeMutation = useMutation({
+    mutationFn: (minutes: number) => apiPost("/settings/timeframe", { minutes }),
+    onSuccess: () => {
+      toast({ title: "✅ Interval Diperbarui", description: "Interval prediksi berhasil diubah." });
+      void qc.invalidateQueries({ queryKey: ["xauusd-settings"] });
+    },
+    onError: (err) => toast({ title: "Error", description: String(err), variant: "destructive" }),
+  });
+
   const s = snapshotQ.data;
   const engine = engineQ.data;
+  const live = livePriceQ.data;
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "indicators", label: "Indikator Live", icon: <Activity className="w-3.5 h-3.5" /> },
@@ -647,6 +830,7 @@ export default function XauusdAi() {
     { id: "questions", label: `Pertanyaan (${statsQ.data?.totalQuestionsAsked ?? 0})`, icon: <BookOpen className="w-3.5 h-3.5" /> },
     { id: "news", label: "Berita", icon: <Newspaper className="w-3.5 h-3.5" /> },
     { id: "log", label: `Log Belajar (${logQ.data?.length ?? 0})`, icon: <History className="w-3.5 h-3.5" /> },
+    { id: "settings", label: "Pengaturan", icon: <Settings className="w-3.5 h-3.5" /> },
   ];
 
   return (
@@ -691,8 +875,22 @@ export default function XauusdAi() {
           <CardContent className="p-4">
             <div className="flex flex-wrap items-center gap-6">
               <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">XAUUSD / Harga Gold</p>
-                <p className="text-4xl font-bold text-amber-400">${s.price.toFixed(2)}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">XAUUSD / Harga Gold</p>
+                  {live?.price != null && !live.stale && (
+                    <span className="flex items-center gap-1 text-[10px] text-emerald-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />LIVE
+                    </span>
+                  )}
+                </div>
+                <p className="text-4xl font-bold text-amber-400">
+                  ${(live?.price ?? s.price).toFixed(2)}
+                  {live?.change != null && (
+                    <span className={`text-sm font-medium ml-2 ${live.change >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {live.change >= 0 ? "▲" : "▼"} {Math.abs(live.change).toFixed(2)} ({live.changePct?.toFixed(2)}%)
+                    </span>
+                  )}
+                </p>
                 <p className="text-xs text-muted-foreground mt-0.5">H: ${s.high.toFixed(2)} | L: ${s.low.toFixed(2)}</p>
               </div>
 
@@ -753,7 +951,7 @@ export default function XauusdAi() {
           <CardContent className="p-4 flex items-center gap-4">
             <div className="text-3xl">{predictionsQ.data[0].direction === "up" ? "🚀" : predictionsQ.data[0].direction === "down" ? "📉" : "↔️"}</div>
             <div className="flex-1">
-              <p className="text-xs text-muted-foreground">Prediksi AI Terakhir (4 jam ke depan)</p>
+              <p className="text-xs text-muted-foreground">Prediksi AI Terakhir ({predictionsQ.data[0].timeframe ?? `${settingsQ.data?.predictionTimeframeMinutes ?? 15}m`} ke depan)</p>
               <p className="font-bold">
                 <span className={predictionsQ.data[0].direction === "up" ? "text-emerald-400" : predictionsQ.data[0].direction === "down" ? "text-red-400" : "text-amber-400"}>
                   {predictionsQ.data[0].direction === "up" ? "▲ NAIK" : predictionsQ.data[0].direction === "down" ? "▼ TURUN" : "↔ SIDEWAYS"}
@@ -761,6 +959,16 @@ export default function XauusdAi() {
                 {predictionsQ.data[0].targetPrice && <span className="text-muted-foreground text-sm ml-2">target ${predictionsQ.data[0].targetPrice.toFixed(2)}</span>}
                 <span className="text-amber-400 text-sm ml-2">• {(predictionsQ.data[0].confidence * 100).toFixed(0)}% confidence</span>
               </p>
+              {(predictionsQ.data[0].entryLow != null || predictionsQ.data[0].stopLoss != null) && (
+                <p className="text-xs mt-1 flex flex-wrap gap-3">
+                  {predictionsQ.data[0].entryLow != null && predictionsQ.data[0].entryHigh != null && (
+                    <span className="text-blue-400">Entry: ${predictionsQ.data[0].entryLow.toFixed(2)} – ${predictionsQ.data[0].entryHigh.toFixed(2)}</span>
+                  )}
+                  {predictionsQ.data[0].stopLoss != null && (
+                    <span className="text-red-400">SL: ${predictionsQ.data[0].stopLoss.toFixed(2)}</span>
+                  )}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{predictionsQ.data[0].reasoning}</p>
             </div>
             <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 border text-xs">PENDING VERIFIKASI</Badge>
@@ -805,6 +1013,17 @@ export default function XauusdAi() {
           {activeTab === "news" && <NewsPanel news={newsQ.data ?? []} />}
 
           {activeTab === "log" && <LearningLogPanel logs={logQ.data ?? []} />}
+
+          {activeTab === "settings" && (
+            <SettingsPanel
+              settings={settingsQ.data}
+              onSaveKey={(key) => saveKeyMutation.mutate(key)}
+              onClearKey={() => clearKeyMutation.mutate()}
+              onSaveTimeframe={(minutes) => saveTimeframeMutation.mutate(minutes)}
+              savingKey={saveKeyMutation.isPending || clearKeyMutation.isPending}
+              savingTimeframe={saveTimeframeMutation.isPending}
+            />
+          )}
         </CardContent>
       </Card>
 
@@ -822,7 +1041,7 @@ export default function XauusdAi() {
               { step: "1", title: "Pantau Pasar", desc: "Fetch XAUUSD realtime dari Yahoo Finance + hitung RSI, EMA, MACD, BB, ATR setiap 15 menit", color: "text-amber-400" },
               { step: "2", title: "Deteksi Spike", desc: "Jika harga bergerak >0.3% dalam 1 siklus, AI generate 5 pertanyaan ekstra untuk belajar dari spike", color: "text-orange-400" },
               { step: "3", title: "Belajar dari DeepSeek", desc: "Generate pertanyaan unik (tidak pernah sama) → kirim ke DeepSeek → simpan jawaban terbaik ke 'otak AI'", color: "text-purple-400" },
-              { step: "4", title: "Revisi Diri Sendiri", desc: "Setelah 4 jam, cek apakah prediksi benar. Jika salah → AI menulis self-critique dan menyimpannya sebagai pelajaran", color: "text-cyan-400" },
+              { step: "4", title: "Revisi Diri Sendiri", desc: `Setelah ${settingsQ.data?.predictionTimeframeMinutes ?? 15} menit, cek apakah prediksi benar. Jika salah → AI menulis self-critique dan menyimpannya sebagai pelajaran`, color: "text-cyan-400" },
             ].map((item) => (
               <div key={item.step} className="bg-card/40 rounded-lg p-3 border border-border/50">
                 <div className={`text-lg font-bold ${item.color} mb-1`}>{item.step}</div>
