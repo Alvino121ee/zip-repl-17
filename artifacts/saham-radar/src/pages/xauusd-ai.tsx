@@ -50,6 +50,33 @@ function TradingViewTicker() {
   return <div className="tradingview-widget-container" ref={containerRef} />;
 }
 
+function TradingViewSymbolInfo() {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.innerHTML = `<div class="tradingview-widget-container__widget"></div>`;
+    const script = document.createElement("script");
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-symbol-info.js";
+    script.type = "text/javascript";
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      symbol: TV_SYMBOL,
+      width: "100%",
+      locale: "id",
+      colorTheme: "dark",
+      isTransparent: true,
+    });
+    el.appendChild(script);
+    return () => {
+      el.innerHTML = "";
+    };
+  }, []);
+
+  return <div className="tradingview-widget-container" ref={containerRef} style={{ minHeight: 56 }} />;
+}
+
 function TradingViewAdvancedChart() {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -953,17 +980,10 @@ export default function XauusdAi() {
         <Card className="border border-amber-500/20 bg-gradient-to-r from-amber-500/5 to-amber-600/5">
           <CardContent className="p-4">
             <div className="flex flex-wrap items-center gap-6">
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Indikator Teknikal (data futures, untuk analisis AI)</p>
-                <p className="text-2xl font-bold text-amber-400/80">
-                  ${(live?.price ?? s.price).toFixed(2)}
-                  {live?.change != null && (
-                    <span className={`text-sm font-medium ml-2 ${live.change >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                      {live.change >= 0 ? "▲" : "▼"} {Math.abs(live.change).toFixed(2)} ({live.changePct?.toFixed(2)}%)
-                    </span>
-                  )}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">H: ${s.high.toFixed(2)} | L: ${s.low.toFixed(2)}</p>
+              <div className="flex-1 min-w-[260px]">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Harga Live (TradingView · OANDA:XAUUSD)</p>
+                <TradingViewSymbolInfo />
+                <p className="text-xs text-muted-foreground mt-1">H: ${s.high.toFixed(2)} | L: ${s.low.toFixed(2)}</p>
               </div>
 
               <div className="flex flex-wrap gap-3">
