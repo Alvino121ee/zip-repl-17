@@ -18,6 +18,71 @@ import {
   CheckCircle2, XCircle, Clock, Loader2, Settings, KeyRound
 } from "lucide-react";
 
+// ─── TradingView Widgets ────────────────────────────────────────────────────
+// Menampilkan harga & chart XAUUSD langsung dari TradingView (feed broker OANDA)
+// agar sesuai dengan harga yang dilihat trader di platform broker mereka.
+const TV_SYMBOL = "OANDA:XAUUSD";
+
+function TradingViewTicker() {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.innerHTML = `<div class="tradingview-widget-container__widget"></div>`;
+    const script = document.createElement("script");
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js";
+    script.type = "text/javascript";
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      symbol: TV_SYMBOL,
+      width: "100%",
+      colorTheme: "dark",
+      isTransparent: true,
+      locale: "id",
+    });
+    el.appendChild(script);
+    return () => {
+      el.innerHTML = "";
+    };
+  }, []);
+
+  return <div className="tradingview-widget-container" ref={containerRef} />;
+}
+
+function TradingViewAdvancedChart() {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.innerHTML = `<div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>`;
+    const script = document.createElement("script");
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.type = "text/javascript";
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      autosize: true,
+      symbol: TV_SYMBOL,
+      interval: "15",
+      timezone: "Asia/Jakarta",
+      theme: "dark",
+      style: "1",
+      locale: "id",
+      hide_top_toolbar: false,
+      hide_legend: false,
+      allow_symbol_change: false,
+      support_host: "https://www.tradingview.com",
+    });
+    el.appendChild(script);
+    return () => {
+      el.innerHTML = "";
+    };
+  }, []);
+
+  return <div className="tradingview-widget-container" ref={containerRef} style={{ height: 500, width: "100%" }} />;
+}
+
 // ─── API ──────────────────────────────────────────────────────────────────────
 const BASE = import.meta.env.BASE_URL;
 
@@ -712,10 +777,10 @@ function SettingsPanel({
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-type Tab = "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings";
+type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings";
 
 export default function XauusdAi() {
-  const [activeTab, setActiveTab] = useState<Tab>("indicators");
+  const [activeTab, setActiveTab] = useState<Tab>("chart");
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -823,6 +888,7 @@ export default function XauusdAi() {
   const live = livePriceQ.data;
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: "chart", label: "Chart TradingView", icon: <TrendingUp className="w-3.5 h-3.5" /> },
     { id: "indicators", label: "Indikator Live", icon: <Activity className="w-3.5 h-3.5" /> },
     { id: "brain", label: `Otak AI (${statsQ.data?.totalInsights ?? 0})`, icon: <Brain className="w-3.5 h-3.5" /> },
     { id: "chat", label: "Chat", icon: <MessageSquare className="w-3.5 h-3.5" /> },
@@ -869,21 +935,27 @@ export default function XauusdAi() {
         </div>
       </div>
 
+      {/* TradingView live quote — sesuai harga broker (OANDA:XAUUSD) */}
+      <Card className="border border-amber-500/20 bg-gradient-to-r from-amber-500/5 to-amber-600/5">
+        <CardContent className="p-4">
+          <div className="flex items-center gap-1.5 mb-2">
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">XAUUSD / Harga Gold (TradingView, sesuai broker)</p>
+            <span className="flex items-center gap-1 text-[10px] text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />LIVE
+            </span>
+          </div>
+          <TradingViewTicker />
+        </CardContent>
+      </Card>
+
       {/* Price + signals bar */}
       {s ? (
         <Card className="border border-amber-500/20 bg-gradient-to-r from-amber-500/5 to-amber-600/5">
           <CardContent className="p-4">
             <div className="flex flex-wrap items-center gap-6">
               <div>
-                <div className="flex items-center gap-1.5">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">XAUUSD / Harga Gold</p>
-                  {live?.price != null && !live.stale && (
-                    <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />LIVE
-                    </span>
-                  )}
-                </div>
-                <p className="text-4xl font-bold text-amber-400">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Indikator Teknikal (data futures, untuk analisis AI)</p>
+                <p className="text-2xl font-bold text-amber-400/80">
                   ${(live?.price ?? s.price).toFixed(2)}
                   {live?.change != null && (
                     <span className={`text-sm font-medium ml-2 ${live.change >= 0 ? "text-emerald-400" : "text-red-400"}`}>
@@ -993,6 +1065,15 @@ export default function XauusdAi() {
       {/* Tab content */}
       <Card className="border border-border/50">
         <CardContent className="p-4 sm:p-6">
+          {activeTab === "chart" && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-3">
+                Chart TradingView live (simbol {TV_SYMBOL}) — harga sama seperti yang tampil di platform broker.
+              </p>
+              <TradingViewAdvancedChart />
+            </div>
+          )}
+
           {activeTab === "indicators" && s && <IndicatorGrid s={s} />}
           {activeTab === "indicators" && !s && (
             <div className="text-center py-8 text-muted-foreground">
