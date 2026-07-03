@@ -33,6 +33,7 @@ import { chatWithAgent } from "../lib/agent-engine.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
 import {
   getSettingsSummary,
+  getMemberPassword,
   setDeepseekApiKey,
   clearDeepseekApiKey,
   setPredictionTimeframeMinutes,
@@ -327,8 +328,8 @@ xauusdRouter.get("/brain/stats", async (_req, res) => {
   });
 });
 
-// ─── DELETE /xauusd/brain/:id — deactivate a brain entry ─────────────────────
-xauusdRouter.delete("/brain/:id", async (req, res) => {
+// ─── DELETE /xauusd/brain/:id — deactivate a brain entry (admin only) ────────
+xauusdRouter.delete("/brain/:id", requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
   await db
@@ -387,23 +388,39 @@ xauusdRouter.get("/engine-status", (_req, res) => {
   return res.json(getEngineStatus());
 });
 
-// ─── Simple admin guard for write operations ──────────────────────────────────
-// Accepts SESSION_SECRET as Bearer token, or a permissive flag in dev
+// ─── Auth guards ──────────────────────────────────────────────────────────────
 function requireAdmin(req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) {
   const secret = process.env.SESSION_SECRET;
   if (!secret) {
-    // No secret configured — allow in dev, block in production
     if (process.env.NODE_ENV === "production") {
       return res.status(403).json({ error: "Admin operations disabled: SESSION_SECRET not set" });
     }
     return next();
   }
-  const auth = req.headers.authorization ?? req.query.token as string ?? "";
+  const auth = (req.headers.authorization as string) ?? (req.query.token as string) ?? "";
   const token = auth.replace(/^Bearer\s+/i, "");
   if (token !== secret) {
-    return res.status(403).json({ error: "Forbidden — invalid admin token" });
+    return res.status(403).json({ error: "Forbidden — admin login diperlukan" });
   }
   return next();
+}
+
+async function requireMember(req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) {
+  const auth = (req.headers.authorization as string) ?? "";
+  const token = auth.replace(/^Bearer\s+/i, "");
+  if (!token) return res.status(401).json({ error: "Login diperlukan — silakan login sebagai member atau admin" });
+
+  // Admin token juga berlaku untuk akses member
+  const secret = process.env.SESSION_SECRET;
+  if (secret && token === secret) return next();
+
+  // Cek member token
+  try {
+    const memberPwd = await getMemberPassword();
+    if (memberPwd && token === memberPwd) return next();
+  } catch { /* biarkan jatuh ke 401 */ }
+
+  return res.status(401).json({ error: "Akses member diperlukan — silakan login" });
 }
 
 // ─── POST /xauusd/engine/start — manually start engine ───────────────────────
@@ -439,8 +456,7 @@ xauusdRouter.get("/settings", async (_req, res) => {
 });
 
 // ─── POST /xauusd/settings/deepseek-key — set/clear the DeepSeek API key ─────
-// Note: not admin-gated — this is a user-facing settings page with no login system.
-xauusdRouter.post("/settings/deepseek-key", async (req, res) => {
+xauusdRouter.post("/settings/deepseek-key", requireAdmin, async (req, res) => {
   const { apiKey } = req.body as { apiKey?: string };
   try {
     if (!apiKey || apiKey.trim().length === 0) {
@@ -455,8 +471,7 @@ xauusdRouter.post("/settings/deepseek-key", async (req, res) => {
 });
 
 // ─── POST /xauusd/settings/timeframe — set prediction timeframe (15|30 min) ──
-// Note: not admin-gated — this is a user-facing settings page with no login system.
-xauusdRouter.post("/settings/timeframe", async (req, res) => {
+xauusdRouter.post("/settings/timeframe", requireAdmin, async (req, res) => {
   const { minutes } = req.body as { minutes?: number };
   try {
     if (typeof minutes !== "number" || !VALID_TIMEFRAMES.includes(minutes as 15 | 30)) {
@@ -470,8 +485,7 @@ xauusdRouter.post("/settings/timeframe", async (req, res) => {
 });
 
 // ─── POST /xauusd/settings/whatsapp — set WhatsApp number + enable/disable ───
-// Note: not admin-gated — this is a user-facing settings page with no login system.
-xauusdRouter.post("/settings/whatsapp", async (req, res) => {
+xauusdRouter.post("/settings/whatsapp", requireAdmin, async (req, res) => {
   const { number, enabled } = req.body as { number?: string; enabled?: boolean };
   try {
     if (typeof number === "string") {
@@ -488,7 +502,7 @@ xauusdRouter.post("/settings/whatsapp", async (req, res) => {
 });
 
 // ─── POST /xauusd/settings/whatsapp/test — send a test WhatsApp message ──────
-xauusdRouter.post("/settings/whatsapp/test", async (_req, res) => {
+xauusdRouter.post("/settings/whatsapp/test", requireAdmin, async (_req, res) => {
   try {
     const result = await sendTestWhatsappMessage();
     if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
@@ -603,8 +617,8 @@ xauusdRouter.post("/backtest", async (req, res) => {
   }
 });
 
-// ─── POST /xauusd/chat — chat with the XAUUSD AI agent ───────────────────────
-xauusdRouter.post("/chat", async (req, res) => {
+// ─── POST /xauusd/chat — chat with the XAUUSD AI agent (member only) ─────────
+xauusdRouter.post("/chat", requireMember, async (req, res) => {
   const { message, sessionId } = req.body as {
     message?: string;
     sessionId?: string;

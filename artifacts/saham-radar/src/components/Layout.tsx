@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { TrendingUp, Settings, Menu, X, Zap } from "lucide-react";
+import { TrendingUp, Settings, Menu, X, Zap, Users, Lock } from "lucide-react";
+import { isAdmin, isMember } from "@/lib/auth";
 
 const navItems = [
-  { href: "/", label: "Gold AI", sublabel: "XAUUSD Dashboard", icon: TrendingUp },
-  { href: "/admin", label: "System", sublabel: "Admin & Status", icon: Settings },
+  { href: "/", label: "Gold AI", sublabel: "XAUUSD Dashboard", icon: TrendingUp, requiresAuth: false },
+  { href: "/member", label: "Member", sublabel: "Chat & Analisis AI", icon: Users, requiresAuth: true, role: "member" as const },
+  { href: "/admin", label: "System", sublabel: "Admin & Status", icon: Settings, requiresAuth: true, role: "admin" as const },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -76,6 +78,9 @@ function SidebarContent({
   location: string;
   onNavigate?: () => void;
 }) {
+  const adminAuthed = isAdmin();
+  const memberAuthed = isMember();
+
   return (
     <>
       {/* Brand */}
@@ -90,10 +95,17 @@ function SidebarContent({
       <nav className="flex-1 px-3 py-4 space-y-1">
         {navItems.map((item) => {
           const isActive = location === item.href;
+          const locked =
+            item.role === "admin" ? !adminAuthed :
+            item.role === "member" ? !memberAuthed :
+            false;
+
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={locked
+                ? `/login?role=${item.role}&redirect=${item.href}`
+                : item.href}
               onClick={onNavigate}
               className={`
                 group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 cursor-pointer
@@ -116,7 +128,7 @@ function SidebarContent({
                   className={`w-4 h-4 transition-colors ${isActive ? "text-primary" : "text-muted-foreground group-hover:text-primary/80"}`}
                 />
               </div>
-              <div className="leading-none min-w-0">
+              <div className="leading-none min-w-0 flex-1">
                 <p
                   className={`text-sm font-semibold truncate transition-colors ${isActive ? "text-primary" : "text-foreground/80 group-hover:text-foreground"}`}
                 >
@@ -124,9 +136,14 @@ function SidebarContent({
                 </p>
                 <p className="text-[10px] text-muted-foreground/60 mt-0.5 truncate">{item.sublabel}</p>
               </div>
-              {isActive && (
-                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(245,158,11,0.8)] shrink-0" />
-              )}
+              <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                {locked && (
+                  <Lock className="w-3 h-3 text-muted-foreground/40" />
+                )}
+                {isActive && !locked && (
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(245,158,11,0.8)]" />
+                )}
+              </div>
             </Link>
           );
         })}

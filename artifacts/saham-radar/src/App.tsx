@@ -6,6 +6,8 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/Layout";
 import XauusdAi from "@/pages/xauusd-ai";
 import AdminPanel from "@/pages/admin";
+import LoginPage from "@/pages/login";
+import MemberPage from "@/pages/member";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,13 +20,22 @@ const queryClient = new QueryClient({
 
 function Router() {
   return (
-    <Layout>
-      <Switch>
-        <Route path="/" component={XauusdAi} />
-        <Route path="/admin" component={AdminPanel} />
-        <Route component={NotFound} />
-      </Switch>
-    </Layout>
+    <Switch>
+      {/* Halaman tanpa layout sidebar */}
+      <Route path="/login" component={LoginPage} />
+      <Route path="/member" component={MemberPage} />
+
+      {/* Halaman dengan layout sidebar */}
+      <Route>
+        <Layout>
+          <Switch>
+            <Route path="/" component={XauusdAi} />
+            <Route path="/admin" component={AdminPanel} />
+            <Route component={NotFound} />
+          </Switch>
+        </Layout>
+      </Route>
+    </Switch>
   );
 }
 

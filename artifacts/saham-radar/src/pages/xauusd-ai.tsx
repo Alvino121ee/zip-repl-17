@@ -2088,7 +2088,26 @@ export default function XauusdAi() {
             <BrainPanel stats={statsQ.data} entries={brainQ.data ?? []} />
           )}
 
-          {activeTab === "chat" && <ChatPanel />}
+          {activeTab === "chat" && (
+            <div className="flex flex-col items-center justify-center py-16 gap-5">
+              <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                <MessageSquare className="w-8 h-8 text-amber-400" />
+              </div>
+              <div className="text-center max-w-sm">
+                <h3 className="text-base font-semibold text-foreground mb-2">Chat AI tersedia di halaman Member</h3>
+                <p className="text-sm text-muted-foreground mb-5">
+                  Fitur chat Gold AI Trader kini tersedia khusus untuk member. Login sebagai member untuk mengakses percakapan ChatGPT-style dengan AI trading kami.
+                </p>
+                <a
+                  href="/login?role=member&redirect=/member"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-semibold text-sm transition-colors"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  Login sebagai Member
+                </a>
+              </div>
+            </div>
+          )}
 
           {activeTab === "predictions" && <PredictionPanel preds={predictionsQ.data ?? []} />}
 
@@ -2116,18 +2135,24 @@ export default function XauusdAi() {
           )}
 
           {activeTab === "settings" && (
-            <SettingsPanel
-              settings={settingsQ.data}
-              onSaveKey={(key) => saveKeyMutation.mutate(key)}
-              onClearKey={() => clearKeyMutation.mutate()}
-              onSaveTimeframe={(minutes) => saveTimeframeMutation.mutate(minutes)}
-              savingKey={saveKeyMutation.isPending || clearKeyMutation.isPending}
-              savingTimeframe={saveTimeframeMutation.isPending}
-              onSaveWhatsapp={(number, enabled) => saveWhatsappMutation.mutate({ number, enabled })}
-              savingWhatsapp={saveWhatsappMutation.isPending}
-              onTestWhatsapp={() => testWhatsappMutation.mutate()}
-              testingWhatsapp={testWhatsappMutation.isPending}
-            />
+            <div className="flex flex-col items-center justify-center py-16 gap-5">
+              <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                <Settings className="w-8 h-8 text-amber-400" />
+              </div>
+              <div className="text-center max-w-sm">
+                <h3 className="text-base font-semibold text-foreground mb-2">Pengaturan khusus Admin</h3>
+                <p className="text-sm text-muted-foreground mb-5">
+                  Pengaturan sistem (API key, interval prediksi, WhatsApp, password member) hanya bisa diakses oleh admin. Silakan login sebagai admin untuk mengubah konfigurasi.
+                </p>
+                <a
+                  href="/login?role=admin&redirect=/admin"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-semibold text-sm transition-colors"
+                >
+                  <Settings className="w-4 h-4" />
+                  Login sebagai Admin
+                </a>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
