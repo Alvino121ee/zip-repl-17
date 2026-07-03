@@ -104,6 +104,11 @@ function TradingViewEconomicCalendar() {
 }
 
 function WinratePanel({ preds }: { preds: Prediction[] }) {
+  const calibQ = useQuery({
+    queryKey: ["xauusd-confidence-calibration"],
+    queryFn: () => apiGet<CalibrationResult>("/confidence-calibration"),
+    staleTime: 5 * 60_000,
+  });
   const verified = preds.filter(p => p.status === "verified");
   const correct = verified.filter(p => p.isCorrect === true);
   const wrong = verified.filter(p => p.isCorrect === false);
@@ -265,6 +270,55 @@ function WinratePanel({ preds }: { preds: Prediction[] }) {
             </table>
             <p className="text-[10px] text-muted-foreground mt-2">
               Diagonal <span className="text-emerald-400">hijau</span> = prediksi benar. Kotak <span className="text-red-400">merah</span> = meleset. Semakin terang = semakin sering terjadi.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Dynamic Confidence Calibration (Feature 2) ────────────────────── */}
+      {calibQ.data && calibQ.data.totalVerified >= 3 && (
+        <div>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">
+            Kalibrasi Confidence Dinamis
+            <span className="ml-2 text-[10px] text-muted-foreground/60">({calibQ.data.totalVerified} prediksi terverifikasi)</span>
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border/30">
+                  <th className="text-left text-[10px] text-muted-foreground font-normal p-1.5">Bucket Confidence</th>
+                  <th className="text-center text-[10px] text-muted-foreground font-normal p-1.5">Sampel</th>
+                  <th className="text-center text-[10px] text-muted-foreground font-normal p-1.5">Win Rate Aktual</th>
+                  <th className="text-left text-[10px] text-muted-foreground font-normal p-1.5">Kalibrasi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calibQ.data.calibration.map(b => {
+                  const midpoint = (b.min + Math.min(b.max, 1)) / 2;
+                  const diff = b.actualWinRate != null ? b.actualWinRate - midpoint * 100 : null;
+                  return (
+                    <tr key={b.label} className="border-b border-border/20 hover:bg-card/30 transition-colors">
+                      <td className="p-1.5 font-medium text-foreground">{b.label}</td>
+                      <td className="p-1.5 text-center text-muted-foreground">{b.sampleCount}</td>
+                      <td className="p-1.5 text-center">
+                        {b.actualWinRate != null
+                          ? <span className={b.actualWinRate >= 50 ? "text-emerald-400 font-medium" : "text-red-400 font-medium"}>{b.actualWinRate}%</span>
+                          : <span className="text-muted-foreground/50">—</span>}
+                      </td>
+                      <td className="p-1.5">
+                        {diff != null
+                          ? <span className={`text-[10px] ${Math.abs(diff) < 5 ? "text-emerald-400" : diff < 0 ? "text-red-400" : "text-amber-400"}`}>
+                              {Math.abs(diff) < 5 ? "✓ Terkalibrasi" : diff < 0 ? `▼ Overconfident ${Math.abs(diff).toFixed(0)}%` : `▲ Underconfident ${diff.toFixed(0)}%`}
+                            </span>
+                          : <span className="text-[10px] text-muted-foreground/50">Data kurang</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <p className="text-[10px] text-muted-foreground mt-2">
+              <strong>Overconfident</strong> = AI bilang 80% tapi aktualnya lebih rendah. <strong>Underconfident</strong> = sebaliknya.
             </p>
           </div>
         </div>
@@ -636,12 +690,23 @@ interface QuestionLog {
   savedToBrain: boolean; askedAt: string; answeredAt: string | null;
 }
 
+interface EnsembleVoteEntry { direction: string; confidence: number; label: string }
+interface EnsembleVotes {
+  technical: EnsembleVoteEntry; macro: EnsembleVoteEntry; ai: EnsembleVoteEntry;
+  agreementCount: number; agreementBonus: number;
+}
+interface CalibrationBucket { label: string; min: number; max: number; sampleCount: number; actualWinRate: number | null }
+interface CalibrationResult { calibration: CalibrationBucket[]; totalVerified: number }
+interface FeatureItem { indicator: string; value: string; sampleCount: number; winRate: number; lift: number }
+interface FeatureImportanceResult { features: FeatureItem[]; sampleCount: number; overallWinRate: number | null; minRequired: number }
+
 interface Prediction {
   id: number; direction: string; targetPrice: number | null; confidence: number;
   reasoning: string; priceAtPrediction: number; predictedAt: string;
   actualPrice: number | null; isCorrect: boolean | null;
   status: string; revisionNote: string | null; timeframe: string;
   entryLow: number | null; entryHigh: number | null; stopLoss: number | null;
+  indicatorsAtPrediction?: { ensembleVotes?: EnsembleVotes; [key: string]: unknown };
 }
 
 interface LivePrice {
@@ -803,6 +868,12 @@ function BrainPanel({ stats, entries }: { stats: BrainStats | undefined; entries
   const [expanded, setExpanded] = useState<number | null>(null);
   const [filter, setFilter] = useState<string>("all");
 
+  const featureQ = useQuery({
+    queryKey: ["xauusd-feature-importance"],
+    queryFn: () => apiGet<FeatureImportanceResult>("/feature-importance"),
+    staleTime: 5 * 60_000,
+  });
+
   const categories = ["all", "trading_rule", "pattern", "insight", "lesson", "news_impact"];
   const filtered = filter === "all" ? entries : entries.filter((e) => e.category === filter);
 
@@ -879,6 +950,55 @@ function BrainPanel({ stats, entries }: { stats: BrainStats | undefined; entries
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Feature Importance (Feature 3) ─────────────────────────────────── */}
+      {featureQ.data && featureQ.data.features.length > 0 && (
+        <div className="border-t border-border/30 pt-4">
+          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+            🏆 Feature Importance — Indikator Paling Prediktif
+          </p>
+          <p className="text-[10px] text-muted-foreground mb-3">
+            Win rate tiap kondisi indikator vs rata-rata keseluruhan ({featureQ.data.overallWinRate}%) · {featureQ.data.sampleCount} prediksi terverifikasi
+          </p>
+          <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+            {featureQ.data.features.map((f, i) => {
+              const isPositive = f.lift >= 0;
+              const barPct = Math.min(100, Math.abs(f.lift) / Math.max(...featureQ.data!.features.map(x => Math.abs(x.lift)), 1) * 100);
+              const indLabel: Record<string, string> = {
+                rsiSignal: "RSI", emaAlignment: "EMA Align", macdSignalType: "MACD", trend: "Trend"
+              };
+              return (
+                <div key={`${f.indicator}-${f.value}`} className="flex items-center gap-2 text-xs py-1.5 px-2 rounded bg-card/30 border border-border/20 hover:bg-card/50 transition-colors">
+                  <span className="text-muted-foreground w-4 text-center shrink-0">#{i + 1}</span>
+                  <span className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded px-1 py-0.5 shrink-0 w-16 text-center">{indLabel[f.indicator] ?? f.indicator}</span>
+                  <span className="font-medium text-foreground shrink-0 w-28 truncate" title={f.value}>{f.value.replace(/_/g, " ")}</span>
+                  <div className="flex-1 h-1.5 bg-card rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${isPositive ? "bg-emerald-500" : "bg-red-500"}`}
+                      style={{ width: `${barPct}%` }}
+                    />
+                  </div>
+                  <span className={`text-[10px] font-bold w-14 text-right shrink-0 ${f.winRate >= (featureQ.data?.overallWinRate ?? 50) ? "text-emerald-400" : "text-red-400"}`}>
+                    {f.winRate}%
+                  </span>
+                  <span className={`text-[10px] w-14 text-right shrink-0 ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+                    {isPositive ? "+" : ""}{f.lift.toFixed(1)}%
+                  </span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">n={f.sampleCount}</span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-2">
+            Lift = selisih win rate kondisi ini vs baseline. <span className="text-emerald-400">Hijau</span> = kondisi yang meningkatkan akurasi AI.
+          </p>
+        </div>
+      )}
+      {featureQ.data && featureQ.data.features.length === 0 && (
+        <div className="border-t border-border/30 pt-4 text-center py-4 text-muted-foreground">
+          <p className="text-xs">Feature importance memerlukan minimal {featureQ.data.minRequired} prediksi terverifikasi. ({featureQ.data.sampleCount} terkumpul)</p>
         </div>
       )}
     </div>
@@ -1883,6 +2003,29 @@ export default function XauusdAi() {
                 {predictionsQ.data[0].targetPrice && <span className="text-muted-foreground text-sm ml-2">target ${predictionsQ.data[0].targetPrice.toFixed(2)}</span>}
                 <span className="text-amber-400 text-sm ml-2">• {(predictionsQ.data[0].confidence * 100).toFixed(0)}% confidence</span>
               </p>
+              {/* Ensemble votes display */}
+              {predictionsQ.data[0].indicatorsAtPrediction?.ensembleVotes && (() => {
+                const ev = predictionsQ.data![0].indicatorsAtPrediction!.ensembleVotes!;
+                const agentLabels: Record<string, string> = { technical: "📐 Teknikal", macro: "🌐 Makro", ai: "🤖 AI", rule: "📏 Rule" };
+                return (
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                    {(["technical", "macro", "ai"] as const).map(key => {
+                      const v = ev[key];
+                      if (!v) return null;
+                      const d = v.direction;
+                      return (
+                        <span key={key} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium
+                          ${d === "up" ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10" : d === "down" ? "text-red-400 border-red-500/30 bg-red-500/10" : "text-amber-400 border-amber-500/30 bg-amber-500/10"}`}>
+                          {agentLabels[v.label] ?? v.label}: {d === "up" ? "▲" : d === "down" ? "▼" : "↔"} {(v.confidence * 100).toFixed(0)}%
+                        </span>
+                      );
+                    })}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${ev.agreementCount === 3 ? "text-emerald-400" : ev.agreementCount === 2 ? "text-amber-400" : "text-slate-400"}`}>
+                      {ev.agreementCount === 3 ? "✓ Semua sepakat" : ev.agreementCount === 2 ? "2/3 sepakat" : "Split vote"}
+                    </span>
+                  </div>
+                );
+              })()}
               {(predictionsQ.data[0].entryLow != null || predictionsQ.data[0].stopLoss != null) && (
                 <p className="text-xs mt-1 flex flex-wrap gap-3">
                   {predictionsQ.data[0].entryLow != null && predictionsQ.data[0].entryHigh != null && (

@@ -371,6 +371,23 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
   return { direction, targetPrice, entryLow, entryHigh, stopLoss, confidence, reasoning };
 }
 
+// ─── Macro vote helper ─────────────────────────────────────────────────────────
+
+function computeMacroVote(corr: { dxy: { changePct?: number | null }; us10y: { changePct?: number | null } }): { direction: "up" | "down" | "sideways"; confidence: number } {
+  const dxyChange = corr.dxy.changePct ?? 0;
+  const yieldChange = corr.us10y.changePct ?? 0;
+  // DXY up → bearish gold; DXY down → bullish gold
+  // US10Y up → bearish gold; US10Y down → bullish gold
+  let score = 0;
+  if (dxyChange < -0.1) score += 1;
+  else if (dxyChange > 0.1) score -= 1;
+  if (yieldChange < -0.02) score += 0.5;
+  else if (yieldChange > 0.02) score -= 0.5;
+  const direction: "up" | "down" | "sideways" = score >= 0.8 ? "up" : score <= -0.8 ? "down" : "sideways";
+  const confidence = Math.min(0.72, 0.38 + Math.abs(score) * 0.22);
+  return { direction, confidence };
+}
+
 // ─── Prediction maker ──────────────────────────────────────────────────────────
 
 async function makePrediction(indicators: XauusdIndicators): Promise<void> {
@@ -539,15 +556,41 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
   try {
     const verifyAt = new Date(Date.now() + timeframeMinutes * 60 * 1000);
 
-    const direction = pred.direction ?? ruleBased.direction;
+    const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
     const targetPrice = pred.targetPrice ?? ruleBased.targetPrice;
     const entryLow = pred.entryLow ?? ruleBased.entryLow;
     const entryHigh = pred.entryHigh ?? ruleBased.entryHigh;
     const stopLoss = pred.stopLoss ?? ruleBased.stopLoss;
-    const confidence = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
     const reasoning = aiPowered
       ? (pred.reasoning ?? ruleBased.reasoning)
       : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`;
+
+    // ── Ensemble Voting (Feature 1) ──────────────────────────────────────────
+    const techVote = { direction: ruleBased.direction, confidence: ruleBased.confidence, label: "technical" };
+    const macroVote = corrResult.status === "fulfilled"
+      ? { ...computeMacroVote(corrResult.value), label: "macro" }
+      : { direction: "sideways" as const, confidence: 0.45, label: "macro" };
+    const baseAiConf = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
+    const aiVote = { direction, confidence: baseAiConf, label: aiPowered ? "ai" : "rule" };
+
+    const allDirs = [techVote.direction, macroVote.direction, aiVote.direction];
+    const agreementCount = Math.max(
+      allDirs.filter(d => d === "up").length,
+      allDirs.filter(d => d === "down").length,
+      allDirs.filter(d => d === "sideways").length
+    );
+    // +8% when unanimous, -6% when split 3-ways, no change for 2/3 agreement
+    const agreementBonus = agreementCount === 3 ? 0.08 : agreementCount === 1 ? -0.06 : 0;
+    const confidence = Math.min(1, Math.max(0, baseAiConf + agreementBonus));
+
+    const ensembleVotes = {
+      technical: techVote,
+      macro: macroVote,
+      ai: aiVote,
+      agreementCount,
+      agreementBonus: parseFloat(agreementBonus.toFixed(3)),
+    };
+    // ─────────────────────────────────────────────────────────────────────────
 
     await db.insert(xauusdPredictionsTable).values({
       timeframe: timeframeLabel,
@@ -559,7 +602,7 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
       confidence,
       reasoning,
       priceAtPrediction: indicators.price,
-      indicatorsAtPrediction: indicators as unknown as Record<string, unknown>,
+      indicatorsAtPrediction: { ...(indicators as unknown as Record<string, unknown>), ensembleVotes },
       verifyAt,
       status: "pending",
     });

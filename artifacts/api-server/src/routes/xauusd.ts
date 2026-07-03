@@ -150,6 +150,87 @@ xauusdRouter.get("/macro-history", async (req, res) => {
   return res.json(rows);
 });
 
+// ─── GET /xauusd/confidence-calibration — bucket win-rate calibration ─────────
+xauusdRouter.get("/confidence-calibration", async (_req, res) => {
+  try {
+    const preds = await db
+      .select({ confidence: xauusdPredictionsTable.confidence, isCorrect: xauusdPredictionsTable.isCorrect })
+      .from(xauusdPredictionsTable)
+      .where(eq(xauusdPredictionsTable.status, "verified"));
+
+    const bucketEdges = [0.45, 0.55, 0.65, 0.75, 0.85, 1.01];
+    const calibration = bucketEdges.slice(0, -1).map((min, i) => {
+      const max = bucketEdges[i + 1];
+      const inBucket = preds.filter(p => p.confidence >= min && p.confidence < max);
+      const wins = inBucket.filter(p => p.isCorrect === true).length;
+      return {
+        label: `${Math.round(min * 100)}-${Math.round(Math.min(max, 1) * 100)}%`,
+        min, max: Math.min(max, 1),
+        sampleCount: inBucket.length,
+        actualWinRate: inBucket.length >= 3 ? parseFloat((wins / inBucket.length * 100).toFixed(1)) : null,
+      };
+    });
+
+    return res.json({ calibration, totalVerified: preds.length });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── GET /xauusd/feature-importance — indicator win-rate analysis ──────────────
+xauusdRouter.get("/feature-importance", async (_req, res) => {
+  try {
+    const preds = await db
+      .select({ indicatorsAtPrediction: xauusdPredictionsTable.indicatorsAtPrediction, isCorrect: xauusdPredictionsTable.isCorrect })
+      .from(xauusdPredictionsTable)
+      .where(eq(xauusdPredictionsTable.status, "verified"))
+      .orderBy(desc(xauusdPredictionsTable.predictedAt))
+      .limit(500);
+
+    if (preds.length < 15) {
+      return res.json({ features: [], sampleCount: preds.length, minRequired: 15, overallWinRate: null });
+    }
+
+    const totalWins = preds.filter(p => p.isCorrect === true).length;
+    const overallWinRate = totalWins / preds.length;
+
+    const indicatorKeys = ["rsiSignal", "emaAlignment", "macdSignalType", "trend"];
+    const buckets = new Map<string, { wins: number; total: number }>();
+
+    for (const pred of preds) {
+      const ind = (pred.indicatorsAtPrediction ?? {}) as Record<string, unknown>;
+      for (const key of indicatorKeys) {
+        const val = String(ind[key] ?? "unknown");
+        const k = `${key}::${val}`;
+        if (!buckets.has(k)) buckets.set(k, { wins: 0, total: 0 });
+        const b = buckets.get(k)!;
+        b.total++;
+        if (pred.isCorrect === true) b.wins++;
+      }
+    }
+
+    const features = Array.from(buckets.entries())
+      .filter(([, b]) => b.total >= 5)
+      .map(([key, b]) => {
+        const [indicator, value] = key.split("::");
+        const winRate = b.wins / b.total;
+        return {
+          indicator: indicator ?? key,
+          value: value ?? "?",
+          sampleCount: b.total,
+          winRate: parseFloat((winRate * 100).toFixed(1)),
+          lift: parseFloat(((winRate / overallWinRate - 1) * 100).toFixed(1)),
+        };
+      })
+      .sort((a, b) => Math.abs(b.lift) - Math.abs(a.lift))
+      .slice(0, 16);
+
+    return res.json({ features, sampleCount: preds.length, overallWinRate: parseFloat((overallWinRate * 100).toFixed(1)), minRequired: 15 });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── GET /xauusd/snapshots — history of saved snapshots ──────────────────────
 xauusdRouter.get("/snapshots", async (req, res) => {
   const limit = Math.min(200, parseInt(String(req.query.limit ?? "50"), 10));
