@@ -703,7 +703,7 @@ interface FeatureImportanceResult { features: FeatureItem[]; sampleCount: number
 interface Prediction {
   id: number; direction: string; targetPrice: number | null; confidence: number;
   reasoning: string; priceAtPrediction: number; predictedAt: string;
-  actualPrice: number | null; isCorrect: boolean | null;
+  actualPrice: number | null; actualDirection: string | null; isCorrect: boolean | null;
   status: string; revisionNote: string | null; timeframe: string;
   entryLow: number | null; entryHigh: number | null; stopLoss: number | null;
   indicatorsAtPrediction?: { ensembleVotes?: EnsembleVotes; [key: string]: unknown };

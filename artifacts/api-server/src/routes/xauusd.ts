@@ -330,7 +330,7 @@ xauusdRouter.get("/brain/stats", async (_req, res) => {
 
 // ─── DELETE /xauusd/brain/:id — deactivate a brain entry (admin only) ────────
 xauusdRouter.delete("/brain/:id", requireAdmin, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
   await db
     .update(xauusdBrainTable)
