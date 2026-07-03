@@ -9,17 +9,35 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  Activity, Brain, Cpu, Clock, Key, Phone, Zap, CheckCircle2,
+  Activity, Brain, Clock, Key, Phone, Zap, CheckCircle2,
   XCircle, RefreshCw, LogOut, ShieldCheck, Users, KeyRound,
-  Target, Bell, Loader2, Eye, EyeOff,
+  Target, Bell, Loader2, Eye, EyeOff, Flame, StopCircle,
+  BarChart2, TrendingUp,
 } from "lucide-react";
 import { getAdminToken, clearAdminToken, authFetch } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+interface ExtremeMode {
+  active: boolean;
+  target: number;
+  progress: number;
+  insights: number;
+  cycles: number;
+  startedAt: string | null;
+  percentDone: number;
+}
+
 interface SystemStatus {
   ok: boolean;
-  engine: { running: boolean; cycleCount: number; lastCycleAt: string | null; nextCycleIn: number | null };
+  engine: {
+    running: boolean;
+    totalCycles: number;
+    lastCycleAt: string | null;
+    totalInsights: number;
+    isLearning: boolean;
+    extremeMode: ExtremeMode;
+  };
   settings: {
     hasDeepseekKey: boolean;
     deepseekKeySource: "database" | "environment" | "none";
@@ -270,6 +288,183 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
   );
 }
 
+// ─── Extreme Learning Mode Panel ──────────────────────────────────────────────
+function ExtremeModePanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () => void }) {
+  const { toast } = useToast();
+  const em = data.engine.extremeMode;
+  const [target, setTarget] = useState(100);
+  const [questionsPerCycle, setQuestionsPerCycle] = useState(10);
+
+  const startMut = useMutation({
+    mutationFn: () => adminPost("/api/xauusd/engine/extreme/start", { target, questionsPerCycle }),
+    onSuccess: () => {
+      toast({ title: "🔥 Mode Ekstrem Dimulai", description: `Target: ${target} pertanyaan` });
+      onRefetch();
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  const stopMut = useMutation({
+    mutationFn: () => adminPost("/api/xauusd/engine/extreme/stop"),
+    onSuccess: () => {
+      toast({ title: "⛔ Berhenti", description: "Mode ekstrem dihentikan" });
+      onRefetch();
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  return (
+    <Card className={`border-2 transition-colors ${em.active ? "border-orange-500/50 bg-orange-500/5" : "border-border/50"}`}>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center justify-between text-base">
+          <span className="flex items-center gap-2">
+            <Flame className={`w-5 h-5 ${em.active ? "text-orange-400 animate-pulse" : "text-muted-foreground"}`} />
+            Mode Belajar Ekstrem
+          </span>
+          {em.active && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 border border-orange-500/30 animate-pulse">
+              AKTIF
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Status saat aktif */}
+        {em.active ? (
+          <div className="space-y-3">
+            {/* Progress bar */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Progress</span>
+                <span className="font-semibold tabular-nums text-orange-400">
+                  {em.progress} / {em.target} pertanyaan ({em.percentDone}%)
+                </span>
+              </div>
+              <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="h-2.5 rounded-full bg-gradient-to-r from-orange-500 to-amber-400 transition-all duration-500"
+                  style={{ width: `${em.percentDone}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="text-center rounded-lg bg-muted/40 py-2">
+                <p className="text-lg font-bold tabular-nums text-orange-400">{em.progress}</p>
+                <p className="text-[10px] text-muted-foreground">Dijawab</p>
+              </div>
+              <div className="text-center rounded-lg bg-muted/40 py-2">
+                <p className="text-lg font-bold tabular-nums text-emerald-400">{em.insights}</p>
+                <p className="text-[10px] text-muted-foreground">Insights</p>
+              </div>
+              <div className="text-center rounded-lg bg-muted/40 py-2">
+                <p className="text-lg font-bold tabular-nums text-violet-400">{em.cycles}</p>
+                <p className="text-[10px] text-muted-foreground">Siklus</p>
+              </div>
+            </div>
+
+            {em.startedAt && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Clock className="w-3.5 h-3.5" />
+                Mulai: {new Date(em.startedAt).toLocaleString("id-ID")}
+              </div>
+            )}
+
+            <Button
+              className="w-full gap-2 bg-red-600/80 hover:bg-red-600 text-white border-0"
+              size="sm"
+              onClick={() => stopMut.mutate()}
+              disabled={stopMut.isPending}
+            >
+              {stopMut.isPending
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <StopCircle className="w-4 h-4" />}
+              Hentikan Mode Ekstrem
+            </Button>
+
+            <p className="text-[11px] text-muted-foreground/70 text-center">
+              Akan berhenti setelah pertanyaan yang sedang berjalan selesai dijawab
+            </p>
+          </div>
+        ) : (
+          /* Konfigurasi saat tidak aktif */
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Belajar non-stop tanpa jeda antar siklus. Jeda 15–30 detik antar pertanyaan (menunggu jawaban AI penuh).
+              Deduplication in-memory — tidak mungkin tanya pertanyaan yang sama. Kualitas threshold lebih tinggi (0.65 vs 0.6 normal).
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Target className="w-3 h-3" /> Target Pertanyaan
+                </label>
+                <input
+                  type="number"
+                  min={10}
+                  max={10000}
+                  value={target}
+                  onChange={(e) => setTarget(Math.max(10, Math.min(10000, parseInt(e.target.value) || 100)))}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-orange-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground flex items-center gap-1">
+                  <BarChart2 className="w-3 h-3" /> Pertanyaan/Siklus
+                </label>
+                <input
+                  type="number"
+                  min={3}
+                  max={20}
+                  value={questionsPerCycle}
+                  onChange={(e) => setQuestionsPerCycle(Math.max(3, Math.min(20, parseInt(e.target.value) || 10)))}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm tabular-nums focus:outline-none focus:ring-1 focus:ring-orange-500"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-1">
+              <div className="flex items-center justify-between">
+                <span>Estimasi waktu</span>
+                <span className="tabular-nums font-medium text-foreground/70">
+                  ~{Math.round(target * ((15 + 30) / 2 + 45) / 60)} menit
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Jeda antar pertanyaan</span>
+                <span className="font-medium text-foreground/70">15–30 detik acak</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Quality threshold</span>
+                <span className="font-medium text-emerald-400">≥ 0.65 (ketat)</span>
+              </div>
+            </div>
+
+            <Button
+              className="w-full gap-2 bg-orange-500 hover:bg-orange-600 text-black font-semibold"
+              onClick={() => startMut.mutate()}
+              disabled={startMut.isPending || !data.settings.hasDeepseekKey}
+            >
+              {startMut.isPending
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Flame className="w-4 h-4" />}
+              Mulai Mode Ekstrem ({target} Pertanyaan)
+            </Button>
+
+            {!data.settings.hasDeepseekKey && (
+              <p className="text-xs text-amber-400 text-center flex items-center justify-center gap-1">
+                <TrendingUp className="w-3.5 h-3.5" />
+                Set DeepSeek API Key dulu agar mode ekstrem bisa berjalan
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main Admin Page ──────────────────────────────────────────────────────────
 export default function AdminPanel() {
   const [, navigate] = useLocation();
@@ -294,7 +489,8 @@ export default function AdminPanel() {
       return res.json();
     },
     enabled: !!token,
-    refetchInterval: 20_000,
+    // Refresh lebih cepat saat extreme mode aktif agar progress bar update real-time
+    refetchInterval: (q) => (q.state.data?.engine?.extremeMode?.active ? 5_000 : 20_000),
   });
 
   const handleLogout = () => {
@@ -395,7 +591,11 @@ export default function AdminPanel() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Total Siklus Belajar</span>
-                <span className="text-sm font-semibold tabular-nums">{data.engine.cycleCount}</span>
+                <span className="text-sm font-semibold tabular-nums">{data.engine.totalCycles}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Total Insights</span>
+                <span className="text-sm font-semibold tabular-nums text-emerald-400">{data.engine.totalInsights}</span>
               </div>
               {data.engine.lastCycleAt && (
                 <div className="flex items-center justify-between">
@@ -403,13 +603,10 @@ export default function AdminPanel() {
                   <span className="text-sm text-foreground/70">{new Date(data.engine.lastCycleAt).toLocaleString("id-ID")}</span>
                 </div>
               )}
-              {data.engine.nextCycleIn != null && (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Siklus Berikutnya</span>
-                  <span className="text-sm text-foreground/70 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5" />
-                    {Math.round(data.engine.nextCycleIn / 60)} menit lagi
-                  </span>
+              {data.engine.isLearning && (
+                <div className="flex items-center gap-1.5 text-xs text-amber-400">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Sedang belajar...
                 </div>
               )}
             </CardContent>
@@ -449,6 +646,15 @@ export default function AdminPanel() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Extreme Learning Mode */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <Flame className="w-5 h-5 text-orange-400" />
+              <h2 className="text-lg font-semibold">Mode Belajar Ekstrem</h2>
+            </div>
+            <ExtremeModePanel data={data} onRefetch={() => refetch()} />
+          </div>
 
           {/* Settings */}
           <div>

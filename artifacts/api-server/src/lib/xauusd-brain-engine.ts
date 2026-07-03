@@ -50,6 +50,21 @@ let lastCycleAt: Date | null = null;
 let totalCycles = 0;
 let totalInsights = 0;
 
+// ─── Extreme Mode state ────────────────────────────────────────────────────────
+const EXTREME_PAUSE_MIN_MS = 15_000;
+const EXTREME_PAUSE_MAX_MS = 30_000;
+const EXTREME_QUALITY_THRESHOLD = 0.65; // lebih ketat dari normal (0.6)
+const EXTREME_QUESTIONS_PER_CYCLE = 10; // default per siklus
+
+let isExtremeRunning = false;
+let extremeTarget = 0;
+let extremeProgress = 0;        // total pertanyaan berhasil dijawab
+let extremeInsightsTotal = 0;   // total insights disimpan ke brain
+let extremeCycleCount = 0;      // siklus dalam sesi ini
+let extremeStartedAt: Date | null = null;
+let extremeAbort = false;
+let extremeHashCache: Set<string> | null = null; // dedup in-memory antar siklus
+
 // ─── DeepSeek query ────────────────────────────────────────────────────────────
 
 async function queryDeepSeek(
@@ -1435,6 +1450,260 @@ async function analyzeAndSaveNews(): Promise<void> {
   }
 }
 
+// ─── Extreme Learning Mode ─────────────────────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runExtremeLearningLoop(target: number, questionsPerCycle: number): Promise<void> {
+  const SYS_PR = `Kamu adalah expert trader XAUUSD/Gold dengan pengalaman 20 tahun. 
+Berikan jawaban SANGAT SPESIFIK, dengan angka konkret, strategi actionable, dan pelajaran yang bisa langsung diaplikasikan.
+Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin actionable per jawaban.`;
+
+  // Circuit breaker — berhenti otomatis jika DeepSeek terus gagal
+  const MAX_CONSECUTIVE_ERRORS = 5;
+  let consecutiveErrors = 0;
+
+  while (extremeProgress < target && !extremeAbort) {
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      console.error(
+        `[Extreme Mode] 🚨 Circuit breaker aktif — ${consecutiveErrors} kegagalan berturut-turut. ` +
+        `Periksa DeepSeek API key dan koneksi. Mode ekstrem dihentikan otomatis.`
+      );
+      extremeAbort = true;
+      break;
+    }
+    // 1. Fetch indicators
+    let indicators: Awaited<ReturnType<typeof fetchXauusdIndicators>> | null = null;
+    try {
+      indicators = await fetchXauusdIndicators("1h");
+    } catch (err) {
+      console.error("[Extreme Mode] Gagal fetch indicators:", err);
+    }
+    if (!indicators) {
+      console.warn("[Extreme Mode] TradingView tidak merespons, coba lagi 30s...");
+      await sleep(30_000);
+      continue;
+    }
+
+    // 2. Detect spike
+    let spikeDetected = false;
+    try {
+      const lastSnap = await db
+        .select({ price: xauusdSnapshotsTable.price })
+        .from(xauusdSnapshotsTable)
+        .orderBy(desc(xauusdSnapshotsTable.snapshotAt))
+        .limit(1);
+      if (lastSnap.length > 0) {
+        const change = Math.abs((indicators.price - lastSnap[0].price) / lastSnap[0].price);
+        spikeDetected = change >= SPIKE_THRESHOLD;
+      }
+    } catch { /* non-fatal */ }
+
+    // 3. Save snapshot (non-blocking)
+    db.insert(xauusdSnapshotsTable).values({
+      price: indicators.price,
+      open: indicators.open,
+      high: indicators.high,
+      low: indicators.low,
+      volume: indicators.volume,
+      priceChange: null,
+      isSpike: spikeDetected,
+      rsi14: indicators.rsi14,
+      ema9: indicators.ema9,
+      ema21: indicators.ema21,
+      ema50: indicators.ema50,
+      ema200: indicators.ema200,
+      macdLine: indicators.macdLine,
+      macdSignal: indicators.macdSignal,
+      macdHistogram: indicators.macdHistogram,
+      bbUpper: indicators.bbUpper,
+      bbMiddle: indicators.bbMiddle,
+      bbLower: indicators.bbLower,
+      bbWidth: indicators.bbWidth,
+      atr14: indicators.atr14,
+      trend: indicators.trend,
+      rsiSignal: indicators.rsiSignal,
+      macdSignalType: indicators.macdSignalType,
+      emaAlignment: indicators.emaAlignment,
+      supportLevel: indicators.supportLevel,
+      resistanceLevel: indicators.resistanceLevel,
+    }).catch(() => { /* non-fatal */ });
+
+    // 4. Build candidate list, filter via in-memory hash cache
+    const remaining = target - extremeProgress;
+    const count = Math.min(questionsPerCycle, remaining);
+    const candidates = getMarketAwareQuestions(indicators, count + 12, spikeDetected);
+    const toAsk = candidates.filter(c => !extremeHashCache!.has(c.hash)).slice(0, count);
+
+    if (toAsk.length === 0) {
+      console.warn(`[Extreme Mode] ⚠️ Pool habis — semua kandidat sudah pernah ditanya. Tunggu 60s agar harga bergerak...`);
+      await sleep(60_000);
+      extremeCycleCount++;
+      continue;
+    }
+
+    // 5. Tanya satu per satu — tunggu jawaban, lalu jeda 15-30s
+    let cycleInsights = 0;
+    let cycleAnswered = 0;
+    const cycleStart = Date.now();
+
+    for (const { question, hash } of toAsk) {
+      if (extremeAbort || extremeProgress >= target) break;
+
+      try {
+        // Insert placeholder & tandai hash di in-memory cache sebelum query
+        // (agar tidak duplikat walau ada error di tengah)
+        const [inserted] = await db
+          .insert(xauusdQuestionsLogTable)
+          .values({
+            question,
+            questionHash: hash,
+            marketContext: indicators as unknown as Record<string, unknown>,
+          })
+          .returning({ id: xauusdQuestionsLogTable.id });
+
+        extremeHashCache!.add(hash); // update in-memory segera
+
+        // Tanya DeepSeek — tunggu jawaban penuh
+        const answer = await queryDeepSeek(SYS_PR, question, 1_000);
+        const quality = scoreAnswer(question, answer);
+
+        await db
+          .update(xauusdQuestionsLogTable)
+          .set({ answer, quality, answeredAt: new Date(), savedToBrain: quality >= EXTREME_QUALITY_THRESHOLD })
+          .where(eq(xauusdQuestionsLogTable.id, inserted.id));
+
+        // Simpan ke brain jika kualitas ≥ 0.65
+        if (quality >= EXTREME_QUALITY_THRESHOLD && answer.length > 100) {
+          await db.insert(xauusdBrainTable).values({
+            category: extractBrainCategory(question),
+            title: extractTitle(question, answer),
+            content: answer,
+            confidence: quality,
+            sourceQuestion: question,
+            marketConditionTags: extractMarketTags(indicators),
+          });
+          cycleInsights++;
+          extremeInsightsTotal++;
+        }
+
+        consecutiveErrors = 0; // reset circuit breaker saat berhasil
+        extremeProgress++;
+        cycleAnswered++;
+
+        // Progress report setiap 10 pertanyaan atau saat target tercapai
+        if (extremeProgress % 10 === 0 || extremeProgress === target) {
+          const pct = Math.round((extremeProgress / target) * 100);
+          console.log(
+            `[Extreme Mode] 📊 Progress: ${extremeProgress}/${target} (${pct}%) — Insights: ${extremeInsightsTotal} — Siklus: ${extremeCycleCount + 1}`
+          );
+        }
+
+        if (extremeProgress >= target || extremeAbort) break;
+
+        // Jeda acak 15–30 detik setelah jawaban diterima sebelum pertanyaan berikutnya
+        const pause = EXTREME_PAUSE_MIN_MS + Math.random() * (EXTREME_PAUSE_MAX_MS - EXTREME_PAUSE_MIN_MS);
+        console.log(`[Extreme Mode] ⏱ Jeda ${(pause / 1000).toFixed(0)}s → pertanyaan ke-${extremeProgress + 1}/${target}`);
+        await sleep(pause);
+
+      } catch (err) {
+        consecutiveErrors++;
+        console.error(
+          `[Extreme Mode] ❌ Pertanyaan gagal (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}):`,
+          String(err)
+        );
+        extremeHashCache!.delete(hash); // hapus dari cache agar bisa dicoba ulang
+        await sleep(5_000);
+      }
+    }
+
+    // Simpan log siklus (non-fatal)
+    try {
+      await db.insert(xauusdLearningLogTable).values({
+        priceAtCycle: indicators.price,
+        questionsAsked: cycleAnswered,
+        insightsSaved: cycleInsights,
+        predictionsChecked: 0,
+        wrongPredictions: 0,
+        spikeDetected,
+        summary: `[EKSTREM] Siklus ${extremeCycleCount + 1}: ${extremeProgress}/${target} selesai, +${cycleInsights} insights`,
+        durationMs: Date.now() - cycleStart,
+      });
+    } catch { /* non-fatal */ }
+
+    extremeCycleCount++;
+  }
+
+  if (extremeProgress >= target) {
+    console.log(
+      `[Extreme Mode] 🎯 TARGET TERCAPAI! ${extremeProgress} pertanyaan, ${extremeInsightsTotal} insights dalam ${extremeCycleCount} siklus`
+    );
+  } else {
+    console.log(`[Extreme Mode] ⛔ Dihentikan: ${extremeProgress}/${target} pertanyaan selesai`);
+  }
+}
+
+/**
+ * Mulai mode belajar ekstrem — belajar tanpa berhenti sampai target tercapai.
+ * Non-blocking: langsung return, loop berjalan di background.
+ */
+export function startExtremeLearningMode(
+  target: number,
+  questionsPerCycle = EXTREME_QUESTIONS_PER_CYCLE
+): void {
+  if (isExtremeRunning) throw new Error("Mode ekstrem sudah berjalan");
+  if (isLearning) throw new Error("Siklus normal sedang berjalan — tunggu selesai lalu coba lagi");
+  if (!Number.isInteger(target) || target < 1 || target > 10_000) throw new Error("Target harus bilangan bulat 1–10.000");
+  const safeQpc = Math.max(3, Math.min(20, Math.round(questionsPerCycle)));
+
+  isExtremeRunning = true;
+  extremeTarget = target;
+  extremeProgress = 0;
+  extremeInsightsTotal = 0;
+  extremeCycleCount = 0;
+  extremeStartedAt = new Date();
+  extremeAbort = false;
+  extremeHashCache = new Set(); // kosong dulu, isi dari DB sebelum loop mulai
+
+  console.log(`[Extreme Mode] 🚀 Mulai — target: ${target} pertanyaan, ${safeQpc}/siklus`);
+
+  // Bangun hash cache dari DB, lalu jalankan loop
+  (async () => {
+    try {
+      const rows = await db
+        .select({ hash: xauusdQuestionsLogTable.questionHash })
+        .from(xauusdQuestionsLogTable);
+      extremeHashCache = new Set(rows.map(r => r.hash));
+      console.log(`[Extreme Mode] 📚 Hash cache siap: ${extremeHashCache.size} pertanyaan sudah ada di DB`);
+    } catch (err) {
+      console.error("[Extreme Mode] Gagal load hash cache:", err);
+      extremeHashCache = new Set(); // lanjut dengan cache kosong
+    }
+
+    try {
+      await runExtremeLearningLoop(target, safeQpc);
+    } catch (err) {
+      console.error("[Extreme Mode] Loop error fatal:", err);
+    } finally {
+      isExtremeRunning = false;
+      extremeHashCache = null;
+      console.log(`[Extreme Mode] ✅ Sesi berakhir — ${extremeProgress}/${extremeTarget} pertanyaan`);
+    }
+  })().catch(err => {
+    isExtremeRunning = false;
+    console.error("[Extreme Mode] Startup error:", err);
+  });
+}
+
+/** Hentikan mode ekstrem setelah pertanyaan yang sedang berjalan selesai. */
+export function stopExtremeLearningMode(): void {
+  if (!isExtremeRunning) return;
+  extremeAbort = true;
+  console.log("[Extreme Mode] ⛔ Permintaan berhenti diterima — akan berhenti setelah pertanyaan selesai...");
+}
+
 // ─── Main learning cycle ───────────────────────────────────────────────────────
 
 export async function runLearningCycle(): Promise<{
@@ -1443,6 +1712,10 @@ export async function runLearningCycle(): Promise<{
   questionsAsked: number;
   insightsSaved: number;
 }> {
+  // Jangan jalankan siklus normal saat mode ekstrem aktif
+  if (isExtremeRunning) {
+    return { success: false, summary: "Mode ekstrem sedang berjalan — siklus normal dilewati.", questionsAsked: 0, insightsSaved: 0 };
+  }
   // Global lock — prevent overlap between interval cycles and manual /learn-now trigger
   if (isLearning) {
     return { success: false, summary: "Cycle already in progress, skipping.", questionsAsked: 0, insightsSaved: 0 };
@@ -1738,6 +2011,15 @@ export function getEngineStatus(): {
   totalCycles: number;
   totalInsights: number;
   isLearning: boolean;
+  extremeMode: {
+    active: boolean;
+    target: number;
+    progress: number;
+    insights: number;
+    cycles: number;
+    startedAt: Date | null;
+    percentDone: number;
+  };
 } {
   return {
     running: learningTimer !== null,
@@ -1745,5 +2027,14 @@ export function getEngineStatus(): {
     totalCycles,
     totalInsights,
     isLearning,
+    extremeMode: {
+      active: isExtremeRunning,
+      target: extremeTarget,
+      progress: extremeProgress,
+      insights: extremeInsightsTotal,
+      cycles: extremeCycleCount,
+      startedAt: extremeStartedAt,
+      percentDone: extremeTarget > 0 ? Math.round((extremeProgress / extremeTarget) * 100) : 0,
+    },
   };
 }

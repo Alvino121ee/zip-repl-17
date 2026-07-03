@@ -6,3 +6,4 @@
 - [Typecheck pre-existing errors](typecheck-errors.md) — pnpm run typecheck fails with TS6305 (lib/db/api-zod dist not built) — pre-existing, not from refactor. esbuild build works fine; run `tsc --build` at root to fix before typechecking.
 - [TradingView data integration](tradingview-data.md) — Yahoo Finance replaced with TradingView Scanner API; data.tradingview.com/history is blocked on Replit servers; use Scanner POST endpoint instead.
 - [BacktestPanel React hooks rule](backtest-hooks.md) — BacktestPanel uses useState hooks, so the early `if (verified.length === 0) return (...)` must come AFTER all hook declarations; empty state must be handled inline in JSX instead.
+- [Extreme Learning Mode design](extreme-mode.md) — non-blocking background loop, in-memory hash dedup, circuit breaker (5 consecutive errors), safeQpc clamp 3–20, blocks normal cycle via isExtremeRunning flag.

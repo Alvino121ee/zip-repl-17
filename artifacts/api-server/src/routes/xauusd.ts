@@ -25,6 +25,8 @@ import {
   getEngineStatus,
   startXauusdBrainEngine,
   stopXauusdBrainEngine,
+  startExtremeLearningMode,
+  stopExtremeLearningMode,
   detectTradingSession,
   detectMarketRegime,
   computeClusterLabel,
@@ -459,6 +461,29 @@ xauusdRouter.post("/learn-now", requireAdmin, async (_req, res) => {
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
+});
+
+// ─── POST /xauusd/engine/extreme/start — mulai mode belajar ekstrem ──────────
+xauusdRouter.post("/engine/extreme/start", requireAdmin, (req, res) => {
+  const { target, questionsPerCycle } = req.body as { target?: number; questionsPerCycle?: number };
+  if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > 10_000) {
+    return res.status(400).json({ error: "target harus bilangan bulat antara 1 hingga 10.000" });
+  }
+  if (questionsPerCycle !== undefined && (typeof questionsPerCycle !== "number" || !Number.isInteger(questionsPerCycle) || questionsPerCycle < 3 || questionsPerCycle > 20)) {
+    return res.status(400).json({ error: "questionsPerCycle harus bilangan bulat antara 3 hingga 20" });
+  }
+  try {
+    startExtremeLearningMode(target, questionsPerCycle);
+    return res.json({ ok: true, message: `Mode ekstrem dimulai — target ${target} pertanyaan`, status: getEngineStatus() });
+  } catch (err) {
+    return res.status(400).json({ error: String(err) });
+  }
+});
+
+// ─── POST /xauusd/engine/extreme/stop — hentikan mode belajar ekstrem ────────
+xauusdRouter.post("/engine/extreme/stop", requireAdmin, (_req, res) => {
+  stopExtremeLearningMode();
+  return res.json({ ok: true, message: "Permintaan berhenti dikirim", status: getEngineStatus() });
 });
 
 // ─── GET /xauusd/settings — current settings summary (no raw key exposed) ────
