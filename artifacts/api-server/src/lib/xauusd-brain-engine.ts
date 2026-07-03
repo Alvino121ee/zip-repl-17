@@ -207,16 +207,122 @@ function generateQuestionHash(question: string): string {
   return crypto.createHash("sha256").update(question.trim().toLowerCase()).digest("hex");
 }
 
-function getRandomQuestions(
+/**
+ * Pilih pertanyaan berdasarkan kondisi pasar saat ini (market-aware).
+ * - RSI ekstrem  → prioritaskan pertanyaan RSI & reversal
+ * - Spike        → prioritaskan pertanyaan ATR, volatilitas, & support/resistance
+ * - Trend kuat   → prioritaskan pertanyaan EMA & multi-timeframe
+ * - MACD signal  → prioritaskan pertanyaan MACD
+ * - Bollinger squeeze → prioritaskan pertanyaan BB
+ * - Sisanya: pertanyaan makro, psikologi, pola — tetap masuk tapi bobotnya lebih rendah
+ */
+function getMarketAwareQuestions(
   indicators: XauusdIndicators,
-  count: number
+  count: number,
+  spikeDetected = false
 ): Array<{ question: string; hash: string }> {
-  // Shuffle templates
-  const shuffled = [...QUESTION_TEMPLATES].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count).map((template) => {
-    const question = template(indicators);
+  // Kelompokkan template berdasarkan topik (indeks ke QUESTION_TEMPLATES)
+  const groups = {
+    rsi:            [0, 1, 2, 3],
+    ema:            [4, 5, 6, 7],
+    macd:           [8, 9],
+    bb:             [10, 11],
+    sr:             [12, 13, 14],
+    atr:            [15, 16],
+    mtf:            [17, 18],
+    pattern:        [19, 20, 21],
+    macro:          [22, 23, 24, 25],
+    session:        [26, 27],
+    psychology:     [28, 29, 30],
+    entry:          [31, 32],
+    management:     [33, 34],
+    correlation:    [35, 36],
+  };
+
+  // Hitung bobot berdasarkan kondisi pasar aktif
+  const weights: Record<string, number> = {
+    rsi:         1,
+    ema:         1,
+    macd:        1,
+    bb:          1,
+    sr:          1,
+    atr:         1,
+    mtf:         1,
+    pattern:     1,
+    macro:       1,
+    session:     1,
+    psychology:  1,
+    entry:       1,
+    management:  1,
+    correlation: 1,
+  };
+
+  // Helper: ambil nilai terbesar agar bobot tidak saling menimpa saat ada multi-signal
+  const boost = (key: string, val: number) => {
+    weights[key] = Math.max(weights[key] ?? 1, val);
+  };
+
+  // RSI ekstrem → pertanyaan RSI & reversal lebih relevan
+  if (indicators.rsiSignal === "overbought" || indicators.rsiSignal === "oversold") {
+    boost("rsi", 4); boost("entry", 3); boost("sr", 2);
+  }
+
+  // Spike terdeteksi → volatilitas & ATR paling kritis
+  if (spikeDetected) {
+    boost("atr", 5); boost("sr", 4); boost("bb", 3); boost("psychology", 3);
+  }
+
+  // Trend kuat → EMA & multi-timeframe lebih relevan
+  if (indicators.emaAlignment === "bullish_stack" || indicators.emaAlignment === "bearish_stack") {
+    boost("ema", 4); boost("mtf", 3); boost("entry", 2);
+  }
+
+  // MACD sinyal aktif → pertanyaan MACD lebih relevan
+  if (indicators.macdSignalType !== "neutral") {
+    boost("macd", 4); boost("pattern", 2);
+  }
+
+  // BB squeeze → BB question paling relevan
+  if ((indicators.bbWidth ?? 99) < 2) {
+    boost("bb", 5); boost("atr", 2);
+  }
+
+  // Buat pool berbobot: setiap indeks template dimasukkan sebanyak bobotnya
+  const pool: number[] = [];
+  for (const [group, indices] of Object.entries(groups)) {
+    const w = weights[group] ?? 1;
+    for (let r = 0; r < w; r++) {
+      for (const idx of indices) {
+        if (idx < QUESTION_TEMPLATES.length) pool.push(idx);
+      }
+    }
+  }
+
+  // Shuffle pool, ambil unik (tidak duplikat indeks), slice sesuai count
+  const shuffled = pool.sort(() => Math.random() - 0.5);
+  const seen = new Set<number>();
+  const selected: number[] = [];
+  for (const idx of shuffled) {
+    if (!seen.has(idx)) {
+      seen.add(idx);
+      selected.push(idx);
+      if (selected.length >= count) break;
+    }
+  }
+
+  return selected.map((idx) => {
+    const question = QUESTION_TEMPLATES[idx](indicators);
     return { question, hash: generateQuestionHash(question) };
   });
+}
+
+/** Alias untuk backward-compat — pakai versi market-aware */
+function getRandomQuestions(
+  indicators: XauusdIndicators,
+  count: number,
+  spikeDetected = false
+): Array<{ question: string; hash: string }> {
+  return getMarketAwareQuestions(indicators, count, spikeDetected);
 }
 
 async function filterNewQuestions(
@@ -1425,7 +1531,7 @@ export async function runLearningCycle(): Promise<{
 
     // 4. Generate & ask unique questions (5 per cycle, 8 on spike)
     const questionCount = spikeDetected ? 8 : 5;
-    const candidates = getRandomQuestions(indicators, questionCount + 6); // extras for filtering
+    const candidates = getRandomQuestions(indicators, questionCount + 6, spikeDetected); // extras for filtering
     const newQuestions = await filterNewQuestions(candidates);
     const toAsk = newQuestions.slice(0, questionCount);
 
@@ -1549,20 +1655,24 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
       );
     }
 
-    // 9. Save learning log
+    // 9. Save learning log (non-fatal — log error tapi jangan gagalkan cycle)
     const durationMs = Date.now() - cycleStart;
     const summary = `Cycle #${totalCycles + 1}: price=${currentPrice}, ${spikeDetected ? "⚡SPIKE " : ""}questions=${questionsAsked}, insights=${insightsSaved}, checked=${predictionsChecked}, wrong=${wrongPredictions}`;
 
-    await db.insert(xauusdLearningLogTable).values({
-      priceAtCycle: currentPrice,
-      questionsAsked,
-      insightsSaved,
-      predictionsChecked,
-      wrongPredictions,
-      spikeDetected,
-      summary,
-      durationMs,
-    });
+    try {
+      await db.insert(xauusdLearningLogTable).values({
+        priceAtCycle: currentPrice,
+        questionsAsked,
+        insightsSaved,
+        predictionsChecked,
+        wrongPredictions,
+        spikeDetected,
+        summary,
+        durationMs,
+      });
+    } catch (logErr) {
+      console.error("[XAUUSD Brain] Learning log insert error (non-fatal):", logErr);
+    }
 
     totalCycles++;
     totalInsights += insightsSaved;

@@ -21,6 +21,7 @@ import {
   xauusdLearningLogTable,
   xauusdSettingsTable,
 } from "@workspace/db/schema";
+import { sql } from "drizzle-orm";
 import type { SqlJsStatic, Database as SqlJsDb } from "sql.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyDb = any; // sql.js Database — pakai any untuk hindari konflik tipe
@@ -467,6 +468,26 @@ export async function restoreFromFile(): Promise<{
     }
 
     sqlDb.close();
+
+    // ── Reset PostgreSQL sequences agar INSERT berikutnya tidak tabrakan PK ──
+    // Wajib setelah restore dengan explicit ID dari SQLite backup
+    try {
+      const seqTables = [
+        { seq: "xauusd_brain_id_seq", table: "xauusd_brain" },
+        { seq: "xauusd_predictions_id_seq", table: "xauusd_predictions" },
+        { seq: "xauusd_questions_log_id_seq", table: "xauusd_questions_log" },
+        { seq: "xauusd_learning_log_id_seq", table: "xauusd_learning_log" },
+        { seq: "xauusd_settings_id_seq", table: "xauusd_settings" },
+      ];
+      for (const { seq, table } of seqTables) {
+        await db.execute(
+          sql.raw(`SELECT setval('${seq}', COALESCE((SELECT MAX(id) FROM ${table}), 0) + 1, false)`)
+        );
+      }
+      console.log("[Brain Backup] ✅ Sequences direset ke nilai aman.");
+    } catch (seqErr) {
+      console.error("[Brain Backup] ⚠️ Gagal reset sequence:", seqErr);
+    }
 
     const msg = `Restore berhasil: ${rBrain} brain, ${rPreds} prediksi, ${rQ} pertanyaan, ${rLogs} siklus, ${rSettings} setting`;
     console.log(`[Brain Backup] ✅ ${msg}`);
