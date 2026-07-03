@@ -216,6 +216,156 @@ const QUESTION_TEMPLATES = [
     `Jelaskan korelasi antara XAUUSD dengan: (1) XAGUSD (silver), (2) oil (WTI), (3) S&P500, (4) Bitcoin. Kapan korelasi ini breakdown dan mengapa? Bagaimana trader gold menggunakan korelasi ini untuk konfirmasi bias?`,
   () =>
     `Bagaimana cara membaca COT (Commitment of Traders) report untuk gold futures? Apa posisi yang diperhatikan (non-commercial/speculative)? Di level positioning ekstrem berapa biasanya gold reversal terjadi?`,
+
+  // ── Fibonacci ─────────────────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Harga XAUUSD ${i.price} antara support ${i.supportLevel?.toFixed(2)} dan resistance ${i.resistanceLevel?.toFixed(2)}. Hitung level Fibonacci retracement (23.6%, 38.2%, 50%, 61.8%, 78.6%) dari swing ini. Level mana yang paling sering jadi magnet harga di gold?`,
+  (i: XauusdIndicators) =>
+    `Jelaskan konsep Fibonacci Extension untuk target profit di XAUUSD. Jika harga dari ${i.supportLevel?.toFixed(2)} menuju ${i.resistanceLevel?.toFixed(2)}, di mana level 127.2%, 161.8%, dan 261.8% extension berada? Kapan extension 161.8% lebih reliable dari target resistance biasa?`,
+  (i: XauusdIndicators) =>
+    `ATR XAUUSD ${i.atr14?.toFixed(2)} dan harga ${i.price}. Bagaimana cara menggabungkan Fibonacci retracement dengan zona ATR untuk menemukan entry yang presisi? Jelaskan "Fibonacci ATR combo setup" dengan contoh konkret entry, SL, dan TP.`,
+
+  // ── Pola Candlestick Spesifik ─────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Di harga XAUUSD ${i.price} dengan RSI ${i.rsi14?.toFixed(1)}: jelaskan cara mengidentifikasi dan trading pola Hammer vs Hanging Man di gold. Perbedaan psikologi market di balik kedua pola ini dan di mana menempatkan SL untuk setiap pola.`,
+  (i: XauusdIndicators) =>
+    `Pola Doji di XAUUSD: ada Dragonfly Doji, Gravestone Doji, dan Long-Legged Doji. Jelaskan kondisi market mana yang membuat setiap Doji lebih valid, terutama saat RSI ${i.rsi14?.toFixed(1)} dan BB width ${i.bbWidth?.toFixed(2)}%. Volume konfirmasi apa yang diperlukan?`,
+  () =>
+    `Pola Three White Soldiers dan Three Black Crows di gold — kapan valid sebagai sinyal continuation dan kapan menjadi "bull trap" atau "bear trap"? Sebutkan kondisi volume, RSI, dan BB yang membuat pola ini high-probability vs low-probability.`,
+  () =>
+    `Engulfing pattern (Bullish Engulfing & Bearish Engulfing) di XAUUSD: jelaskan perbedaan "real engulfing" vs false signal. Di mana level paling kuat untuk pola ini — di support/resistance, Fibonacci, atau pivot point? Win rate rata-rata pola ini di gold H1 dan H4?`,
+  (i: XauusdIndicators) =>
+    `Dengan harga XAUUSD ${i.price} dan BB (upper=${i.bbUpper?.toFixed(2)}, lower=${i.bbLower?.toFixed(2)}): jelaskan pola "Pinbar" atau "Rejection Candle" di batas BB. Kapan pinbar di BB upper/lower menjadi sinyal reversal terpercaya di gold, dan kapan harus diabaikan?`,
+
+  // ── Volume & Order Flow ───────────────────────────────────────────────────────
+  () =>
+    `Bagaimana cara membaca volume dalam trading XAUUSD? Jelaskan perbedaan "volume climax" (capitulation), "volume dry-up" (no interest), dan "volume expansion" (breakout valid). Di platform apa trader retail bisa melihat volume gold yang paling akurat?`,
+  () =>
+    `Konsep "Smart Money" vs "Dumb Money" di gold market: bagaimana institusi (central bank, hedge fund) menempatkan posisi berbeda dari retail trader? Apa tanda-tanda institutional accumulation/distribution yang bisa terlihat di chart H4 dan Daily XAUUSD?`,
+  (i: XauusdIndicators) =>
+    `Jelaskan "liquidity grab" atau "stop hunt" di XAUUSD. Dengan harga ${i.price} dan resistance di ${i.resistanceLevel?.toFixed(2)}: bagaimana mengenali ketika harga "spike" melewati resistance sebentar lalu kembali turun? Bagaimana trader menggunakan ini sebagai entry opportunity?`,
+  () =>
+    `Apa itu "imbalance zone" atau "Fair Value Gap" (FVG) di XAUUSD dan mengapa harga sering kembali mengisinya? Bagaimana cara mengidentifikasi FVG di chart, dan berapa % kemungkinan harga kembali ke zona ini sebelum melanjutkan trend?`,
+
+  // ── Market Microstructure ─────────────────────────────────────────────────────
+  () =>
+    `Jelaskan struktur market XAUUSD: siapa yang menjadi market maker di spot gold? Apa itu "bid-ask spread" di gold dan bagaimana spread berubah saat New York open, London open, dan saat data ekonomi penting dirilis? Bagaimana trader retail meminimalkan dampak spread?`,
+  (i: XauusdIndicators) =>
+    `Dengan ATR XAUUSD ${i.atr14?.toFixed(2)}, jelaskan fenomena "mean reversion" vs "momentum continuation" di gold. Pada kondisi apa (RSI, EMA, trend) mean reversion lebih dominan? Berikan aturan konkret untuk memilih antara dua strategi ini.`,
+  () =>
+    `Apa itu "pivot point" (PP, R1, R2, S1, S2) di XAUUSD dan bagaimana cara menghitungnya? Seberapa reliable pivot point harian vs mingguan vs bulanan di gold? Strategi trading apa yang paling efektif menggunakan pivot point di XAUUSD?`,
+
+  // ── Pola Grafik Klasik ────────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Harga XAUUSD ${i.price}. Jelaskan cara mengidentifikasi dan trading pola Head and Shoulders di gold. Bagaimana mengukur target dari pola ini menggunakan "neckline measurement"? Tingkat keberhasilan pola ini di XAUUSD H4 dan Daily berdasarkan data historis?`,
+  () =>
+    `Double Top dan Double Bottom di XAUUSD: jelaskan perbedaan "confirmed double top" vs "fake out double top". Faktor apa (volume, RSI divergence, time between tops) yang meningkatkan akurasi setup ini di gold? Di timeframe mana pola ini paling reliable?`,
+  () =>
+    `Pola "Ascending Triangle", "Descending Triangle", dan "Symmetrical Triangle" di XAUUSD. Jelaskan statistik breakout direction untuk setiap jenis, cara mengukur target harga, dan bagaimana volume mengkonfirmasi breakout yang valid vs false breakout di gold.`,
+  (i: XauusdIndicators) =>
+    `"Flag" dan "Pennant" adalah pola continuation di XAUUSD. Dengan trend saat ini ${i.trend} dan EMA alignment ${i.emaAlignment}: jelaskan cara mengidentifikasi flag bullish/bearish, cara entry, target (measured move), dan SL yang tepat. Berapa durasi ideal konsolidasi sebelum breakout?`,
+  () =>
+    `Jelaskan pola "Rising Wedge" dan "Falling Wedge" di XAUUSD — keduanya sering menipu trader. Rising Wedge adalah bearish meskipun harga naik: mengapa? Bagaimana volume dan RSI membantu mengkonfirmasi breakout dari wedge? Berikan contoh setup konkret.`,
+
+  // ── Analisis Makro Lanjutan ───────────────────────────────────────────────────
+  () =>
+    `Bagaimana quantitative easing (QE) dan quantitative tightening (QT) oleh The Fed mempengaruhi harga gold? Jelaskan mekanisme transmisinya: dari neraca Fed → M2 money supply → DXY → XAUUSD. Di fase QT seperti sekarang, apa bias jangka menengah untuk gold?`,
+  () =>
+    `Jelaskan "Gold Standard" dan mengapa abandonment-nya (1971, Nixon Shock) masih relevan untuk memahami gold sebagai "monetary metal". Bagaimana de-dollarization trend (China, Russia beli gold) mempengaruhi fundamental permintaan gold jangka panjang?`,
+  () =>
+    `Central bank gold reserves: negara mana yang paling agresif membeli gold dalam 3 tahun terakhir dan mengapa? Bagaimana data World Gold Council tentang central bank demand mempengaruhi harga gold? Kapan berita pembelian central bank berdampak maksimal pada XAUUSD?`,
+  () =>
+    `Jelaskan hubungan antara gold dan inflasi: apakah gold selalu "inflation hedge"? Ada periode di mana gold underperform meski inflasi tinggi (1980-2000). Apa yang menentukan kapan gold efektif sebagai hedging inflasi dan kapan tidak?`,
+  () =>
+    `Dampak geopolitical risk terhadap XAUUSD: jelaskan "geopolitical premium" di harga gold. Bagaimana cara mengukur berapa besar premium ini? Kapan geopolitical event menghasilkan "buy the rumor sell the news" vs dampak sustainedflight to safety di gold?`,
+
+  // ── Timing & Seasonality ──────────────────────────────────────────────────────
+  () =>
+    `Pola seasonality XAUUSD: bulan apa gold biasanya paling bullish dan paling bearish secara historis? Jelaskan "Indian wedding season", "Chinese New Year demand", dan "harvest season" — bagaimana demand fisik dari Asia mempengaruhi harga spot gold?`,
+  () =>
+    `"End of quarter" dan "end of year" (window dressing) — bagaimana institutional rebalancing mempengaruhi XAUUSD? Jelaskan mengapa gold sering volatile di akhir Q4 (November-Desember) dan awal Q1 (Januari-Februari). Apakah ada trading edge dari seasonality ini?`,
+  (i: XauusdIndicators) =>
+    `Jam berapa (UTC) XAUUSD biasanya paling volatile di setiap sesi? Dengan harga saat ini ${i.price} dan ATR ${i.atr14?.toFixed(2)}: berikan panduan jam-jam kritis yang harus diperhatikan trader Indonesia (WIB), termasuk waktu rilis data NFP, CPI, dan FOMC.`,
+
+  // ── Manajemen Risiko Lanjutan ─────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Portfolio allocation untuk gold: berapa % idealnya porsi XAUUSD dalam portfolio trading vs portfolio investasi? Dengan harga gold ${i.price}, bandingkan strategi: (1) buy physical gold, (2) trading spot XAUUSD dengan leverage, (3) gold ETF, (4) gold mining stocks. Pro-kontra setiap approach.`,
+  () =>
+    `Jelaskan konsep "Kelly Criterion" untuk position sizing di trading gold. Bagaimana cara menghitung optimal bet size berdasarkan win rate dan risk:reward? Mengapa "full Kelly" berbahaya dan "half Kelly" atau "quarter Kelly" lebih aman untuk trader retail?`,
+  (i: XauusdIndicators) =>
+    `Dengan ATR XAUUSD ${i.atr14?.toFixed(2)}: jelaskan perbedaan antara "fixed stop loss" vs "dynamic stop loss" (ATR-based vs structure-based). Kapan fixed SL lebih baik dan kapan dynamic SL lebih efektif? Berikan rule konkret untuk memilih antara keduanya.`,
+  () =>
+    `"Drawdown management" di trading gold: berapa maximum drawdown yang masih acceptable? Jelaskan aturan "circuit breaker" — kapan trader harus berhenti trading setelah serangkaian loss? Bagaimana cara "recovery plan" yang sistematis setelah drawdown besar?`,
+  () =>
+    `Strategi "hedging" di XAUUSD: kapan hedge diperlukan? Jelaskan tiga cara hedging: (1) buka posisi berlawanan di XAUUSD, (2) trading XAGUSD (silver) sebagai correlated hedge, (3) menggunakan opsi gold futures. Kapan hedging cost-effective vs tidak efisien?`,
+
+  // ── Psikologi Trading Lanjutan ────────────────────────────────────────────────
+  () =>
+    `"Trading journal" untuk XAUUSD: apa saja yang HARUS dicatat setelah setiap trade? Jelaskan format ideal trading journal, cara melakukan "review mingguan", dan bagaimana mengidentifikasi pattern kekalahan dari data journal. Berikan template konkret yang bisa langsung digunakan.`,
+  () =>
+    `Bagaimana mengatasi "analysis paralysis" di trading gold? Trader sering melihat terlalu banyak indikator dan sinyal bertentangan. Jelaskan metode "simple system" — berapa maksimal indikator yang diperlukan, dan bagaimana membuat keputusan yang decisive dengan informasi terbatas.`,
+  () =>
+    `"Revenge trading" setelah loss besar di XAUUSD — bagaimana cara mengenalinya dalam diri sendiri dan cara menghentikannya? Jelaskan teknik psikologis konkret: "mandatory cooling off period", "position size reduction rule", dan cara membangun kembali kepercayaan diri setelah losing streak.`,
+  () =>
+    `Perbedaan mindset "trader" vs "investor" di gold: bagaimana cara seorang intraday scalper vs swing trader vs long-term investor di gold mengelola emosi, ekspektasi, dan evaluasi kinerja secara berbeda? Mindset mana yang paling cocok untuk retail trader Indonesia?`,
+
+  // ── Entry & Exit Tactics ──────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `"Limit order" vs "market order" vs "stop order" di XAUUSD. Dengan spread gold yang bisa 30-50 sen, kapan penggunaan limit order memberikan edge nyata vs risiko miss entry? Jelaskan strategi "order stacking" di zona support ${i.supportLevel?.toFixed(2)} dengan multiple limit orders.`,
+  (i: XauusdIndicators) =>
+    `Teknik "partial close" atau "scale out" di XAUUSD: jika entry di ${i.price} dengan target ${i.resistanceLevel?.toFixed(2)}, kapan dan berapa persen posisi yang di-close di setiap level? Jelaskan pro-kontra 3 approach: (1) full close di target, (2) 50% close di 50% target, (3) trailing stop ke seluruh posisi.`,
+  (i: XauusdIndicators) =>
+    `"Break-even" stop loss — kapan dan bagaimana cara memindahkan SL ke break-even di trade XAUUSD? Jika entry di ${i.price}, berapa pip profit yang harus dicapai sebelum memindahkan SL ke entry? Apa risiko "noise shake-out" jika SL dipindahkan terlalu cepat di gold?`,
+  () =>
+    `Jelaskan perbedaan "discretionary trading" vs "systematic/algorithmic trading" di gold. Apa keunggulan dan kelemahan trader manusia vs trading bot di XAUUSD? Bagaimana retail trader bisa mendapat keunggulan di pasar yang semakin didominasi HFT dan algoritma?`,
+
+  // ── Elliott Wave & Advanced TA ────────────────────────────────────────────────
+  () =>
+    `Dasar-dasar Elliott Wave Theory untuk XAUUSD: jelaskan struktur 5-wave impulse dan 3-wave corrective. Di gold market, apakah Elliott Wave lebih reliable di timeframe Daily-Weekly atau H1-H4? Berikan contoh bagaimana mengidentifikasi awal Wave 3 (gelombang terkuat) di gold.`,
+  () =>
+    `"Harmonic patterns" di XAUUSD: Gartley, Butterfly, Bat, dan Crab. Jelaskan cara mengidentifikasi dan mengukur pola Gartley di gold, termasuk rasio Fibonacci yang digunakan. Tingkat keberhasilan harmonic patterns di gold vs forex pairs — mana lebih reliable dan mengapa?`,
+  (i: XauusdIndicators) =>
+    `"Wyckoff Method" di XAUUSD: jelaskan fase Accumulation, Markup, Distribution, dan Markdown. Dengan BB width ${i.bbWidth?.toFixed(2)}% dan RSI ${i.rsi14?.toFixed(1)}: apakah kondisi saat ini mencerminkan salah satu fase Wyckoff? Bagaimana cara mengidentifikasi "Composite Man" di gold market?`,
+  () =>
+    `"Market Profile" dan "Volume Profile" di XAUUSD: apa itu POC (Point of Control), Value Area High, dan Value Area Low? Bagaimana cara menggunakan Volume Profile untuk menemukan level-level kunci di gold yang tidak terlihat dari analisis candlestick biasa?`,
+
+  // ── Strategi Khusus ───────────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Strategi "range trading" di XAUUSD saat BB width ${i.bbWidth?.toFixed(2)}% sangat rendah: bagaimana cara menentukan range boundary, entry di tepi range, exit di tengah, dan SL di luar range? Kapan range strategy harus dihentikan karena breakout impending?`,
+  (i: XauusdIndicators) =>
+    `"News scalping" di XAUUSD: strategi entry dalam 1-3 detik setelah rilis data NFP atau CPI. Dengan ATR ${i.atr14?.toFixed(2)} yang berarti range harian ±${i.atr14?.toFixed(0)}, berapa target scalp realistis di event berita? Apa risiko "slippage" dan "spread widening" saat news?`,
+  () =>
+    `Strategi "carry trade" dan "flight to safety" di gold. Jelaskan kapan gold naik karena "risk-off" (flight to safety) vs naik karena "dollar weakness". Apakah kedua skenario ini memberikan momentum yang berbeda? Bagaimana trader memposisikan diri untuk setiap skenario?`,
+  (i: XauusdIndicators) =>
+    `Strategi "gap trading" di XAUUSD — gap sering terjadi di open pasar Senin setelah weekend. Dengan ATR ${i.atr14?.toFixed(2)}, berapa gap size yang significant? Apakah gold memiliki tendensi "fill the gap"? Kapan gap menjadi "continuation signal" vs "reversal signal"?`,
+  () =>
+    `"Correlation trading" XAUUSD-USDJPY: keduanya sering bergerak berlawanan (negatif correlation). Bagaimana trader menggunakan divergence XAUUSD vs USDJPY sebagai sinyal trading gold? Jelaskan strategi konkret dan kapan correlation ini breakdown (misalnya saat risk-off extreme).`,
+
+  // ── Indikator Tambahan ────────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Stochastic Oscillator di XAUUSD — perbedaan Stochastic vs RSI ${i.rsi14?.toFixed(1)} saat ini. Kapan Stochastic lebih akurat dari RSI di gold? Jelaskan penggunaan "Stochastic divergence" dan bagaimana menggabungkannya dengan level ${i.supportLevel?.toFixed(2)}-${i.resistanceLevel?.toFixed(2)} untuk konfirmasi trade.`,
+  (i: XauusdIndicators) =>
+    `CCI (Commodity Channel Index) di XAUUSD — indikator yang dirancang khusus untuk commodity seperti gold. Dengan harga ${i.price} dan trend ${i.trend}: bagaimana CCI mengidentifikasi overbought/oversold yang berbeda dari RSI? Kapan CCI memberikan sinyal lebih awal dari MACD atau RSI?`,
+  () =>
+    `Ichimoku Cloud di XAUUSD: jelaskan Tenkan-sen, Kijun-sen, Senkou Span A/B, dan Chikou Span. Apakah Ichimoku efektif di gold yang bergerak 24 jam? Bagaimana cara menyesuaikan parameter Ichimoku (dari 9-26-52 standar Jepang) untuk pasar gold yang lebih volatil?`,
+  (i: XauusdIndicators) =>
+    `Parabolic SAR di XAUUSD sebagai trailing stop tool — dengan ATR ${i.atr14?.toFixed(2)} dan trend ${i.trend}: berapa setting AF (Acceleration Factor) yang optimal untuk gold? Kapan Parabolic SAR terlalu "sensitif" (whipsaw banyak) dan kapan terlalu "lambat" untuk gold?`,
+  () =>
+    `Divergence analysis di XAUUSD: jelaskan perbedaan "regular divergence" (reversal signal) vs "hidden divergence" (continuation signal). Indikator mana yang terbaik untuk divergence di gold — RSI, MACD, atau Stochastic? Berikan 3 contoh konkret setup divergence di XAUUSD.`,
+
+  // ── Gold Mining & ETF ─────────────────────────────────────────────────────────
+  () =>
+    `Hubungan antara GDX (gold mining ETF) dan XAUUSD spot price. Kapan gold miners "outperform" spot gold (leverage effect) dan kapan "underperform" (company-specific risk)? Bagaimana trader spot XAUUSD menggunakan GDX sebagai leading indicator untuk memprediksikan pergerakan gold?`,
+  () =>
+    `GLD dan IAU (gold ETF) — bagaimana flow masuk/keluar ETF ini mempengaruhi harga spot XAUUSD? Jelaskan mekanisme "creation/redemption" unit ETF dan mengapa institutional outflow dari GLD bisa menjadi early warning signal untuk penurunan gold.`,
+
+  // ── Risk:Reward & Statistics ──────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Berikan analisis statistik trading XAUUSD: jika trader menggunakan risk:reward minimum 1:2 dan win rate 45%, apakah ini profitable jangka panjang? Hitung expected value per trade. Dengan ATR ${i.atr14?.toFixed(2)}, berapa pip SL dan TP untuk mendapat R:R 1:2 yang realistis di gold?`,
+  (i: XauusdIndicators) =>
+    `"Expectancy" formula dalam trading gold: E = (WinRate × AvgWin) - (LossRate × AvgLoss). Jika average win = ${((i.atr14 ?? 20) * 1.5).toFixed(0)} pip dan average loss = ${i.atr14?.toFixed(0)} pip di XAUUSD, berapa win rate minimum yang diperlukan untuk break-even? Bagaimana cara meningkatkan expectancy secara sistematis?`,
+  () =>
+    `"Monte Carlo simulation" untuk trading gold: jelaskan cara menggunakannya untuk mengestimasi worst-case drawdown dari sistem trading. Jika win rate 55% dan R:R 1:1.5 di XAUUSD, berapa probabilitas drawdown >20%, >30%, >50% dalam 100 trade ke depan? Apa implikasinya untuk position sizing?`,
 ] as const;
 
 function generateQuestionHash(question: string): string {
@@ -343,11 +493,18 @@ function getRandomQuestions(
 async function filterNewQuestions(
   candidates: Array<{ question: string; hash: string }>
 ): Promise<Array<{ question: string; hash: string }>> {
-  const existingHashes = await db
+  // Hanya blokir pertanyaan yang ditanya dalam 7 hari terakhir.
+  // Pertanyaan lebih lama dari 7 hari boleh ditanya lagi — kondisi pasar
+  // sudah cukup berubah sehingga jawaban baru akan berbeda/lebih relevan.
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000);
+  const recentRows = await db
     .select({ hash: xauusdQuestionsLogTable.questionHash })
-    .from(xauusdQuestionsLogTable);
-  const existingSet = new Set(existingHashes.map((r: { hash: string }) => r.hash));
-  return candidates.filter((c) => !existingSet.has(c.hash));
+    .from(xauusdQuestionsLogTable)
+    .where(
+      sql`${xauusdQuestionsLogTable.askedAt} >= ${sevenDaysAgo.toISOString()}`
+    );
+  const recentSet = new Set(recentRows.map((r: { hash: string }) => r.hash));
+  return candidates.filter((c) => !recentSet.has(c.hash));
 }
 
 // ─── Answer quality scorer ─────────────────────────────────────────────────────

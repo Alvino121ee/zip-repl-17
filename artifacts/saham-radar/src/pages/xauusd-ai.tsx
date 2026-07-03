@@ -1713,6 +1713,153 @@ function SettingsPanel({
   );
 }
 
+// ─── Prediction Panel ─────────────────────────────────────────────────────────
+function PredictionPanel({ mainPreds, trainingPreds }: { mainPreds: Prediction[]; trainingPreds: Prediction[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [showTraining, setShowTraining] = useState(false);
+
+  const dirLabel = (d: string) =>
+    d === "up" ? "▲ NAIK" : d === "down" ? "▼ TURUN" : "↔ SIDEWAYS";
+  const dirCls = (d: string) =>
+    d === "up" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/30"
+      : d === "down" ? "text-red-400 bg-red-500/10 border-red-500/30"
+      : "text-amber-400 bg-amber-500/10 border-amber-500/30";
+  const statusBadge = (p: Prediction) => {
+    if (p.status === "pending") return <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">AKTIF</span>;
+    if (p.isCorrect === true) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">✓ BENAR</span>;
+    if (p.isCorrect === false) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">✗ SALAH</span>;
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-400 border border-slate-500/30">EXPIRED</span>;
+  };
+
+  const PredCard = ({ p }: { p: Prediction }) => {
+    const isOpen = expanded === p.id;
+    return (
+      <div className={`rounded-xl border transition-colors ${p.status === "pending" ? "border-amber-500/30 bg-amber-500/5" : "border-border/40 bg-card/40"}`}>
+        <button className="w-full text-left p-4" onClick={() => setExpanded(isOpen ? null : p.id)}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-sm font-bold px-2 py-0.5 rounded border ${dirCls(p.direction)}`}>{dirLabel(p.direction)}</span>
+              {statusBadge(p)}
+              <span className="text-xs text-muted-foreground">{(p.confidence * 100).toFixed(0)}% keyakinan</span>
+              <span className="text-xs text-muted-foreground">· {p.timeframe}</span>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-xs text-muted-foreground">{timeAgo(p.predictedAt)}</p>
+              <p className="text-xs text-muted-foreground">@ ${p.priceAtPrediction.toFixed(2)}</p>
+            </div>
+          </div>
+
+          {/* Key levels */}
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {p.entryLow && p.entryHigh && (
+              <div className="text-center rounded-lg bg-muted/40 py-1.5 px-2">
+                <p className="text-[10px] text-muted-foreground">Entry</p>
+                <p className="text-xs font-semibold text-blue-400">${p.entryLow.toFixed(0)}–{p.entryHigh.toFixed(0)}</p>
+              </div>
+            )}
+            {p.targetPrice && (
+              <div className="text-center rounded-lg bg-muted/40 py-1.5 px-2">
+                <p className="text-[10px] text-muted-foreground">Target</p>
+                <p className="text-xs font-semibold text-emerald-400">${p.targetPrice.toFixed(2)}</p>
+              </div>
+            )}
+            {p.stopLoss && (
+              <div className="text-center rounded-lg bg-muted/40 py-1.5 px-2">
+                <p className="text-[10px] text-muted-foreground">Stop Loss</p>
+                <p className="text-xs font-semibold text-red-400">${p.stopLoss.toFixed(2)}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Ensemble votes if available */}
+          {p.indicatorsAtPrediction?.ensembleVotes && (
+            <div className="mt-2 flex gap-2 flex-wrap">
+              {Object.entries(p.indicatorsAtPrediction.ensembleVotes as Record<string, { direction: string; confidence: number; label: string }>)
+                .filter(([k]) => k !== "agreementCount" && k !== "agreementBonus")
+                .map(([agent, vote]) => (
+                  <span key={agent} className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    vote.direction === "up" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    : vote.direction === "down" ? "bg-red-500/10 text-red-400 border-red-500/20"
+                    : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                  }`}>
+                    {agent}: {vote.direction === "up" ? "▲" : vote.direction === "down" ? "▼" : "↔"} {(vote.confidence * 100).toFixed(0)}%
+                  </span>
+                ))}
+            </div>
+          )}
+        </button>
+
+        {isOpen && (
+          <div className="px-4 pb-4 border-t border-border/30 pt-3">
+            <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">{p.reasoning}</p>
+            {p.revisionNote && (
+              <div className="mt-2 rounded bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-300">
+                📝 Revisi: {p.revisionNote}
+              </div>
+            )}
+            {p.actualPrice && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <span>Harga aktual: <span className="font-medium text-foreground">${p.actualPrice.toFixed(2)}</span></span>
+                {p.actualDirection && (
+                  <span>· Arah aktual: <span className={`font-medium ${p.actualDirection === "up" ? "text-emerald-400" : p.actualDirection === "down" ? "text-red-400" : "text-amber-400"}`}>{dirLabel(p.actualDirection)}</span></span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (mainPreds.length === 0 && trainingPreds.length === 0) {
+    return (
+      <div className="text-center py-16 text-muted-foreground">
+        <Target className="w-12 h-12 mx-auto mb-3 opacity-30" />
+        <p>Belum ada prediksi yang dibuat.</p>
+        <p className="text-xs mt-1">AI akan membuat prediksi otomatis saat siklus belajar berjalan.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Main predictions */}
+      {mainPreds.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Target className="w-4 h-4 text-amber-400" />
+            <h3 className="text-sm font-semibold">Prediksi Utama</h3>
+            <span className="text-xs text-muted-foreground">({mainPreds.filter(p => p.status === "pending").length} aktif)</span>
+          </div>
+          {mainPreds.map(p => <PredCard key={p.id} p={p} />)}
+        </div>
+      )}
+
+      {/* Training predictions (collapsible) */}
+      {trainingPreds.length > 0 && (
+        <div className="space-y-2">
+          <button
+            onClick={() => setShowTraining(v => !v)}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full"
+          >
+            <History className="w-4 h-4" />
+            <span>Prediksi Training ({trainingPreds.length})</span>
+            {showTraining ? <ChevronUp className="w-3.5 h-3.5 ml-auto" /> : <ChevronDown className="w-3.5 h-3.5 ml-auto" />}
+          </button>
+          {showTraining && (
+            <div className="space-y-2">
+              {trainingPreds.slice(0, 20).map(p => <PredCard key={p.id} p={p} />)}
+              {trainingPreds.length > 20 && (
+                <p className="text-center text-xs text-muted-foreground py-2">... dan {trainingPreds.length - 20} prediksi training lainnya</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings" | "calendar" | "winrate" | "backtest" | "multitimeframe" | "correlation";
 
