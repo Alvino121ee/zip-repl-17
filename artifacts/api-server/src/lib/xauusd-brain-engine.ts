@@ -23,8 +23,9 @@ import {
   xauusdPredictionsTable,
   xauusdNewsTable,
   xauusdLearningLogTable,
+  xauusdMacroSnapshotsTable,
 } from "@workspace/db/schema";
-import { eq, and, lt, isNull, desc, sql } from "drizzle-orm";
+import { eq, and, lt, isNull, desc, sql, gte } from "drizzle-orm";
 import {
   fetchXauusdIndicators,
   fetchXauusdNews,
@@ -647,6 +648,43 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
         })
         .where(eq(xauusdPredictionsTable.id, pred.id));
     } else {
+      // ── Feature 1: Success Pattern Memory ─────────────────────────────────
+      // Save indicator snapshot as a 'pattern' brain entry when prediction is CORRECT
+      if (pred.indicatorsAtPrediction) {
+        try {
+          const ind = pred.indicatorsAtPrediction as Record<string, unknown>;
+          const tags = [
+            ind.emaAlignment === "bullish_stack" ? "ema_bullish"
+              : ind.emaAlignment === "bearish_stack" ? "ema_bearish" : "ema_mixed",
+            ind.rsiSignal ? `rsi_${ind.rsiSignal}` : null,
+            ind.macdSignalType && ind.macdSignalType !== "neutral"
+              ? `macd_${String(ind.macdSignalType)}` : null,
+            `dir_${pred.direction}`,
+            `trend_${ind.trend ?? "unknown"}`,
+          ].filter(Boolean).join(",");
+
+          const rsiVal = typeof ind.rsi14 === "number" ? ind.rsi14.toFixed(1) : "-";
+          const pnlStr = `${(pricePct * 100).toFixed(3)}%`;
+
+          await db.insert(xauusdBrainTable).values({
+            category: "pattern",
+            title: `✅ Pola Sukses: ${pred.direction.toUpperCase()} benar di $${pred.priceAtPrediction.toFixed(2)}`,
+            content: `Prediksi ${pred.direction.toUpperCase()} BENAR (${pnlStr}). ` +
+              `Kondisi saat prediksi — EMA: ${String(ind.emaAlignment ?? "-")}, ` +
+              `RSI: ${rsiVal} (${String(ind.rsiSignal ?? "-")}), ` +
+              `MACD: ${String(ind.macdSignalType ?? "-")}, ` +
+              `Trend: ${String(ind.trend ?? "-")}. ` +
+              `Entry $${pred.priceAtPrediction.toFixed(2)} → Actual $${currentPrice.toFixed(2)}. ` +
+              `Confidence: ${(pred.confidence * 100).toFixed(0)}%.`,
+            confidence: Math.min(0.92, 0.65 + pred.confidence * 0.3),
+            sourceQuestion: `SuccessPattern:${pred.direction}:${pred.priceAtPrediction}`,
+            marketConditionTags: tags,
+          });
+        } catch (err) {
+          console.error("[XAUUSD Brain] Success pattern save error:", err);
+        }
+      }
+
       await db
         .update(xauusdPredictionsTable)
         .set({
@@ -661,6 +699,69 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
   }
 
   return { checked: pending.length, wrong: wrongCount };
+}
+
+// ─── Feature 3: Adaptive Question Generator ────────────────────────────────────
+// After 50+ verified predictions, analyze failure conditions and generate
+// targeted questions about the indicator combos where AI is weakest.
+
+async function generateAdaptiveQuestion(
+  indicators: XauusdIndicators
+): Promise<{ question: string; hash: string } | null> {
+  try {
+    // Get last 100 verified predictions with indicator data
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // last 30 days
+    const verified = await db
+      .select({
+        direction: xauusdPredictionsTable.direction,
+        isCorrect: xauusdPredictionsTable.isCorrect,
+        indicatorsAtPrediction: xauusdPredictionsTable.indicatorsAtPrediction,
+      })
+      .from(xauusdPredictionsTable)
+      .where(
+        and(
+          eq(xauusdPredictionsTable.status, "verified"),
+          gte(xauusdPredictionsTable.predictedAt, cutoff)
+        )
+      )
+      .orderBy(desc(xauusdPredictionsTable.predictedAt))
+      .limit(100);
+
+    if (verified.length < 50) return null; // not enough data yet
+
+    // Group by (emaAlignment, rsiSignal, macdSignalType) and find worst combo
+    const groups: Record<string, { total: number; wrong: number }> = {};
+    for (const p of verified) {
+      const ind = (p.indicatorsAtPrediction ?? {}) as Record<string, unknown>;
+      const key = `${ind.emaAlignment ?? "?"}|${ind.rsiSignal ?? "?"}|${ind.macdSignalType ?? "?"}`;
+      if (!groups[key]) groups[key] = { total: 0, wrong: 0 };
+      groups[key].total++;
+      if (!p.isCorrect) groups[key].wrong++;
+    }
+
+    // Find the combo with highest wrong rate (min 3 samples)
+    let worstKey = "";
+    let worstRate = 0;
+    for (const [key, stats] of Object.entries(groups)) {
+      if (stats.total >= 3) {
+        const rate = stats.wrong / stats.total;
+        if (rate > worstRate) { worstRate = rate; worstKey = key; }
+      }
+    }
+
+    if (!worstKey || worstRate < 0.4) return null; // only generate if >40% failure rate
+
+    const [ema, rsi, macd] = worstKey.split("|");
+    const question = `ANALISIS KRITIS untuk XAUUSD: Dalam kondisi EMA alignment "${ema}", RSI signal "${rsi}", dan MACD "${macd}", ` +
+      `AI sering membuat prediksi yang SALAH (tingkat kegagalan >40%). ` +
+      `Harga saat ini $${indicators.price.toFixed(2)}, RSI ${indicators.rsi14?.toFixed(1)}. ` +
+      `Jelaskan mengapa kombinasi indikator ini sering menyesatkan, kondisi tersembunyi apa yang harus dicek lebih dulu, ` +
+      `dan strategi konkret untuk meningkatkan akurasi dalam kondisi seperti ini.`;
+
+    return { question, hash: generateQuestionHash(question) };
+  } catch {
+    return null;
+  }
 }
 
 // ─── News analyzer ────────────────────────────────────────────────────────────
@@ -793,11 +894,46 @@ export async function runLearningCycle(): Promise<{
       resistanceLevel: indicators.resistanceLevel,
     });
 
+    // 3.5 Save macro snapshot (DXY/US10Y) every 3 cycles — feeds Pearson correlation
+    if (totalCycles % 3 === 0) {
+      try {
+        const corr = await getCorrelationAnalysis();
+        if (corr.dxy.price != null || corr.us10y.price != null) {
+          await db.insert(xauusdMacroSnapshotsTable).values({
+            goldPrice: corr.gold.price ?? indicators.price,
+            goldChangePct: corr.gold.changePct,
+            dxy: corr.dxy.price,
+            dxyChangePct: corr.dxy.changePct,
+            us10y: corr.us10y.price,
+            us10yChangePct: corr.us10y.changePct,
+          });
+        }
+      } catch (err) {
+        console.error("[XAUUSD Brain] Macro snapshot error:", err);
+      }
+    }
+
     // 4. Generate & ask unique questions (5 per cycle, 8 on spike)
     const questionCount = spikeDetected ? 8 : 5;
     const candidates = getRandomQuestions(indicators, questionCount + 6); // extras for filtering
     const newQuestions = await filterNewQuestions(candidates);
     const toAsk = newQuestions.slice(0, questionCount);
+
+    // ── Feature 3: Adaptive Question Generator ─────────────────────────────
+    // Every 3rd cycle, inject a targeted failure-analysis question if 50+ verified preds
+    if (totalCycles % 3 === 0) {
+      try {
+        const adaptiveQ = await generateAdaptiveQuestion(indicators);
+        if (adaptiveQ) {
+          const isNew = await filterNewQuestions([adaptiveQ]);
+          if (isNew.length > 0 && !toAsk.some(q => q.hash === adaptiveQ.hash)) {
+            toAsk.unshift(adaptiveQ);
+          }
+        }
+      } catch (err) {
+        console.error("[XAUUSD Brain] Adaptive question error:", err);
+      }
+    }
 
     for (const { question, hash } of toAsk) {
       questionsAsked++;

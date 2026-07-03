@@ -1,6 +1,7 @@
 - [Daily picks staleness bug](daily-picks-staleness.md) — "close stale picks" logic must compare against today's date, not the generation target date.
-- [XAUUSD AI brain system](xauusd-brain.md) — autonomous gold trading AI: learns every 15 min, 6 DB tables, must run `tsc --build` in lib/db after schema changes, then restart API server.
+- [XAUUSD AI brain system](xauusd-brain.md) — autonomous gold trading AI: learns every 15 min, 7 DB tables (incl. xauusd_macro_snapshots), must run `tsc --build` in lib/db after schema changes, then restart API server.
 - [Orval codegen command](orval-codegen.md) — run `pnpm --filter @workspace/api-spec run codegen` to regenerate API client after openapi.yaml changes.
 - [Web-only, XAUUSD-only scope](project-scope.md) — project is XAUUSD Gold AI only; all BEI/saham IDX features removed. Web frontend: 2 pages (/ = xauusd-ai, /admin). Backend: /xauusd + /admin + /health routes only.
 - [Typecheck pre-existing errors](typecheck-errors.md) — pnpm run typecheck fails with TS6305 (lib/db/api-zod dist not built) — pre-existing, not from refactor. esbuild build works fine; run `tsc --build` at root to fix before typechecking.
 - [TradingView data integration](tradingview-data.md) — Yahoo Finance replaced with TradingView Scanner API; data.tradingview.com/history is blocked on Replit servers; use Scanner POST endpoint instead.
+- [BacktestPanel React hooks rule](backtest-hooks.md) — BacktestPanel uses useState hooks, so the early `if (verified.length === 0) return (...)` must come AFTER all hook declarations; empty state must be handled inline in JSX instead.

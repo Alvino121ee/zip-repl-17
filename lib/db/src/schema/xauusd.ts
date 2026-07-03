@@ -109,6 +109,18 @@ export const xauusdNewsTable = pgTable("xauusd_news", {
   fetchedAt: timestamp("fetched_at").notNull().defaultNow(),
 });
 
+// ─── Macro snapshots — DXY & US10Y saved every cycle for Pearson correlation ──
+export const xauusdMacroSnapshotsTable = pgTable("xauusd_macro_snapshots", {
+  id: serial("id").primaryKey(),
+  snapshotAt: timestamp("snapshot_at").notNull().defaultNow(),
+  goldPrice: real("gold_price").notNull(),
+  goldChangePct: real("gold_change_pct"),
+  dxy: real("dxy"),
+  dxyChangePct: real("dxy_change_pct"),
+  us10y: real("us10y"),
+  us10yChangePct: real("us10y_change_pct"),
+});
+
 // ─── App settings — key/value store, editable from the website (e.g. DeepSeek API key) ──
 export const xauusdSettingsTable = pgTable("xauusd_settings", {
   id: serial("id").primaryKey(),

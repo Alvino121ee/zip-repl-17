@@ -216,6 +216,60 @@ function WinratePanel({ preds }: { preds: Prediction[] }) {
         </div>
       </div>
 
+      {verified.length >= 5 && (
+        <div>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Confusion Matrix Prediksi</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-separate border-spacing-1">
+              <thead>
+                <tr>
+                  <th className="text-left text-[10px] text-muted-foreground p-1 font-normal">Prediksi ↓ / Aktual →</th>
+                  {(["up", "down", "sideways"] as const).map(d => (
+                    <th key={d} className="text-center text-[10px] text-muted-foreground p-1 font-medium">
+                      {d === "up" ? "▲ NAIK" : d === "down" ? "▼ TURUN" : "↔ SIDE"}
+                    </th>
+                  ))}
+                  <th className="text-center text-[10px] text-muted-foreground p-1 font-normal">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(["up", "down", "sideways"] as const).map((predDir) => {
+                  const rowPreds = verified.filter(p => p.direction === predDir);
+                  const rowLabel = predDir === "up" ? "▲ NAIK" : predDir === "down" ? "▼ TURUN" : "↔ SIDE";
+                  return (
+                    <tr key={predDir}>
+                      <td className="text-[10px] font-medium text-muted-foreground p-1 whitespace-nowrap">{rowLabel}</td>
+                      {(["up", "down", "sideways"] as const).map((actDir) => {
+                        const count = rowPreds.filter(p => p.actualDirection === actDir).length;
+                        const isDiag = predDir === actDir;
+                        const maxInRow = Math.max(...(["up","down","sideways"].map(a => rowPreds.filter(p => p.actualDirection === a).length)), 1);
+                        const intensity = Math.max(0.4, count / maxInRow);
+                        return (
+                          <td key={actDir} className="text-center p-1" title={`Prediksi ${rowLabel}, Aktual ${actDir === "up" ? "NAIK" : actDir === "down" ? "TURUN" : "SIDEWAYS"}: ${count}x`}>
+                            <div className={`rounded-md py-1.5 px-2 min-w-[44px] mx-auto font-bold text-sm transition-all
+                              ${isDiag
+                                ? count > 0 ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-muted/10 text-muted-foreground/30 border border-border/20"
+                                : count > 0 ? "bg-red-500/20 text-red-400 border border-red-500/30" : "bg-muted/10 text-muted-foreground/30 border border-border/20"
+                              }`}
+                              style={{ opacity: count === 0 ? 0.35 : intensity }}>
+                              {count}
+                            </div>
+                          </td>
+                        );
+                      })}
+                      <td className="text-center p-1 text-[10px] text-muted-foreground font-medium">{rowPreds.length}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <p className="text-[10px] text-muted-foreground mt-2">
+              Diagonal <span className="text-emerald-400">hijau</span> = prediksi benar. Kotak <span className="text-red-400">merah</span> = meleset. Semakin terang = semakin sering terjadi.
+            </p>
+          </div>
+        </div>
+      )}
+
       {verified.length > 0 && (
         <div>
           <p className="text-xs text-muted-foreground uppercase tracking-wide mb-3">Riwayat Prediksi Terverifikasi (terbaru)</p>
@@ -237,16 +291,29 @@ function WinratePanel({ preds }: { preds: Prediction[] }) {
 }
 
 function BacktestPanel({ preds }: { preds: Prediction[] }) {
+  const [rsiBuy, setRsiBuy] = useState(35);
+  const [rsiSell, setRsiSell] = useState(65);
+  const [requireEma, setRequireEma] = useState(false);
+  const [btDirection, setBtDirection] = useState<"long" | "short" | "both">("long");
+  const [maxHold, setMaxHold] = useState(10);
+  const [btResult, setBtResult] = useState<BacktestResult | null>(null);
+  const [btLoading, setBtLoading] = useState(false);
+  const [btError, setBtError] = useState<string | null>(null);
+
+  const runCustomBacktest = async () => {
+    setBtLoading(true); setBtError(null);
+    try {
+      const r = await apiPost<BacktestResult>("/backtest", {
+        rsiBuy, rsiSell, requireEmaBullish: requireEma,
+        direction: btDirection, maxHoldPeriods: maxHold,
+      });
+      if (r.error) { setBtError(r.error); setBtResult(null); }
+      else setBtResult(r);
+    } catch (e) { setBtError(String(e)); }
+    finally { setBtLoading(false); }
+  };
+
   const verified = preds.filter(p => p.status === "verified" && p.isCorrect !== null);
-
-  if (verified.length === 0) return (
-    <div className="text-center py-16 text-muted-foreground">
-      <BarChart2 className="w-12 h-12 mx-auto mb-3 opacity-30" />
-      <p>Belum ada data prediksi terverifikasi untuk backtest.</p>
-      <p className="text-xs mt-1">Diperlukan minimal 1 prediksi yang sudah diverifikasi.</p>
-    </div>
-  );
-
   const INITIAL_CAPITAL = 10000;
   let capital = INITIAL_CAPITAL;
   let peak = INITIAL_CAPITAL;
@@ -288,9 +355,115 @@ function BacktestPanel({ preds }: { preds: Prediction[] }) {
 
   return (
     <div className="space-y-6">
+
+      {/* ── Custom Rule Backtest (Feature 5) ──────────────────────────────── */}
+      <div className="border border-amber-500/20 rounded-lg p-4 space-y-4 bg-amber-500/5">
+        <p className="text-xs font-semibold text-foreground uppercase tracking-wide flex items-center gap-2">
+          <Settings className="w-3.5 h-3.5 text-amber-400" />
+          Custom Rule Backtest
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <label className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">RSI Beli (entry saat RSI &lt;)</span>
+            <input type="number" value={rsiBuy} onChange={e => setRsiBuy(Math.max(10, Math.min(50, +e.target.value)))}
+              min={10} max={50} className="w-full bg-background border border-border/60 rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:border-amber-500/50" />
+          </label>
+          <label className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">RSI Jual (exit saat RSI &gt;)</span>
+            <input type="number" value={rsiSell} onChange={e => setRsiSell(Math.max(50, Math.min(90, +e.target.value)))}
+              min={50} max={90} className="w-full bg-background border border-border/60 rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:border-amber-500/50" />
+          </label>
+          <label className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">Arah Trading</span>
+            <select value={btDirection} onChange={e => setBtDirection(e.target.value as "long" | "short" | "both")}
+              className="w-full bg-background border border-border/60 rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:border-amber-500/50">
+              <option value="long">Long (beli dip)</option>
+              <option value="short">Short (jual rally)</option>
+              <option value="both">Keduanya</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">Max Hold (snapshot)</span>
+            <input type="number" value={maxHold} onChange={e => setMaxHold(Math.max(2, Math.min(100, +e.target.value)))}
+              min={2} max={100} className="w-full bg-background border border-border/60 rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:border-amber-500/50" />
+          </label>
+        </div>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={requireEma} onChange={e => setRequireEma(e.target.checked)} className="w-3.5 h-3.5 rounded accent-amber-500" />
+            <span className="text-xs text-muted-foreground">Wajib EMA Bullish Stack (long) / Bearish Stack (short)</span>
+          </label>
+          <button onClick={() => void runCustomBacktest()} disabled={btLoading}
+            className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-sm font-medium hover:bg-amber-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            {btLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            {btLoading ? "Memproses..." : "Jalankan Backtest"}
+          </button>
+        </div>
+
+        {btError && <p className="text-xs text-red-400 bg-red-500/10 rounded p-2">{btError}</p>}
+
+        {btResult && !btLoading && (
+          <div className="space-y-3 pt-3 border-t border-border/30">
+            <p className="text-[10px] text-muted-foreground">
+              Aturan: RSI beli &lt;{btResult.rules.rsiBuy}, RSI jual &gt;{btResult.rules.rsiSell}, arah {btResult.rules.direction}, max hold {btResult.rules.maxHoldPeriods} snapshot, dari {btResult.dataPoints} data historis
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { label: "Win Rate", value: `${btResult.winRate}%`, color: btResult.winRate >= 50 ? "text-emerald-400" : "text-red-400" },
+                { label: "Total Trade", value: `${btResult.totalTrades}`, color: "text-foreground" },
+                { label: "Profit Factor", value: `${btResult.profitFactor.toFixed(2)}`, color: btResult.profitFactor >= 1 ? "text-emerald-400" : "text-red-400" },
+                { label: "Max Drawdown", value: `-${btResult.maxDrawdown}%`, color: "text-red-400" },
+              ].map(m => (
+                <div key={m.label} className="bg-card/50 rounded-lg p-2 text-center border border-border/30">
+                  <p className="text-[10px] text-muted-foreground">{m.label}</p>
+                  <p className={`text-base font-bold ${m.color}`}>{m.value}</p>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: "Total Return", value: `${btResult.totalReturn >= 0 ? "+" : ""}${btResult.totalReturn}%`, color: btResult.totalReturn >= 0 ? "text-emerald-400" : "text-red-400" },
+                { label: "Modal Akhir", value: `$${btResult.finalCapital.toLocaleString()}`, color: btResult.finalCapital >= 10000 ? "text-emerald-400" : "text-red-400" },
+                { label: "W/L", value: `${btResult.wins}W / ${btResult.losses}L`, color: "text-foreground" },
+              ].map(m => (
+                <div key={m.label} className="bg-card/50 rounded-lg p-2 text-center border border-border/30">
+                  <p className="text-[10px] text-muted-foreground">{m.label}</p>
+                  <p className={`text-sm font-bold ${m.color}`}>{m.value}</p>
+                </div>
+              ))}
+            </div>
+            {btResult.equity.length > 2 && (
+              <div>
+                <p className="text-[10px] text-muted-foreground mb-1.5">Kurva Ekuitas</p>
+                <div className="bg-card/40 rounded-lg p-3 border border-border/30">
+                  <div className="flex items-end gap-px h-16">
+                    {btResult.equity.map((e, i) => {
+                      const min = Math.min(...btResult.equity); const max = Math.max(...btResult.equity); const rng = max - min || 1;
+                      return <div key={i} className={`flex-1 rounded-t min-w-[2px] ${e >= 10000 ? "bg-emerald-500/70" : "bg-red-500/70"}`}
+                        style={{ height: `${Math.max(((e - min) / rng) * 100, 2)}%` }} />;
+                    })}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                    <span>$10,000</span><span>${btResult.finalCapital.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Simulasi AI ──────────────────────────────────────────────────── */}
+      {verified.length === 0 ? (
+        <div className="text-center py-8 text-muted-foreground border border-border/30 rounded-lg">
+          <BarChart2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">Simulasi AI memerlukan minimal 1 prediksi terverifikasi.</p>
+        </div>
+      ) : (
+      <>
       <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
         <p className="text-xs text-amber-300">
-          📊 Simulasi: Modal awal <strong>$10,000</strong> · Risiko <strong>2% per trade</strong> · Mengikuti setiap sinyal AI terverifikasi · Target aktual jika tersedia, else 2R default
+          📊 Simulasi AI: Modal awal <strong>$10,000</strong> · Risiko <strong>2% per trade</strong> · Mengikuti setiap sinyal AI terverifikasi · Target aktual jika tersedia, else 2R default
         </p>
       </div>
 
@@ -366,6 +539,8 @@ function BacktestPanel({ preds }: { preds: Prediction[] }) {
           })}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -445,6 +620,15 @@ interface BrainStats {
   totalQuestionsAsked: number; totalPredictions: number;
   verifiedPredictions: number; correctPredictions: number;
   predictionAccuracy: number | null;
+}
+
+interface BacktestResult {
+  rules: { rsiBuy: number; rsiSell: number; requireEmaBullish: boolean; direction: string; maxHoldPeriods: number };
+  totalTrades: number; wins: number; losses: number; winRate: number;
+  profitFactor: number; maxDrawdown: number; avgWin: number; avgLoss: number;
+  totalReturn: number; finalCapital: number; equity: number[];
+  trades: Array<{ entryPrice: number; exitPrice: number; direction: string; pnlPct: number; win: boolean; holdPeriods: number; entryAt: string }>;
+  dataPoints: number; error?: string;
 }
 
 interface QuestionLog {

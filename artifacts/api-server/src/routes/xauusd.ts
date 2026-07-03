@@ -11,6 +11,7 @@ import {
   xauusdPredictionsTable,
   xauusdNewsTable,
   xauusdLearningLogTable,
+  xauusdMacroSnapshotsTable,
 } from "@workspace/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import {
@@ -83,15 +84,70 @@ xauusdRouter.get("/multi-timeframe", async (_req, res) => {
   }
 });
 
+// ─── Pearson correlation helper ───────────────────────────────────────────────
+function pearsonCorrelation(x: number[], y: number[]): number | null {
+  const n = x.length;
+  if (n < 5 || x.length !== y.length) return null;
+  const mx = x.reduce((a, b) => a + b, 0) / n;
+  const my = y.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = x[i] - mx, dy = y[i] - my;
+    num += dx * dy; dx2 += dx * dx; dy2 += dy * dy;
+  }
+  const den = Math.sqrt(dx2 * dy2);
+  return den === 0 ? null : parseFloat((num / den).toFixed(4));
+}
+
 // ─── GET /xauusd/correlation — DXY & US10Y correlation with gold ─────────────
 xauusdRouter.get("/correlation", async (_req, res) => {
   try {
-    const analysis = await getCorrelationAnalysis();
-    return res.json(analysis);
+    const [analysis, macroRows] = await Promise.all([
+      getCorrelationAnalysis(),
+      db.select().from(xauusdMacroSnapshotsTable)
+        .orderBy(desc(xauusdMacroSnapshotsTable.snapshotAt))
+        .limit(150),
+    ]);
+
+    // Compute Pearson if ≥50 data points (Feature 2)
+    if (macroRows.length >= 50) {
+      const dxyPairs = macroRows.filter(r => r.dxy != null).map(r => ({ g: r.goldPrice, d: r.dxy! }));
+      const us10yPairs = macroRows.filter(r => r.us10y != null).map(r => ({ g: r.goldPrice, u: r.us10y! }));
+
+      if (dxyPairs.length >= 10) {
+        const r = pearsonCorrelation(dxyPairs.map(p => p.g), dxyPairs.map(p => p.d));
+        if (r !== null) {
+          analysis.dxy.correlation = r;
+          const label = r < -0.5 ? "korelasi negatif kuat" : r < -0.2 ? "korelasi negatif lemah" : r < 0.2 ? "hampir tidak berkorelasi" : "korelasi positif (tidak normal)";
+          analysis.dxy.interpretation = `Pearson r=${r.toFixed(3)} (${label}, n=${dxyPairs.length}). ` + analysis.dxy.interpretation;
+        }
+      }
+      if (us10yPairs.length >= 10) {
+        const r = pearsonCorrelation(us10yPairs.map(p => p.g), us10yPairs.map(p => p.u));
+        if (r !== null) {
+          analysis.us10y.correlation = r;
+          const label = r < -0.5 ? "korelasi negatif kuat" : r < -0.2 ? "korelasi negatif lemah" : r < 0.2 ? "hampir tidak berkorelasi" : "korelasi positif";
+          analysis.us10y.interpretation = `Pearson r=${r.toFixed(3)} (${label}, n=${us10yPairs.length}). ` + analysis.us10y.interpretation;
+        }
+      }
+    }
+
+    return res.json({ ...analysis, historyCount: macroRows.length });
   } catch (err) {
     console.error("[XAUUSD] /correlation error:", err);
     return res.status(500).json({ error: String(err) });
   }
+});
+
+// ─── GET /xauusd/macro-history — DXY & US10Y historical snapshots ─────────────
+xauusdRouter.get("/macro-history", async (req, res) => {
+  const limit = Math.min(200, parseInt(String(req.query.limit ?? "100"), 10));
+  const rows = await db
+    .select()
+    .from(xauusdMacroSnapshotsTable)
+    .orderBy(desc(xauusdMacroSnapshotsTable.snapshotAt))
+    .limit(limit);
+  return res.json(rows);
 });
 
 // ─── GET /xauusd/snapshots — history of saved snapshots ──────────────────────
@@ -340,6 +396,111 @@ xauusdRouter.post("/settings/whatsapp/test", async (_req, res) => {
     if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
     return res.json({ ok: true });
   } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /xauusd/backtest — custom rule backtest against historical snapshots ─
+xauusdRouter.post("/backtest", async (req, res) => {
+  const {
+    rsiBuy = 35,
+    rsiSell = 65,
+    requireEmaBullish = false,
+    direction = "long",
+    maxHoldPeriods = 10,
+  } = (req.body ?? {}) as {
+    rsiBuy?: number; rsiSell?: number; requireEmaBullish?: boolean;
+    direction?: "long" | "short" | "both"; maxHoldPeriods?: number;
+  };
+
+  try {
+    const snaps = await db
+      .select({
+        snapshotAt: xauusdSnapshotsTable.snapshotAt,
+        price: xauusdSnapshotsTable.price,
+        rsi14: xauusdSnapshotsTable.rsi14,
+        emaAlignment: xauusdSnapshotsTable.emaAlignment,
+      })
+      .from(xauusdSnapshotsTable)
+      .orderBy(xauusdSnapshotsTable.snapshotAt)
+      .limit(2000);
+
+    if (snaps.length < 10) {
+      return res.json({ error: "Tidak cukup data snapshot (minimal 10).", totalTrades: 0, equity: [], trades: [], dataPoints: snaps.length });
+    }
+
+    interface Trade {
+      entryPrice: number; exitPrice: number; direction: string;
+      pnlPct: number; win: boolean; holdPeriods: number; entryAt: string;
+    }
+
+    const trades: Trade[] = [];
+    let inTrade = false;
+    let entryIdx = -1;
+    let entryDir: "long" | "short" = "long";
+
+    for (let i = 0; i < snaps.length; i++) {
+      const s = snaps[i];
+      if (!s.rsi14) continue;
+      if (!inTrade) {
+        let doLong = (direction === "long" || direction === "both") && s.rsi14 < rsiBuy;
+        let doShort = (direction === "short" || direction === "both") && s.rsi14 > rsiSell;
+        if (requireEmaBullish) {
+          if (doLong) doLong = s.emaAlignment === "bullish_stack";
+          if (doShort) doShort = s.emaAlignment === "bearish_stack";
+        }
+        if (doLong || doShort) { inTrade = true; entryIdx = i; entryDir = doLong ? "long" : "short"; }
+      } else {
+        const entry = snaps[entryIdx];
+        const holdPeriods = i - entryIdx;
+        const exitOnRsi = entryDir === "long" ? s.rsi14 > rsiSell : s.rsi14 < rsiBuy;
+        if (exitOnRsi || holdPeriods >= maxHoldPeriods) {
+          const pnlPct = entryDir === "long"
+            ? (s.price - entry.price) / entry.price * 100
+            : (entry.price - s.price) / entry.price * 100;
+          trades.push({
+            entryPrice: entry.price, exitPrice: s.price, direction: entryDir,
+            pnlPct: parseFloat(pnlPct.toFixed(3)), win: pnlPct > 0,
+            holdPeriods, entryAt: entry.snapshotAt.toISOString(),
+          });
+          inTrade = false;
+        }
+      }
+    }
+
+    const wins = trades.filter(t => t.win).length;
+    const losses = trades.length - wins;
+    const winRate = trades.length > 0 ? Math.round(wins / trades.length * 100) : 0;
+
+    const INITIAL = 10000;
+    let capital = INITIAL; let peak = INITIAL; let maxDrawdown = 0;
+    const equity: number[] = [INITIAL];
+    for (const t of trades) {
+      const risk = capital * 0.02;
+      const pnl = t.win ? risk * Math.max(0.5, Math.abs(t.pnlPct)) : -risk;
+      capital += pnl;
+      if (capital > peak) peak = capital;
+      const dd = (peak - capital) / peak * 100;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+      equity.push(parseFloat(capital.toFixed(2)));
+    }
+
+    const grossWin = trades.filter(t => t.win).reduce((s, t) => s + t.pnlPct, 0);
+    const grossLoss = trades.filter(t => !t.win).reduce((s, t) => s + Math.abs(t.pnlPct), 0);
+
+    return res.json({
+      rules: { rsiBuy, rsiSell, requireEmaBullish, direction, maxHoldPeriods },
+      totalTrades: trades.length, wins, losses, winRate,
+      profitFactor: grossLoss > 0 ? parseFloat((grossWin / grossLoss).toFixed(2)) : grossWin > 0 ? 99 : 0,
+      maxDrawdown: parseFloat(maxDrawdown.toFixed(2)),
+      avgWin: wins > 0 ? parseFloat((grossWin / wins).toFixed(3)) : 0,
+      avgLoss: losses > 0 ? parseFloat((grossLoss / losses).toFixed(3)) : 0,
+      totalReturn: parseFloat(((capital - INITIAL) / INITIAL * 100).toFixed(2)),
+      finalCapital: parseFloat(capital.toFixed(2)),
+      equity, trades: trades.slice(-20), dataPoints: snaps.length,
+    });
+  } catch (err) {
+    console.error("[XAUUSD] /backtest error:", err);
     return res.status(500).json({ error: String(err) });
   }
 });
