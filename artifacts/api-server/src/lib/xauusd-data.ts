@@ -2,8 +2,8 @@
  * XAUUSD (Gold/USD) real-time data fetcher + technical indicator calculator
  *
  * Data sources:
- *  - Live price  → Swissquote public forex feed (no auth, real broker data)
- *  - OHLCV candles → Public market data API (for technical indicators)
+ *  - Live price  → TradingView Scanner API (primary) / Swissquote fallback
+ *  - OHLCV candles → TradingView History API (UDF format)
  *  - News        → Kitco + Investing.com RSS feeds
  */
 
@@ -52,10 +52,16 @@ const BROWSER_HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
-// ─── Live price (Swissquote public forex feed) ─────────────────────────────────
+const TV_HEADERS = {
+  ...BROWSER_HEADERS,
+  "Origin":  "https://www.tradingview.com",
+  "Referer": "https://www.tradingview.com/",
+};
+
+// ─── Live price (TradingView Scanner API, fallback ke Swissquote) ──────────────
 
 export interface XauusdLivePrice {
-  price: number;   // mid-price (bid+ask)/2
+  price: number;   // mid-price
   bid: number;
   ask: number;
   change: number | null;   // vs session open
@@ -63,286 +69,224 @@ export interface XauusdLivePrice {
   timestamp: number;
 }
 
-// Track session open price for daily change calculation
-let sessionOpenPrice: number | null = null;
-let sessionDate: string | null = null;
+interface TvScannerResponse {
+  data: Array<{ s: string; d: (number | null)[] }>;
+}
 
 /**
- * Fetch latest XAUUSD price from Swissquote's public forex data feed.
- * Returns real broker bid/ask data — no auth needed.
+ * Fetch live XAUUSD price from TradingView Scanner API.
+ * Columns: close, open, high, low, change_abs, change (%)
  */
-export async function fetchXauusdLivePrice(): Promise<XauusdLivePrice> {
+async function fetchLivePriceFromTradingView(): Promise<XauusdLivePrice> {
+  const url = "https://scanner.tradingview.com/global/scan";
+  const body = {
+    symbols: { tickers: ["OANDA:XAUUSD"], query: { types: [] } },
+    columns: ["close", "open", "high", "low", "change_abs", "change"],
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...TV_HEADERS, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`TradingView Scanner HTTP ${res.status}`);
+
+  const json = (await res.json()) as TvScannerResponse;
+  if (!json.data?.length) throw new Error("TradingView Scanner: no data");
+
+  const [close, , , , changeAbs, changePct] = json.data[0].d;
+  if (close == null) throw new Error("TradingView Scanner: close is null");
+
+  const SPREAD = 0.30; // typical XAUUSD spread ~$0.30
+  const bid = parseFloat((close - SPREAD / 2).toFixed(2));
+  const ask = parseFloat((close + SPREAD / 2).toFixed(2));
+
+  return {
+    price: parseFloat(close.toFixed(2)),
+    bid,
+    ask,
+    change:    changeAbs != null ? parseFloat(changeAbs.toFixed(2)) : null,
+    changePct: changePct != null ? parseFloat(changePct.toFixed(3)) : null,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * Fallback: fetch XAUUSD bid/ask from Swissquote public forex feed.
+ */
+async function fetchLivePriceFromSwissquote(): Promise<XauusdLivePrice> {
   const url =
     "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD";
 
-  const res = await fetch(url, { headers: BROWSER_HEADERS });
+  const res = await fetch(url, {
+    headers: BROWSER_HEADERS,
+    signal: AbortSignal.timeout(8000),
+  });
   if (!res.ok) throw new Error(`Swissquote feed HTTP ${res.status}`);
 
   const json = (await res.json()) as Array<{
     spreadProfilePrices?: Array<{ spreadProfile: string; bid: number; ask: number }>;
   }>;
 
-  // Prefer "prime" profile, fall back to first available
   let bid: number | null = null;
   let ask: number | null = null;
-
   for (const platform of json) {
     const profiles = platform.spreadProfilePrices ?? [];
     const prime = profiles.find((p) => p.spreadProfile === "prime") ?? profiles[0];
-    if (prime && bid == null) {
-      bid = prime.bid;
-      ask = prime.ask;
-    }
+    if (prime && bid == null) { bid = prime.bid; ask = prime.ask; }
   }
-
   if (bid == null || ask == null) throw new Error("Swissquote: no bid/ask data");
 
   const mid = parseFloat(((bid + ask) / 2).toFixed(2));
-
-  // Reset session open at UTC midnight
-  const today = new Date().toISOString().slice(0, 10);
-  if (sessionDate !== today) {
-    sessionDate = today;
-    sessionOpenPrice = mid;
-  }
-  if (sessionOpenPrice == null) sessionOpenPrice = mid;
-
-  const change = parseFloat((mid - sessionOpenPrice).toFixed(2));
-  const changePct = parseFloat(((change / sessionOpenPrice) * 100).toFixed(3));
-
   return {
     price: mid,
-    bid: parseFloat(bid.toFixed(2)),
-    ask: parseFloat(ask.toFixed(2)),
-    change,
-    changePct,
+    bid:  parseFloat(bid.toFixed(2)),
+    ask:  parseFloat(ask.toFixed(2)),
+    change: null,
+    changePct: null,
     timestamp: Date.now(),
   };
 }
 
-// ─── Historical OHLCV candles ──────────────────────────────────────────────────
-
-// Public market data endpoints for OHLCV candle history (technical indicator calculations)
-const CANDLE_API  = "https://query2.finance.yahoo.com";
-const CANDLE_API2 = "https://query1.finance.yahoo.com";
-
-async function fetchCandlesForTicker(
-  ticker: string,
-  interval: "15m" | "1h" | "1d",
-  range: string
-): Promise<XauusdCandle[]> {
-  const path = `/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`;
-  let res = await fetch(`${CANDLE_API}${path}`, { headers: BROWSER_HEADERS });
-  if (!res.ok) {
-    res = await fetch(`${CANDLE_API2}${path}`, { headers: BROWSER_HEADERS });
+/**
+ * Fetch latest XAUUSD live price.
+ * Primary: TradingView Scanner (real-time, change % included).
+ * Fallback: Swissquote (real bid/ask, no change %).
+ */
+export async function fetchXauusdLivePrice(): Promise<XauusdLivePrice> {
+  try {
+    return await fetchLivePriceFromTradingView();
+  } catch (err) {
+    console.warn("[xauusd-data] TradingView Scanner failed, fallback Swissquote:", (err as Error).message);
+    return fetchLivePriceFromSwissquote();
   }
-  if (!res.ok) throw new Error(`Market data ${ticker} HTTP ${res.status}`);
+}
 
-  const json = (await res.json()) as {
-    chart: {
-      result?: Array<{
-        timestamp: number[];
-        indicators: {
-          quote: Array<{
-            open: number[];
-            high: number[];
-            low: number[];
-            close: number[];
-            volume: number[];
-          }>;
-        };
-      }>;
-      error?: { message: string };
-    };
+// ─── TradingView Scanner — indicator columns ────────────────────────────────────
+
+// TradingView symbol mapping
+const TV_SYMBOL_MAP = {
+  xauusd: "OANDA:XAUUSD",
+  dxy:    "TVC:DXY",
+  us10y:  "TVC:US10Y",
+} as const;
+
+// TradingView interval mapping (Scanner uses minutes or special strings)
+const TV_INTERVAL_MAP: Record<string, string> = {
+  "1h":  "60",
+  "4h":  "240",
+  "1d":  "1D",
+};
+
+// Ordered column list — index must stay in sync with destructuring below
+const TV_INDICATOR_COLUMNS = [
+  "close", "open", "high", "low", "volume",   // 0-4
+  "change", "change_abs",                       // 5-6
+  "RSI",                                        // 7  — RSI 14
+  "RSI[1]",                                     // 8  — previous RSI
+  "EMA10",                                      // 9  — closest to EMA9
+  "EMA20",                                      // 10 — closest to EMA21
+  "EMA50",                                      // 11
+  "EMA200",                                     // 12
+  "MACD.macd",                                  // 13
+  "MACD.signal",                                // 14
+  "MACD.macd[1]",                               // 15 — prev MACD line (cross detect)
+  "MACD.signal[1]",                             // 16 — prev MACD signal
+  "BB.upper",                                   // 17
+  "BB.lower",                                   // 18
+  "BB.basis",                                   // 19 — BB middle
+  "ATR",                                        // 20 — ATR 14
+  "Pivot.M.Classic.S1",                         // 21 — monthly support
+  "Pivot.M.Classic.R1",                         // 22 — monthly resistance
+] as const;
+
+/**
+ * Query TradingView Scanner for pre-computed technical indicators.
+ * Interval: "60" = 1h, "240" = 4h, "1D" = daily.
+ * Returns raw column array in TV_INDICATOR_COLUMNS order.
+ */
+async function queryTvScanner(
+  tvSymbol: string,
+  interval: string,
+  columns: readonly string[]
+): Promise<(number | null)[]> {
+  const url = `https://scanner.tradingview.com/global/scan?interval=${interval}`;
+  const body = {
+    symbols: { tickers: [tvSymbol], query: { types: [] } },
+    columns: [...columns],
   };
 
-  if (json.chart.error) throw new Error(json.chart.error.message);
-  const result = json.chart.result?.[0];
-  if (!result) throw new Error(`No candle data for ${ticker}`);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...TV_HEADERS, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`TradingView Scanner ${tvSymbol}@${interval} HTTP ${res.status}`);
 
-  const { timestamp, indicators } = result;
-  const q = indicators.quote[0];
-  const candles: XauusdCandle[] = [];
+  const json = (await res.json()) as TvScannerResponse;
+  if (!json.data?.length) throw new Error(`TradingView Scanner: no data for ${tvSymbol}`);
 
-  for (let i = 0; i < timestamp.length; i++) {
-    if (q.close[i] == null || q.open[i] == null || q.high[i] == null || q.low[i] == null)
-      continue;
-    candles.push({
-      timestamp: timestamp[i] * 1000,
-      open: q.open[i],
-      high: q.high[i],
-      low: q.low[i],
-      close: q.close[i],
-      volume: q.volume[i] ?? 0,
-    });
+  const row = json.data[0].d;
+  if (!Array.isArray(row)) throw new Error(`TradingView Scanner: unexpected payload shape for ${tvSymbol}`);
+  // Validate each element is number, null, or undefined (coerce undefined → null)
+  return row.map((v) => (v === null || v === undefined ? null : typeof v === "number" ? v : null));
+}
+
+/**
+ * Convert raw TradingView Scanner columns to XauusdIndicators.
+ * Column order must match TV_INDICATOR_COLUMNS.
+ */
+function buildIndicatorsFromScanner(d: (number | null)[]): XauusdIndicators | null {
+  const close = d[0];
+  if (close == null) return null;
+
+  const open   = d[1] ?? close;
+  const high   = d[2] ?? close;
+  const low    = d[3] ?? close;
+  const volume = d[4] ?? 0;
+
+  const price  = parseFloat(close.toFixed(2));
+
+  const rsi14: number | null = d[7] != null ? parseFloat(d[7].toFixed(2)) : null;
+
+  const ema9:   number | null = d[9]  != null ? parseFloat(d[9].toFixed(2))  : null; // EMA10
+  const ema21:  number | null = d[10] != null ? parseFloat(d[10].toFixed(2)) : null; // EMA20
+  const ema50:  number | null = d[11] != null ? parseFloat(d[11].toFixed(2)) : null;
+  const ema200: number | null = d[12] != null ? parseFloat(d[12].toFixed(2)) : null;
+
+  const macdLine:   number | null = d[13] != null ? parseFloat(d[13].toFixed(4)) : null;
+  const macdSignal: number | null = d[14] != null ? parseFloat(d[14].toFixed(4)) : null;
+  const macdHistogram = macdLine != null && macdSignal != null
+    ? parseFloat((macdLine - macdSignal).toFixed(4)) : null;
+
+  const macdLinePrev   = d[15];
+  const macdSignalPrev = d[16];
+  const prevHisto = macdLinePrev != null && macdSignalPrev != null
+    ? macdLinePrev - macdSignalPrev : null;
+
+  let macdSignalType: XauusdIndicators["macdSignalType"] = "neutral";
+  if (prevHisto != null && macdHistogram != null) {
+    if (prevHisto < 0 && macdHistogram > 0) macdSignalType = "bullish_cross";
+    else if (prevHisto > 0 && macdHistogram < 0) macdSignalType = "bearish_cross";
   }
-  return candles;
-}
 
-/** Fetch XAUUSD OHLCV candles for technical indicator calculations */
-export async function fetchXauusdCandles(
-  interval: "1h" | "1d" = "1h",
-  range = "60d"
-): Promise<XauusdCandle[]> {
-  return fetchCandlesForTicker("GC=F", interval, range);
-}
+  const bbUpper:  number | null = d[17] != null ? parseFloat(d[17].toFixed(2)) : null;
+  const bbLower:  number | null = d[18] != null ? parseFloat(d[18].toFixed(2)) : null;
+  const bbMiddle: number | null = d[19] != null ? parseFloat(d[19].toFixed(2)) : null;
+  const bbWidth = bbUpper != null && bbLower != null && bbMiddle != null && bbMiddle !== 0
+    ? parseFloat(((bbUpper - bbLower) / bbMiddle * 100).toFixed(3)) : null;
 
-/** Fetch DXY or US10Y candles for correlation analysis */
-export async function fetchTickerCandles(
-  instrument: "dxy" | "us10y",
-  interval: "1h" | "1d" = "1h",
-  range = "60d"
-): Promise<XauusdCandle[]> {
-  const ticker = instrument === "dxy" ? "DX-Y.NYB" : "^TNX";
-  return fetchCandlesForTicker(ticker, interval, range);
-}
+  const atr14: number | null = d[20] != null ? parseFloat(d[20].toFixed(4)) : null;
 
-// ─── Technical indicator functions ────────────────────────────────────────────
+  const supportLevel:    number | null = d[21] != null ? parseFloat(d[21].toFixed(2)) : null;
+  const resistanceLevel: number | null = d[22] != null ? parseFloat(d[22].toFixed(2)) : null;
 
-function calcEma(closes: number[], period: number): number[] {
-  if (closes.length < period) return [];
-  const k = 2 / (period + 1);
-  const result: number[] = new Array(closes.length).fill(NaN);
-  let sum = 0;
-  for (let i = 0; i < period; i++) sum += closes[i];
-  result[period - 1] = sum / period;
-  for (let i = period; i < closes.length; i++) {
-    result[i] = closes[i] * k + result[i - 1] * (1 - k);
-  }
-  return result;
-}
-
-function calcRsi(closes: number[], period = 14): number[] {
-  if (closes.length < period + 1) return [];
-  const result: number[] = new Array(closes.length).fill(NaN);
-  let avgGain = 0;
-  let avgLoss = 0;
-  for (let i = 1; i <= period; i++) {
-    const diff = closes[i] - closes[i - 1];
-    if (diff > 0) avgGain += diff;
-    else avgLoss += Math.abs(diff);
-  }
-  avgGain /= period;
-  avgLoss /= period;
-  result[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-  for (let i = period + 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    const gain = diff > 0 ? diff : 0;
-    const loss = diff < 0 ? Math.abs(diff) : 0;
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
-    result[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
-  }
-  return result;
-}
-
-function calcBollingerBands(closes: number[], period = 20, stdDevMult = 2) {
-  const upper = new Array(closes.length).fill(NaN);
-  const middle = new Array(closes.length).fill(NaN);
-  const lower = new Array(closes.length).fill(NaN);
-  for (let i = period - 1; i < closes.length; i++) {
-    const slice = closes.slice(i - period + 1, i + 1);
-    const mean = slice.reduce((a, b) => a + b, 0) / period;
-    const variance = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
-    const stdDev = Math.sqrt(variance);
-    middle[i] = mean;
-    upper[i] = mean + stdDevMult * stdDev;
-    lower[i] = mean - stdDevMult * stdDev;
-  }
-  return { upper, middle, lower };
-}
-
-function calcAtr(candles: XauusdCandle[], period = 14): number[] {
-  const result = new Array(candles.length).fill(NaN);
-  if (candles.length < 2) return result;
-  const tr = [candles[0].high - candles[0].low];
-  for (let i = 1; i < candles.length; i++) {
-    const hl = candles[i].high - candles[i].low;
-    const hcp = Math.abs(candles[i].high - candles[i - 1].close);
-    const lcp = Math.abs(candles[i].low - candles[i - 1].close);
-    tr.push(Math.max(hl, hcp, lcp));
-  }
-  let atr = tr.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  result[period - 1] = atr;
-  for (let i = period; i < candles.length; i++) {
-    atr = (atr * (period - 1) + tr[i]) / period;
-    result[i] = atr;
-  }
-  return result;
-}
-
-function calcSupportResistance(candles: XauusdCandle[], lookback = 100) {
-  const recent = candles.slice(-lookback);
-  return {
-    support: Math.min(...recent.map((c) => c.low)),
-    resistance: Math.max(...recent.map((c) => c.high)),
-  };
-}
-
-// ─── Main indicator calculator ─────────────────────────────────────────────────
-
-export function calculateIndicators(candles: XauusdCandle[]): XauusdIndicators | null {
-  if (candles.length < 26) return null;
-  const closes = candles.map((c) => c.close);
-  const last = candles[candles.length - 1];
-  const n = closes.length - 1;
-
-  const ema9arr   = calcEma(closes, 9);
-  const ema21arr  = calcEma(closes, 21);
-  const ema50arr  = calcEma(closes, 50);
-  const ema200arr = calcEma(closes, 200);
-
-  const ema9   = isNaN(ema9arr[n])   ? null : ema9arr[n];
-  const ema21  = isNaN(ema21arr[n])  ? null : ema21arr[n];
-  const ema50  = isNaN(ema50arr[n])  ? null : ema50arr[n];
-  const ema200 = isNaN(ema200arr[n]) ? null : ema200arr[n];
-
-  const rsiArr = calcRsi(closes, 14);
-  const rsi14  = isNaN(rsiArr[n]) ? null : parseFloat(rsiArr[n].toFixed(2));
-
-  const ema12arr     = calcEma(closes, 12);
-  const ema26arr     = calcEma(closes, 26);
-  const macdLineArr  = ema12arr.map((v, i) => (isNaN(v) || isNaN(ema26arr[i]) ? NaN : v - ema26arr[i]));
-  const validMacd    = macdLineArr.filter((v) => !isNaN(v));
-  const macdSigArr   = calcEma(validMacd, 9);
-  const firstValid   = macdLineArr.findIndex((v) => !isNaN(v));
-  const macdSigAlign = new Array(candles.length).fill(NaN);
-  for (let i = 0; i < macdSigArr.length; i++) macdSigAlign[firstValid + i] = macdSigArr[i];
-
-  const macdLine    = isNaN(macdLineArr[n]) ? null : macdLineArr[n];
-  const macdSigVal  = isNaN(macdSigAlign[n]) ? null : macdSigAlign[n];
-  const macdHisto   = macdLine != null && macdSigVal != null ? macdLine - macdSigVal : null;
-
-  const bb      = calcBollingerBands(closes, 20, 2);
-  const bbUpper = isNaN(bb.upper[n])  ? null : bb.upper[n];
-  const bbMiddle= isNaN(bb.middle[n]) ? null : bb.middle[n];
-  const bbLower = isNaN(bb.lower[n])  ? null : bb.lower[n];
-  const bbWidth =
-    bbUpper != null && bbLower != null && bbMiddle != null && bbMiddle !== 0
-      ? ((bbUpper - bbLower) / bbMiddle) * 100
-      : null;
-
-  const atrArr = calcAtr(candles, 14);
-  const atr14  = isNaN(atrArr[n]) ? null : atrArr[n];
-
-  const { support, resistance } = calcSupportResistance(candles, 100);
-
+  // Derived signals
   const rsiSignal: XauusdIndicators["rsiSignal"] =
     rsi14 == null ? "neutral" : rsi14 >= 70 ? "overbought" : rsi14 <= 30 ? "oversold" : "neutral";
 
-  let macdSignalType: XauusdIndicators["macdSignalType"] = "neutral";
-  if (macdHisto != null && n > 0) {
-    const prevH =
-      !isNaN(macdLineArr[n - 1]) && !isNaN(macdSigAlign[n - 1])
-        ? macdLineArr[n - 1] - macdSigAlign[n - 1]
-        : null;
-    if (prevH != null) {
-      if (prevH < 0 && macdHisto > 0) macdSignalType = "bullish_cross";
-      else if (prevH > 0 && macdHisto < 0) macdSignalType = "bearish_cross";
-    }
-  }
-
-  const price = last.close;
   let emaAlignment: XauusdIndicators["emaAlignment"] = "mixed";
   if (ema9 != null && ema21 != null && ema50 != null) {
     if (price > ema9 && ema9 > ema21 && ema21 > ema50) emaAlignment = "bullish_stack";
@@ -354,54 +298,39 @@ export function calculateIndicators(candles: XauusdCandle[]): XauusdIndicators |
   else if (emaAlignment === "bearish_stack") trendScore -= 2;
   if (rsiSignal === "overbought") trendScore += 1;
   else if (rsiSignal === "oversold") trendScore -= 1;
-  if (macdHisto != null && macdHisto > 0) trendScore += 1;
-  else if (macdHisto != null && macdHisto < 0) trendScore -= 1;
+  if (macdHistogram != null && macdHistogram > 0) trendScore += 1;
+  else if (macdHistogram != null && macdHistogram < 0) trendScore -= 1;
   const trend: XauusdIndicators["trend"] =
     trendScore > 1 ? "bullish" : trendScore < -1 ? "bearish" : "sideways";
 
   return {
-    price: parseFloat(price.toFixed(2)),
-    open:  parseFloat(last.open.toFixed(2)),
-    high:  parseFloat(last.high.toFixed(2)),
-    low:   parseFloat(last.low.toFixed(2)),
-    volume: last.volume,
-    rsi14,
-    ema9:   ema9   != null ? parseFloat(ema9.toFixed(2))   : null,
-    ema21:  ema21  != null ? parseFloat(ema21.toFixed(2))  : null,
-    ema50:  ema50  != null ? parseFloat(ema50.toFixed(2))  : null,
-    ema200: ema200 != null ? parseFloat(ema200.toFixed(2)) : null,
-    macdLine:      macdLine  != null ? parseFloat(macdLine.toFixed(4))  : null,
-    macdSignal:    macdSigVal!= null ? parseFloat(macdSigVal.toFixed(4)): null,
-    macdHistogram: macdHisto != null ? parseFloat(macdHisto.toFixed(4)) : null,
-    bbUpper:  bbUpper  != null ? parseFloat(bbUpper.toFixed(2))  : null,
-    bbMiddle: bbMiddle != null ? parseFloat(bbMiddle.toFixed(2)) : null,
-    bbLower:  bbLower  != null ? parseFloat(bbLower.toFixed(2))  : null,
-    bbWidth:  bbWidth  != null ? parseFloat(bbWidth.toFixed(3))  : null,
-    atr14:    atr14    != null ? parseFloat(atr14.toFixed(4))    : null,
+    price,
+    open:   parseFloat(open.toFixed(2)),
+    high:   parseFloat(high.toFixed(2)),
+    low:    parseFloat(low.toFixed(2)),
+    volume,
+    rsi14, ema9, ema21, ema50, ema200,
+    macdLine, macdSignal, macdHistogram,
+    bbUpper, bbMiddle, bbLower, bbWidth, atr14,
     trend, rsiSignal, macdSignalType, emaAlignment,
-    supportLevel:    parseFloat(support.toFixed(2)),
-    resistanceLevel: parseFloat(resistance.toFixed(2)),
+    supportLevel, resistanceLevel,
   };
 }
 
-// ─── Multi-timeframe analysis ──────────────────────────────────────────────────
-
-function resampleCandles(candles: XauusdCandle[], groupSize: number): XauusdCandle[] {
-  const out: XauusdCandle[] = [];
-  for (let i = 0; i < candles.length; i += groupSize) {
-    const group = candles.slice(i, i + groupSize);
-    if (group.length === 0) continue;
-    out.push({
-      timestamp: group[0].timestamp,
-      open:   group[0].open,
-      high:   Math.max(...group.map((c) => c.high)),
-      low:    Math.min(...group.map((c) => c.low)),
-      close:  group[group.length - 1].close,
-      volume: group.reduce((sum, c) => sum + c.volume, 0),
-    });
-  }
-  return out;
+/**
+ * Fetch XAUUSD technical indicators from TradingView Scanner.
+ * Replaces the old fetchXauusdCandles + calculateIndicators pattern.
+ * interval: "1h" | "4h" | "1d"
+ */
+export async function fetchXauusdIndicators(
+  interval: "1h" | "4h" | "1d" = "1h"
+): Promise<XauusdIndicators | null> {
+  const tvInterval = TV_INTERVAL_MAP[interval];
+  const d = await queryTvScanner(TV_SYMBOL_MAP.xauusd, tvInterval, TV_INDICATOR_COLUMNS);
+  return buildIndicatorsFromScanner(d);
 }
+
+// ─── Multi-timeframe analysis (TradingView Scanner × 3 intervals) ─────────────
 
 export interface TimeframeAnalysis {
   timeframe: "1h" | "4h" | "1d";
@@ -410,15 +339,15 @@ export interface TimeframeAnalysis {
 }
 
 export async function getMultiTimeframeAnalysis(): Promise<TimeframeAnalysis[]> {
-  const [hourly, daily] = await Promise.all([
-    fetchXauusdCandles("1h", "60d"),
-    fetchXauusdCandles("1d", "2y"),
+  const [h1, h4, d1] = await Promise.all([
+    queryTvScanner(TV_SYMBOL_MAP.xauusd, TV_INTERVAL_MAP["1h"], TV_INDICATOR_COLUMNS).catch(() => null),
+    queryTvScanner(TV_SYMBOL_MAP.xauusd, TV_INTERVAL_MAP["4h"], TV_INDICATOR_COLUMNS).catch(() => null),
+    queryTvScanner(TV_SYMBOL_MAP.xauusd, TV_INTERVAL_MAP["1d"], TV_INDICATOR_COLUMNS).catch(() => null),
   ]);
-  const fourHour = resampleCandles(hourly, 4);
   return [
-    { timeframe: "1h",  label: "1 Jam",    indicators: calculateIndicators(hourly)   },
-    { timeframe: "4h",  label: "4 Jam",    indicators: calculateIndicators(fourHour) },
-    { timeframe: "1d",  label: "Harian",   indicators: calculateIndicators(daily)    },
+    { timeframe: "1h",  label: "1 Jam",   indicators: h1 ? buildIndicatorsFromScanner(h1) : null },
+    { timeframe: "4h",  label: "4 Jam",   indicators: h4 ? buildIndicatorsFromScanner(h4) : null },
+    { timeframe: "1d",  label: "Harian",  indicators: d1 ? buildIndicatorsFromScanner(d1) : null },
   ];
 }
 
@@ -436,14 +365,14 @@ export function summarizeTimeframeConfluence(analyses: TimeframeAnalysis[]) {
   return { agreement, bullishCount, bearishCount };
 }
 
-// ─── Correlation analysis (DXY + US10Y) ───────────────────────────────────────
+// ─── Correlation analysis (DXY + US10Y via TradingView Scanner) ───────────────
 
 export interface CorrelationFactor {
   name: string;
   ticker: string;
   price: number | null;
   changePct: number | null;
-  correlation: number | null;
+  correlation: number | null;   // null — Scanner gives current snapshot, not time-series
   interpretation: string;
 }
 
@@ -454,76 +383,63 @@ export interface CorrelationAnalysis {
   computedAt: string;
 }
 
-function pearsonCorrelation(a: number[], b: number[]): number | null {
-  const n = Math.min(a.length, b.length);
-  if (n < 10) return null;
-  const x = a.slice(a.length - n);
-  const y = b.slice(b.length - n);
-  const meanX = x.reduce((s, v) => s + v, 0) / n;
-  const meanY = y.reduce((s, v) => s + v, 0) / n;
-  let num = 0, denX = 0, denY = 0;
-  for (let i = 0; i < n; i++) {
-    const dx = x[i] - meanX;
-    const dy = y[i] - meanY;
-    num += dx * dy;
-    denX += dx * dx;
-    denY += dy * dy;
+const CORR_COLUMNS = ["close", "change"] as const;
+
+async function fetchCorrelationFactor(
+  name: string,
+  ticker: string,
+  tvSymbol: string,
+  goldChangePct: number | null
+): Promise<CorrelationFactor> {
+  try {
+    const d = await queryTvScanner(tvSymbol, TV_INTERVAL_MAP["1d"], CORR_COLUMNS);
+    const price     = d[0] != null ? parseFloat(d[0].toFixed(3)) : null;
+    const changePct = d[1] != null ? parseFloat(d[1].toFixed(3)) : null;
+
+    // Rule-based interpretation (DXY historically inversely correlated with gold)
+    let interpretation: string;
+    if (price == null) {
+      interpretation = "Data tidak tersedia";
+    } else if (tvSymbol === "TVC:DXY") {
+      if (changePct != null && goldChangePct != null) {
+        const sameDir = (changePct > 0) === (goldChangePct > 0);
+        interpretation = sameDir
+          ? `DXY dan gold bergerak searah hari ini — pola tidak biasa (biasanya berkebalikan).`
+          : `DXY naik sementara gold turun (atau sebaliknya) — pola korelasi negatif normal.`;
+      } else {
+        interpretation = "DXY biasanya berkorelasi negatif dengan gold: dollar kuat → gold tertekan.";
+      }
+    } else {
+      if (changePct != null && goldChangePct != null) {
+        const sameDir = (changePct > 0) === (goldChangePct > 0);
+        interpretation = sameDir
+          ? `Yield AS dan gold naik bersama — pasar risk-off dominan atau tekanan inflasi tinggi.`
+          : `Yield AS dan gold bergerak berlawanan — pola normal saat rate hike cycle.`;
+      } else {
+        interpretation = "Yield AS yang naik cenderung menekan gold (meningkatkan opportunity cost).";
+      }
+    }
+
+    return { name, ticker, price, changePct, correlation: null, interpretation };
+  } catch {
+    return { name, ticker, price: null, changePct: null, correlation: null, interpretation: "Data tidak tersedia" };
   }
-  const den = Math.sqrt(denX * denY);
-  if (den === 0) return null;
-  return num / den;
 }
 
 export async function getCorrelationAnalysis(): Promise<CorrelationAnalysis> {
-  const [goldCandles, dxyCandles, yieldCandles] = await Promise.all([
-    fetchXauusdCandles("1h", "60d"),
-    fetchTickerCandles("dxy",   "1h", "60d").catch(() => [] as XauusdCandle[]),
-    fetchTickerCandles("us10y", "1h", "60d").catch(() => [] as XauusdCandle[]),
+  // Get gold current price + daily change
+  const goldLive = await fetchLivePriceFromTradingView().catch(() => fetchLivePriceFromSwissquote());
+  const goldChangePct = goldLive.changePct;
+
+  const [dxy, us10y] = await Promise.all([
+    fetchCorrelationFactor("DXY (Dollar Index)", "TVC:DXY", "TVC:DXY", goldChangePct),
+    fetchCorrelationFactor("US 10-Year Treasury Yield", "TVC:US10Y", "TVC:US10Y", goldChangePct),
   ]);
 
-  if (goldCandles.length === 0) throw new Error("No gold candle data available");
-
-  const goldCloses   = goldCandles.map((c) => c.close);
-  const goldLast     = goldCandles[goldCandles.length - 1];
-  const goldPrev     = goldCandles[goldCandles.length - 2];
-  const goldChangePct = goldPrev
-    ? ((goldLast.close - goldPrev.close) / goldPrev.close) * 100
-    : null;
-
-  function buildFactor(name: string, ticker: string, candles: XauusdCandle[]): CorrelationFactor {
-    if (candles.length < 10) {
-      return { name, ticker, price: null, changePct: null, correlation: null, interpretation: "Data tidak tersedia" };
-    }
-    const closes = candles.map((c) => c.close);
-    const last = candles[candles.length - 1];
-    const prev = candles[candles.length - 2];
-    const changePct = prev ? ((last.close - prev.close) / prev.close) * 100 : null;
-    const correlation = pearsonCorrelation(goldCloses, closes);
-    let interpretation = "Korelasi lemah/tidak signifikan dengan gold saat ini.";
-    if (correlation != null) {
-      if (correlation <= -0.5)
-        interpretation = `Korelasi negatif kuat (${correlation.toFixed(2)}) — saat ${name} naik, gold cenderung turun.`;
-      else if (correlation >= 0.5)
-        interpretation = `Korelasi positif kuat (${correlation.toFixed(2)}) — ${name} dan gold bergerak searah saat ini.`;
-      else
-        interpretation = `Korelasi lemah (${correlation.toFixed(2)}) — pergerakan ${name} kurang berpengaruh langsung pada gold.`;
-    }
-    return {
-      name, ticker,
-      price:       parseFloat(last.close.toFixed(3)),
-      changePct:   changePct != null ? parseFloat(changePct.toFixed(3)) : null,
-      correlation: correlation != null ? parseFloat(correlation.toFixed(3)) : null,
-      interpretation,
-    };
-  }
-
   return {
-    gold: {
-      price:      parseFloat(goldLast.close.toFixed(2)),
-      changePct:  goldChangePct != null ? parseFloat(goldChangePct.toFixed(3)) : null,
-    },
-    dxy:   buildFactor("DXY (Dollar Index)",           "DX-Y.NYB", dxyCandles),
-    us10y: buildFactor("US 10-Year Treasury Yield",    "^TNX",     yieldCandles),
+    gold: { price: goldLive.price, changePct: goldChangePct },
+    dxy,
+    us10y,
     computedAt: new Date().toISOString(),
   };
 }

@@ -14,8 +14,7 @@ import {
 } from "@workspace/db/schema";
 import { eq, desc, and } from "drizzle-orm";
 import {
-  fetchXauusdCandles,
-  calculateIndicators,
+  fetchXauusdIndicators,
   getMultiTimeframeAnalysis,
   summarizeTimeframeConfluence,
   getCorrelationAnalysis,
@@ -49,10 +48,9 @@ xauusdRouter.get("/live-price", (_req, res) => {
 // ─── GET /xauusd/snapshot — current price + all indicators ───────────────────
 xauusdRouter.get("/snapshot", async (_req, res) => {
   try {
-    const candles = await fetchXauusdCandles("1h", "60d");
-    const indicators = calculateIndicators(candles);
+    const indicators = await fetchXauusdIndicators("1h");
     if (!indicators) {
-      return res.status(503).json({ error: "Not enough data to calculate indicators" });
+      return res.status(503).json({ error: "TradingView Scanner returned no data" });
     }
 
     // Also get last saved snapshot for price change comparison
@@ -364,8 +362,7 @@ xauusdRouter.post("/chat", async (req, res) => {
     // Build live context from latest snapshot or live fetch
     let contextData = "";
     try {
-      const candles = await fetchXauusdCandles("1h", "60d");
-      const ind = calculateIndicators(candles);
+      const ind = await fetchXauusdIndicators("1h");
       if (ind) {
         // Get top brain insights for context
         const topInsights = await db

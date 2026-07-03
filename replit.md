@@ -21,9 +21,9 @@ pnpm install
 pnpm --filter @workspace/db run push
 ```
 
-### 3. Seed data (368 saham IDX)
+### 3. Seed data (opsional)
 ```bash
-cd artifacts/api-server && /home/runner/workspace/node_modules/.pnpm/node_modules/.bin/tsx src/scripts/seed.ts
+pnpm --filter @workspace/api-server exec tsx src/scripts/seed.ts
 ```
 
 ### 4. Jalankan workflows

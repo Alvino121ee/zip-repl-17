@@ -3,3 +3,4 @@
 - [Orval codegen command](orval-codegen.md) — run `pnpm --filter @workspace/api-spec run codegen` to regenerate API client after openapi.yaml changes.
 - [Web-only, XAUUSD-only scope](project-scope.md) — project is XAUUSD Gold AI only; all BEI/saham IDX features removed. Web frontend: 2 pages (/ = xauusd-ai, /admin). Backend: /xauusd + /admin + /health routes only.
 - [Typecheck pre-existing errors](typecheck-errors.md) — pnpm run typecheck fails with TS6305 (lib/db/api-zod dist not built) — pre-existing, not from refactor. esbuild build works fine; run `tsc --build` at root to fix before typechecking.
+- [TradingView data integration](tradingview-data.md) — Yahoo Finance replaced with TradingView Scanner API; data.tradingview.com/history is blocked on Replit servers; use Scanner POST endpoint instead.

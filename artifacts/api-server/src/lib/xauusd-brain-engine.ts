@@ -26,8 +26,7 @@ import {
 } from "@workspace/db/schema";
 import { eq, and, lt, isNull, desc, sql } from "drizzle-orm";
 import {
-  fetchXauusdCandles,
-  calculateIndicators,
+  fetchXauusdIndicators,
   fetchXauusdNews,
   getMultiTimeframeAnalysis,
   summarizeTimeframeConfluence,
@@ -166,7 +165,7 @@ async function filterNewQuestions(
   const existingHashes = await db
     .select({ hash: xauusdQuestionsLogTable.questionHash })
     .from(xauusdQuestionsLogTable);
-  const existingSet = new Set(existingHashes.map((r) => r.hash));
+  const existingSet = new Set(existingHashes.map((r: { hash: string }) => r.hash));
   return candidates.filter((c) => !existingSet.has(c.hash));
 }
 
@@ -623,11 +622,10 @@ export async function runLearningCycle(): Promise<{
   try {
     console.log("[XAUUSD Brain] Starting learning cycle...");
 
-    // 1. Fetch data & calculate indicators
-    const candles = await fetchXauusdCandles("1h", "60d");
-    const indicators = calculateIndicators(candles);
+    // 1. Fetch indicators from TradingView Scanner
+    const indicators = await fetchXauusdIndicators("1h");
     if (!indicators) {
-      return { success: false, summary: "Not enough candle data", questionsAsked: 0, insightsSaved: 0 };
+      return { success: false, summary: "TradingView Scanner returned no data", questionsAsked: 0, insightsSaved: 0 };
     }
     currentPrice = indicators.price;
 
