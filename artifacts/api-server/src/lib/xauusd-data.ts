@@ -380,6 +380,8 @@ export interface CorrelationAnalysis {
   gold: { price: number; changePct: number | null };
   dxy: CorrelationFactor;
   us10y: CorrelationFactor;
+  vix: CorrelationFactor;    // Fear index — naik → gold biasanya naik (safe haven)
+  silver: CorrelationFactor; // Korelasi positif kuat dengan gold
   computedAt: string;
 }
 
@@ -396,7 +398,7 @@ async function fetchCorrelationFactor(
     const price     = d[0] != null ? parseFloat(d[0].toFixed(3)) : null;
     const changePct = d[1] != null ? parseFloat(d[1].toFixed(3)) : null;
 
-    // Rule-based interpretation (DXY historically inversely correlated with gold)
+    // Rule-based interpretation per aset
     let interpretation: string;
     if (price == null) {
       interpretation = "Data tidak tersedia";
@@ -409,7 +411,7 @@ async function fetchCorrelationFactor(
       } else {
         interpretation = "DXY biasanya berkorelasi negatif dengan gold: dollar kuat → gold tertekan.";
       }
-    } else {
+    } else if (tvSymbol === "TVC:US10Y") {
       if (changePct != null && goldChangePct != null) {
         const sameDir = (changePct > 0) === (goldChangePct > 0);
         interpretation = sameDir
@@ -418,6 +420,39 @@ async function fetchCorrelationFactor(
       } else {
         interpretation = "Yield AS yang naik cenderung menekan gold (meningkatkan opportunity cost).";
       }
+    } else if (tvSymbol === "TVC:VIX") {
+      // VIX = fear index: naik → pasar panik → gold naik sebagai safe haven
+      if (price > 30) {
+        interpretation = `VIX ${price} — fear tinggi (>30). Pasar sangat panik, gold cenderung bullish kuat sebagai safe haven.`;
+      } else if (price > 20) {
+        interpretation = `VIX ${price} — fear moderat (20-30). Ketidakpastian meningkat, gold mendapat dukungan safe haven.`;
+      } else {
+        interpretation = `VIX ${price} — fear rendah (<20). Pasar risk-on, tekanan pada gold sebagai safe haven berkurang.`;
+      }
+      if (changePct != null) {
+        interpretation += changePct > 5
+          ? ` VIX melonjak ${changePct.toFixed(1)}% hari ini — sinyal bullish kuat untuk gold.`
+          : changePct < -5
+            ? ` VIX turun ${Math.abs(changePct).toFixed(1)}% hari ini — pasar risk-on, tekanan pada gold.`
+            : "";
+      }
+    } else if (tvSymbol === "TVC:SILVER") {
+      // Silver berkorelasi positif kuat dengan gold (biasanya 0.85-0.95)
+      if (changePct != null && goldChangePct != null) {
+        const sameDir = (changePct > 0) === (goldChangePct > 0);
+        const silverLead = Math.abs(changePct) > Math.abs(goldChangePct) * 1.2;
+        if (sameDir && silverLead) {
+          interpretation = `Silver naik lebih kuat dari gold (${changePct.toFixed(2)}% vs gold ${goldChangePct.toFixed(2)}%) — silver leading → gold berpotensi catch-up.`;
+        } else if (sameDir) {
+          interpretation = `Silver dan gold bergerak searah hari ini — konfirmasi momentum ${changePct > 0 ? "bullish" : "bearish"}.`;
+        } else {
+          interpretation = `Silver dan gold bergerak berlawanan — divergensi tidak biasa, waspadai sinyal palsu di gold.`;
+        }
+      } else {
+        interpretation = "Silver berkorelasi positif kuat dengan gold. Pergerakan silver sering leading indicator bagi gold.";
+      }
+    } else {
+      interpretation = "Data tersedia.";
     }
 
     return { name, ticker, price, changePct, correlation: null, interpretation };
@@ -431,15 +466,19 @@ export async function getCorrelationAnalysis(): Promise<CorrelationAnalysis> {
   const goldLive = await fetchLivePriceFromTradingView().catch(() => fetchLivePriceFromSwissquote());
   const goldChangePct = goldLive.changePct;
 
-  const [dxy, us10y] = await Promise.all([
+  const [dxy, us10y, vix, silver] = await Promise.all([
     fetchCorrelationFactor("DXY (Dollar Index)", "TVC:DXY", "TVC:DXY", goldChangePct),
     fetchCorrelationFactor("US 10-Year Treasury Yield", "TVC:US10Y", "TVC:US10Y", goldChangePct),
+    fetchCorrelationFactor("VIX (Fear Index)", "TVC:VIX", "TVC:VIX", goldChangePct),
+    fetchCorrelationFactor("Silver (XAGUSD)", "TVC:SILVER", "TVC:SILVER", goldChangePct),
   ]);
 
   return {
     gold: { price: goldLive.price, changePct: goldChangePct },
     dxy,
     us10y,
+    vix,
+    silver,
     computedAt: new Date().toISOString(),
   };
 }

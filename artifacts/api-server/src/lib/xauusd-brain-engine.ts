@@ -25,7 +25,7 @@ import {
   xauusdLearningLogTable,
   xauusdMacroSnapshotsTable,
 } from "@workspace/db/schema";
-import { eq, and, lt, isNull, desc, sql, gte } from "drizzle-orm";
+import { eq, and, lt, isNull, desc, sql, gte, or } from "drizzle-orm";
 import {
   fetchXauusdIndicators,
   fetchXauusdNews,
@@ -544,21 +544,84 @@ async function applyForgetCurve(): Promise<void> {
   console.log(`[XAUUSD Brain] Forget curve applied to ${entries.length} brain entries.`);
 }
 
+// ─── Brain retrieval — ambil insights relevan untuk disertakan di prompt prediksi ──
+// Prioritas 1: entries dengan market tag yang cocok dengan kondisi saat ini
+// Prioritas 2: entries dengan skor tertinggi (decayWeight × confidence)
+
+async function retrieveRelevantBrainEntries(
+  currentTags: string,
+  session: string,
+  regime: string,
+  limit = 7
+): Promise<string> {
+  try {
+    // Fetch top entries by weighted relevance score
+    const entries = await db
+      .select({
+        category: xauusdBrainTable.category,
+        title: xauusdBrainTable.title,
+        content: xauusdBrainTable.content,
+        confidence: xauusdBrainTable.confidence,
+        decayWeight: xauusdBrainTable.decayWeight,
+        marketConditionTags: xauusdBrainTable.marketConditionTags,
+      })
+      .from(xauusdBrainTable)
+      .where(eq(xauusdBrainTable.isActive, true))
+      .orderBy(desc(sql`${xauusdBrainTable.decayWeight} * ${xauusdBrainTable.confidence}`))
+      .limit(50);
+
+    if (entries.length === 0) return "";
+
+    // Score each entry by tag overlap with current market state
+    const tagSet = new Set(currentTags.split(",").filter(Boolean));
+    const sessionTag = `session_${session}`;
+    const regimeTag = `regime_${regime}`;
+
+    const scored = entries.map((e) => {
+      const entryTags = new Set((e.marketConditionTags ?? "").split(",").filter(Boolean));
+      let overlap = 0;
+      for (const t of tagSet) if (entryTags.has(t)) overlap++;
+      // Bonus untuk session/regime yang cocok
+      if (entryTags.has(sessionTag)) overlap += 2;
+      if (entryTags.has(regimeTag)) overlap += 2;
+      const score = (e.decayWeight ?? 1) * (e.confidence ?? 0.5) * (1 + overlap * 0.35);
+      return { ...e, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit);
+
+    if (top.length === 0) return "";
+
+    return `\n\n=== MEMORI AI (${top.length} insights relevan dari ${entries.length} yang dipelajari) ===\n` +
+      top.map((e, i) => {
+        const snippet = (e.content ?? "").slice(0, 220);
+        const ellipsis = (e.content ?? "").length > 220 ? "..." : "";
+        return `[${i + 1}] [${(e.category ?? "insight").toUpperCase()}] ${e.title}\n    ${snippet}${ellipsis}`;
+      }).join("\n");
+  } catch (err) {
+    console.error("[XAUUSD Brain] Brain retrieval error:", err);
+    return "";
+  }
+}
+
 // ─── Prediction maker ──────────────────────────────────────────────────────────
 
 async function makePrediction(indicators: XauusdIndicators): Promise<void> {
   const timeframeMinutes = await getPredictionTimeframeMinutes();
   const timeframeLabel = `${timeframeMinutes}m`;
 
-  // Gather multi-timeframe confluence + DXY/yield correlation context so the
-  // AI's prediction accounts for higher-timeframe trend and macro factors,
-  // not just the 1H indicators. Both are best-effort — if either external
-  // fetch fails, the prediction still proceeds using only 1H indicators.
-  // Fetch all context in parallel for speed
-  const [mtfResult, corrResult, winRateResult, newsResult] = await Promise.allSettled([
+  // ── Hitung session/regime/cluster lebih awal (tidak perlu async) ──────────
+  const tradingSession = detectTradingSession();
+  const marketRegime = detectMarketRegime(indicators);
+  const clusterLabel = computeClusterLabel(indicators);
+  const currentTags = extractMarketTags(indicators);
+
+  // Fetch semua context secara paralel termasuk brain retrieval + segmen win rate
+  const [mtfResult, corrResult, winRateResult, newsResult, brainResult, segWinRateResult] = await Promise.allSettled([
     getMultiTimeframeAnalysis(),
     getCorrelationAnalysis(),
-    // Win rate: last 50 verified predictions
+    // Win rate: last 50 verified predictions (overall)
     db.select({
       direction: xauusdPredictionsTable.direction,
       isCorrect: xauusdPredictionsTable.isCorrect,
@@ -576,6 +639,19 @@ async function makePrediction(indicators: XauusdIndicators): Promise<void> {
       .from(xauusdNewsTable)
       .orderBy(desc(xauusdNewsTable.publishedAt))
       .limit(4),
+    // Brain retrieval — insights relevan dari memori AI (Prioritas 1)
+    retrieveRelevantBrainEntries(currentTags, tradingSession, marketRegime),
+    // Segment win rate — akurasi per sesi × regime (last 200 verified)
+    db.select({
+      direction: xauusdPredictionsTable.direction,
+      isCorrect: xauusdPredictionsTable.isCorrect,
+      tradingSession: xauusdPredictionsTable.tradingSession,
+      marketRegime: xauusdPredictionsTable.marketRegime,
+    })
+      .from(xauusdPredictionsTable)
+      .where(eq(xauusdPredictionsTable.status, "verified"))
+      .orderBy(desc(xauusdPredictionsTable.predictedAt))
+      .limit(200),
   ]);
 
   let mtfContext = "";
@@ -594,9 +670,14 @@ async function makePrediction(indicators: XauusdIndicators): Promise<void> {
   let correlationContext = "";
   if (corrResult.status === "fulfilled") {
     const corr = corrResult.value;
-    const dxyChange = corr.dxy.changePct != null ? `${corr.dxy.changePct > 0 ? "+" : ""}${corr.dxy.changePct.toFixed(2)}%` : "n/a";
-    const yieldChange = corr.us10y.changePct != null ? `${corr.us10y.changePct > 0 ? "+" : ""}${corr.us10y.changePct.toFixed(2)}%` : "n/a";
-    correlationContext = `\n\n=== KORELASI MAKRO (DXY & US10Y) ===\nDXY: ${corr.dxy.price ?? "n/a"} (${dxyChange}) — ${corr.dxy.interpretation}\nUS 10Y Yield: ${corr.us10y.price ?? "n/a"}% (${yieldChange}) — ${corr.us10y.interpretation}`;
+    const fmt = (v: number | null, suffix = "") =>
+      v != null ? `${v > 0 ? "+" : ""}${v.toFixed(2)}${suffix}` : "n/a";
+    correlationContext =
+      `\n\n=== KORELASI MAKRO (DXY, US10Y, VIX, Silver) ===` +
+      `\nDXY: ${corr.dxy.price ?? "n/a"} (${fmt(corr.dxy.changePct, "%")}) — ${corr.dxy.interpretation}` +
+      `\nUS 10Y Yield: ${corr.us10y.price ?? "n/a"}% (${fmt(corr.us10y.changePct, "%")}) — ${corr.us10y.interpretation}` +
+      `\nVIX (Fear): ${corr.vix.price ?? "n/a"} (${fmt(corr.vix.changePct, "%")}) — ${corr.vix.interpretation}` +
+      `\nSilver: ${corr.silver.price ?? "n/a"} (${fmt(corr.silver.changePct, "%")}) — ${corr.silver.interpretation}`;
   }
 
   let winRateContext = "";
@@ -624,20 +705,58 @@ async function makePrediction(indicators: XauusdIndicators): Promise<void> {
       .join("\n")}`;
   }
 
+  // ── Prioritas 1: Brain context — memori AI yang relevan ────────────────────
+  const brainContext = brainResult.status === "fulfilled" ? brainResult.value : "";
+
+  // ── Prioritas 3: Segment win rate — akurasi per kondisi pasar saat ini ─────
+  let segmentWinRateContext = "";
+  if (segWinRateResult.status === "fulfilled" && segWinRateResult.value.length >= 10) {
+    const all = segWinRateResult.value;
+    const sameSession = all.filter((p) => p.tradingSession === tradingSession);
+    const sameRegime = all.filter((p) => p.marketRegime === marketRegime);
+    const sameBoth = all.filter((p) => p.tradingSession === tradingSession && p.marketRegime === marketRegime);
+    const calcWR = (arr: typeof all) => {
+      if (arr.length < 5) return null;
+      const correct = arr.filter((p) => p.isCorrect === true).length;
+      return { wr: ((correct / arr.length) * 100).toFixed(0), n: arr.length };
+    };
+    const wrBoth = calcWR(sameBoth);
+    const wrSession = calcWR(sameSession);
+    const wrRegime = calcWR(sameRegime);
+    const parts: string[] = [];
+    if (wrBoth) parts.push(`Sesi ${tradingSession} + regime ${marketRegime}: ${wrBoth.wr}% akurat (${wrBoth.n} prediksi)`);
+    else {
+      if (wrSession) parts.push(`Sesi ${tradingSession}: ${wrSession.wr}% akurat (${wrSession.n} prediksi)`);
+      if (wrRegime) parts.push(`Regime ${marketRegime}: ${wrRegime.wr}% akurat (${wrRegime.n} prediksi)`);
+    }
+    if (parts.length > 0) {
+      segmentWinRateContext = `\n\n=== WIN RATE PER KONDISI PASAR SAAT INI ===\n${parts.join("\n")}\nJika win rate segmen <50%, WAJIB turunkan confidence 10-15%.`;
+    }
+  }
+
+  // ── Sentiment vote dari berita (untuk ensemble + sessionRegimeContext) ─────
+  const newsForSentiment = newsResult.status === "fulfilled" ? newsResult.value : [];
+  const sentimentVote = computeSentimentVote(newsForSentiment);
+
+  const sessionRegimeContext = `\n\n=== KONTEKS PASAR ===\nSesi Trading: ${tradingSession.toUpperCase()} | Market Regime: ${marketRegime.toUpperCase()} | Cluster: ${clusterLabel}\nSentimen Berita: ${sentimentVote.direction.toUpperCase()} (${(sentimentVote.confidence * 100).toFixed(0)}% confident)`;
+
   const systemPrompt = `Kamu adalah AI trading system untuk XAUUSD dengan kemampuan prediksi multi-faktor.
 Buat prediksi arah harga ${timeframeMinutes} menit ke depan berdasarkan:
 1. Indikator teknikal 1H (RSI, EMA, MACD, BB, ATR)
 2. Konfluens multi-timeframe (1H/4H/Harian)
-3. Faktor makro (DXY, US 10Y Yield)
+3. Faktor makro (DXY, US 10Y Yield, VIX fear index, Silver korelasi)
 4. Sentimen berita terbaru
-5. Win rate historis sistem — kalibrasi confidence berdasarkan akurasi terbaru
+5. Win rate historis (overall dan per segmen kondisi pasar)
+6. Memori AI dari pembelajaran sebelumnya — WAJIB dipertimbangkan sebelum memutuskan
 
 Aturan prediksi:
-- Confidence >0.75 hanya jika minimal 4 faktor dari 5 align searah
+- Confidence >0.75 hanya jika minimal 4 faktor dari 6 align searah
 - Confidence 0.55-0.75 jika 3 faktor align
 - Confidence <0.55 jika sinyal mixed atau sideways
+- Jika win rate segmen saat ini <50%, WAJIB turunkan confidence 10-15%
 - Entry zone HARUS berdasarkan ATR (entryLow/entryHigh maks ±0.4×ATR dari harga sekarang)
 - Stop Loss HARUS 1.5×ATR dari entry
+- PERHATIKAN memori AI: jika ada pola mirip kondisi saat ini yang sebelumnya terbukti salah, sesuaikan prediksi
 
 Jawab HANYA dalam format JSON:
 {
@@ -647,11 +766,8 @@ Jawab HANYA dalam format JSON:
   "entryHigh": <batas atas entry USD>,
   "stopLoss": <harga stop loss USD>,
   "confidence": <0.0-1.0 berdasarkan jumlah faktor yang align>,
-  "reasoning": "<3-4 kalimat — sebutkan faktor MTF, DXY/yield, news sentiment, dan win rate yang mempengaruhi keputusan>"
+  "reasoning": "<3-4 kalimat — sebutkan MTF, DXY/VIX/Silver, news, win rate segmen, dan insight dari memori AI>"
 }`;
-
-  // Feature 4 & 5: Session + Regime context untuk AI
-  const sessionRegimeContext = `\n\n=== KONTEKS PASAR ===\nSesi Trading: ${tradingSession.toUpperCase()} | Market Regime: ${marketRegime.toUpperCase()} | Cluster: ${clusterLabel}\nSentimen Berita: ${sentimentVote.direction.toUpperCase()} (${(sentimentVote.confidence * 100).toFixed(0)}% confident)`;
 
   const userMsg = `=== INDIKATOR 1H XAUUSD ===
 Harga: ${indicators.price}
@@ -661,7 +777,7 @@ MACD: line=${indicators.macdLine}, signal=${indicators.macdSignal}, hist=${indic
 BB: upper=${indicators.bbUpper}, mid=${indicators.bbMiddle}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
 ATR14: ${indicators.atr14}
 Trend: ${indicators.trend} | EMA Alignment: ${indicators.emaAlignment}
-Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${winRateContext}${newsContext}${sessionRegimeContext}
+Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${winRateContext}${newsContext}${sessionRegimeContext}${segmentWinRateContext}${brainContext}
 
 Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks lain.`;
 
@@ -671,14 +787,7 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
   // and also used to sanity-check the AI's numbers.
   const ruleBased = computeRuleBasedPrediction(indicators);
 
-  // ── Features 4, 5, 7: Session / Regime / Cluster ─────────────────────────
-  const tradingSession = detectTradingSession();
-  const marketRegime = detectMarketRegime(indicators);
-  const clusterLabel = computeClusterLabel(indicators);
-
-  // ── Feature 1 (extended): Sentiment Vote — agen ke-3 dari ensemble ────────
-  const newsForSentiment = newsResult.status === "fulfilled" ? newsResult.value : [];
-  const sentimentVote = computeSentimentVote(newsForSentiment);
+  // (session/regime/cluster dan sentimentVote sudah dihitung lebih awal)
 
   let pred: {
     direction: string;
@@ -873,12 +982,36 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
             content: critique,
             confidence: 0.8,
             sourceQuestion: `Why was ${pred.direction} prediction from ${pred.priceAtPrediction} wrong?`,
-            marketConditionTags: pred.reasoning?.slice(0, 100) ?? "",
+            marketConditionTags: [
+              `dir_${pred.direction}`,
+              pred.tradingSession ? `session_${pred.tradingSession}` : null,
+              pred.marketRegime ? `regime_${pred.marketRegime}` : null,
+            ].filter(Boolean).join(","),
           });
         }
       } catch (err) {
         console.error("[XAUUSD Brain] Self-critique error:", err);
       }
+
+      // ── Prioritas 2: Reinforcement negatif — lemahkan entries dengan arah yang salah ──
+      // Prediksi SALAH → turunkan decayWeight entries yang menandai arah yang salah (floor 0.1)
+      try {
+        const wrongDirTag = `dir_${pred.direction}`; // arah yang salah
+        await db.update(xauusdBrainTable)
+          .set({
+            decayWeight: sql`GREATEST(0.1, ${xauusdBrainTable.decayWeight} * 0.88)`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(xauusdBrainTable.isActive, true),
+              sql`${xauusdBrainTable.marketConditionTags} ILIKE ${"%" + wrongDirTag + "%"}`
+            )
+          );
+      } catch (err) {
+        console.error("[XAUUSD Brain] Negative reinforcement error:", err);
+      }
+
       // Always mark prediction as resolved — never leave stuck in pending
       await db
         .update(xauusdPredictionsTable)
@@ -906,6 +1039,9 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
               ? `macd_${String(ind.macdSignalType)}` : null,
             `dir_${pred.direction}`,
             `trend_${ind.trend ?? "unknown"}`,
+            // Tag session + regime agar brain retrieval bonus aktif
+            pred.tradingSession ? `session_${pred.tradingSession}` : null,
+            pred.marketRegime ? `regime_${pred.marketRegime}` : null,
           ].filter(Boolean).join(",");
 
           const rsiVal = typeof ind.rsi14 === "number" ? ind.rsi14.toFixed(1) : "-";
@@ -928,6 +1064,34 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
         } catch (err) {
           console.error("[XAUUSD Brain] Success pattern save error:", err);
         }
+      }
+
+      // ── Prioritas 2: Reinforcement positif — kuatkan brain entries yang relevan ──
+      // Prediksi BENAR → naikkan decayWeight entries dengan tag yang cocok (max 1.0)
+      try {
+        const ind = (pred.indicatorsAtPrediction ?? {}) as Record<string, unknown>;
+        const matchTags = [
+          ind.emaAlignment === "bullish_stack" ? "ema_bullish"
+            : ind.emaAlignment === "bearish_stack" ? "ema_bearish" : "ema_mixed",
+          `dir_${pred.direction}`,
+          `trend_${String(ind.trend ?? "unknown")}`,
+        ].filter(Boolean);
+        for (const tag of matchTags) {
+          await db.update(xauusdBrainTable)
+            .set({
+              decayWeight: sql`LEAST(1.0, ${xauusdBrainTable.decayWeight} * 1.12)`,
+              usageCount: sql`${xauusdBrainTable.usageCount} + 1`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(xauusdBrainTable.isActive, true),
+                sql`${xauusdBrainTable.marketConditionTags} ILIKE ${"%" + tag + "%"}`
+              )
+            );
+        }
+      } catch (err) {
+        console.error("[XAUUSD Brain] Positive reinforcement error:", err);
       }
 
       await db
