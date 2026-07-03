@@ -405,6 +405,35 @@ export function detectTradingSession(): "asia" | "london" | "new_york" | "overla
   return "asia";
 }
 
+// ─── Market Hours Detector ─────────────────────────────────────────────────────
+// XAUUSD diperdagangkan 24/5 — buka Minggu 22:00 UTC, tutup Jumat 21:00 UTC.
+// Jangan buat prediksi saat market tutup (Sabtu + Minggu pagi + Jumat malam).
+
+export function isXauusdMarketOpen(): { open: boolean; reason: string; session: string | null } {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0=Minggu, 1=Sen, ..., 5=Jumat, 6=Sabtu
+  const h = now.getUTCHours();
+  const m = now.getUTCMinutes();
+  const timeUTC = h + m / 60;
+
+  // Sabtu: selalu tutup
+  if (day === 6) {
+    return { open: false, reason: "Market tutup (Sabtu)", session: null };
+  }
+  // Minggu sebelum 22:00 UTC: tutup
+  if (day === 0 && timeUTC < 22) {
+    const minsLeft = Math.round((22 - timeUTC) * 60);
+    return { open: false, reason: `Market buka Minggu 22:00 UTC (${minsLeft} menit lagi)`, session: null };
+  }
+  // Jumat setelah 21:00 UTC: tutup
+  if (day === 5 && timeUTC >= 21) {
+    return { open: false, reason: "Market tutup (Jumat setelah 21:00 UTC)", session: null };
+  }
+
+  const session = detectTradingSession();
+  return { open: true, reason: `Sesi ${session.replace(/_/g, " ").toUpperCase()} aktif`, session };
+}
+
 // ─── Feature 5: Market Regime Detector ───────────────────────────────────────
 // Klasifikasikan kondisi pasar: Trending / Ranging / Volatile
 // menggunakan ATR% dan EMA alignment
@@ -609,8 +638,14 @@ async function retrieveRelevantBrainEntries(
 // ─── Prediction maker ──────────────────────────────────────────────────────────
 
 async function makePrediction(indicators: XauusdIndicators): Promise<void> {
-  const timeframeMinutes = await getPredictionTimeframeMinutes();
-  const timeframeLabel = `${timeframeMinutes}m`;
+  // Jangan buat prediksi saat market XAUUSD tutup (weekend / Jumat malam)
+  const marketStatus = isXauusdMarketOpen();
+  if (!marketStatus.open) {
+    console.log(`[XAUUSD Brain] Prediksi dilewati — ${marketStatus.reason}`);
+    return;
+  }
+
+  const timeframeLabel = "H1"; // validasi berdasarkan SL/TP, bukan waktu
 
   // ── Hitung session/regime/cluster lebih awal (tidak perlu async) ──────────
   const tradingSession = detectTradingSession();
@@ -742,7 +777,7 @@ async function makePrediction(indicators: XauusdIndicators): Promise<void> {
   const sessionRegimeContext = `\n\n=== KONTEKS PASAR ===\nSesi Trading: ${tradingSession.toUpperCase()} | Market Regime: ${marketRegime.toUpperCase()} | Cluster: ${clusterLabel}\nSentimen Berita: ${sentimentVote.direction.toUpperCase()} (${(sentimentVote.confidence * 100).toFixed(0)}% confident)`;
 
   const systemPrompt = `Kamu adalah AI trading system untuk XAUUSD dengan kemampuan prediksi multi-faktor.
-Buat prediksi arah harga ${timeframeMinutes} menit ke depan berdasarkan:
+Buat prediksi arah harga berikutnya (validasi saat TP atau SL tercapai) berdasarkan:
 1. Indikator teknikal 1H (RSI, EMA, MACD, BB, ATR)
 2. Konfluens multi-timeframe (1H/4H/Harian)
 3. Faktor makro (DXY, US 10Y Yield, VIX fear index, Silver korelasi)
@@ -780,7 +815,7 @@ ATR14: ${indicators.atr14}
 Trend: ${indicators.trend} | EMA Alignment: ${indicators.emaAlignment}
 Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${winRateContext}${newsContext}${sessionRegimeContext}${segmentWinRateContext}${brainContext}
 
-Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks lain.`;
+Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
 
   // Always compute the rule-based prediction first (real technical analysis
   // from ATR/support/resistance/EMA/RSI/MACD) — this is the source of truth
@@ -832,7 +867,8 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
   }
 
   try {
-    const verifyAt = new Date(Date.now() + timeframeMinutes * 60 * 1000);
+    // max 24 jam — validasi utama via SL/TP, ini hanya fallback kadaluarsa
+    const verifyAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
     const targetPrice = pred.targetPrice ?? ruleBased.targetPrice;
@@ -940,31 +976,73 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
 
 async function verifyOldPredictions(currentPrice: number): Promise<{ checked: number; wrong: number }> {
   const now = new Date();
+
+  // Ambil SEMUA prediksi pending — validasi lewat SL/TP, bukan waktu
   const pending = await db
     .select()
     .from(xauusdPredictionsTable)
-    .where(
-      and(
-        eq(xauusdPredictionsTable.status, "pending"),
-        lt(xauusdPredictionsTable.verifyAt, now)
-      )
-    )
-    .limit(5);
+    .where(eq(xauusdPredictionsTable.status, "pending"))
+    .limit(30);
 
   if (pending.length === 0) return { checked: 0, wrong: 0 };
 
   let wrongCount = 0;
+  let checkedCount = 0;
 
   for (const pred of pending) {
+    const sl = pred.stopLoss;
+    const tp = pred.targetPrice;
     const priceDiff = currentPrice - pred.priceAtPrediction;
     const pricePct = priceDiff / pred.priceAtPrediction;
 
+    let resolved = false;
+    let isCorrect: boolean | null = null;
+    let resolveReason = "";
+
+    // ── Validasi berdasarkan SL/TP (price-level) ──────────────────────────────
+    if (pred.direction === "up") {
+      if (tp != null && currentPrice >= tp) {
+        resolved = true; isCorrect = true;
+        resolveReason = `TP tercapai ($${currentPrice.toFixed(2)} ≥ $${tp.toFixed(2)})`;
+      } else if (sl != null && currentPrice <= sl) {
+        resolved = true; isCorrect = false;
+        resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≤ $${sl.toFixed(2)})`;
+      }
+    } else if (pred.direction === "down") {
+      if (tp != null && currentPrice <= tp) {
+        resolved = true; isCorrect = true;
+        resolveReason = `TP tercapai ($${currentPrice.toFixed(2)} ≤ $${tp.toFixed(2)})`;
+      } else if (sl != null && currentPrice >= sl) {
+        resolved = true; isCorrect = false;
+        resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≥ $${sl.toFixed(2)})`;
+      }
+    } else {
+      // sideways: SL/TP biasanya tidak tajam — anggap selesai jika harga sudah jauh (>0.5%)
+      if (Math.abs(pricePct) > 0.005) {
+        resolved = true; isCorrect = false;
+        resolveReason = `Harga bergerak terlalu jauh dari sideways (${(pricePct * 100).toFixed(2)}%)`;
+      }
+    }
+
+    // ── Fallback waktu: max 24 jam jika SL/TP belum kena ─────────────────────
+    if (!resolved && pred.verifyAt && now > new Date(pred.verifyAt)) {
+      resolved = true;
+      resolveReason = "Kadaluarsa 24 jam tanpa hit SL/TP";
+    }
+
+    // SL/TP belum kena, prediksi masih terbuka — lewati
+    if (!resolved) continue;
+
     const actualDirection =
       pricePct > 0.002 ? "up" : pricePct < -0.002 ? "down" : "sideways";
-    const isCorrect = actualDirection === pred.direction;
+    if (isCorrect === null) isCorrect = actualDirection === pred.direction;
+
+    checkedCount++;
+    if (!isCorrect) wrongCount++;
+
+    console.log(`[XAUUSD Brain] Prediksi #${pred.id} ${pred.direction.toUpperCase()} → ${isCorrect ? "✅ BENAR" : "❌ SALAH"} | ${resolveReason}`);
 
     if (!isCorrect) {
-      wrongCount++;
       // Self-critique: ask DeepSeek why the prediction was wrong
       const sysPr = `Kamu adalah AI trading coach untuk XAUUSD. Analisis mengapa prediksi salah dan berikan pelajaran spesifik.`;
       const msg = `Prediksi saya ${pred.direction} dari $${pred.priceAtPrediction} dengan alasan: "${pred.reasoning}"
@@ -1108,7 +1186,7 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
     }
   }
 
-  return { checked: pending.length, wrong: wrongCount };
+  return { checked: checkedCount, wrong: wrongCount };
 }
 
 // ─── Feature 3: Adaptive Question Generator ────────────────────────────────────

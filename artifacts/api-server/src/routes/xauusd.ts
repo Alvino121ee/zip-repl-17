@@ -28,6 +28,7 @@ import {
   detectTradingSession,
   detectMarketRegime,
   computeClusterLabel,
+  isXauusdMarketOpen,
 } from "../lib/xauusd-brain-engine.js";
 import { chatWithAgent } from "../lib/agent-engine.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
@@ -386,6 +387,15 @@ xauusdRouter.get("/learning-log", async (req, res) => {
 // ─── GET /xauusd/engine-status — is the brain running? ───────────────────────
 xauusdRouter.get("/engine-status", (_req, res) => {
   return res.json(getEngineStatus());
+});
+
+// ─── GET /xauusd/market-status — apakah market XAUUSD sedang buka? ──────────
+xauusdRouter.get("/market-status", (_req, res) => {
+  const status = isXauusdMarketOpen();
+  return res.json({
+    ...status,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // ─── Auth guards ──────────────────────────────────────────────────────────────
