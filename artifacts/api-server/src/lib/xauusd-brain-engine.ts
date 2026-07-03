@@ -37,7 +37,7 @@ import { getDeepseekApiKey, getPredictionTimeframeMinutes } from "./xauusd-setti
 import { notifyNewPrediction } from "./xauusd-whatsapp.js";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
-const LEARN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const LEARN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes — faster learning
 const SPIKE_THRESHOLD = 0.003; // 0.3% price change = spike
 const DEEPSEEK_TIMEOUT_MS = 45_000; // 45s timeout per DeepSeek call
 
@@ -98,50 +98,108 @@ async function queryDeepSeek(
 // ─── Question generator ────────────────────────────────────────────────────────
 
 const QUESTION_TEMPLATES = [
-  // RSI-based
+  // ── RSI ──────────────────────────────────────────────────────────────────────
   (i: XauusdIndicators) =>
-    `Dengan RSI XAUUSD saat ini di ${i.rsi14?.toFixed(1)} dan harga $${i.price}, apa probabilitas reversal dalam 4 jam ke depan dan bagaimana trader profesional biasanya merespons kondisi RSI ini?`,
+    `Dengan RSI XAUUSD saat ini di ${i.rsi14?.toFixed(1)} dan harga ${i.price}, apa probabilitas reversal dalam 4 jam ke depan dan bagaimana trader profesional biasanya merespons kondisi RSI ini?`,
   (i: XauusdIndicators) =>
-    `RSI XAUUSD ${i.rsi14?.toFixed(1)} dengan EMA9 $${i.ema9} dan EMA21 $${i.ema21}. Apa sinyal trading yang paling valid dari kombinasi indikator ini menurut analisis teknikal gold trading?`,
-  // EMA-based
+    `RSI XAUUSD ${i.rsi14?.toFixed(1)} dengan EMA9 ${i.ema9} dan EMA21 ${i.ema21}. Apa sinyal trading yang paling valid dari kombinasi indikator ini? Kapan RSI divergen dari harga dan apa artinya?`,
   (i: XauusdIndicators) =>
-    `EMA9 XAUUSD (${i.ema9}) vs EMA21 (${i.ema21}) vs EMA50 (${i.ema50}) — alignment saat ini adalah ${i.emaAlignment}. Jelaskan implikasi momentum jangka menengah dan strategi entry/exit optimal.`,
+    `RSI XAUUSD ${i.rsi14?.toFixed(1)} berada di zona ${i.rsiSignal}. Jelaskan perbedaan antara RSI overbought dalam trend naik kuat vs overbought saat reversal — bagaimana cara membedakannya dengan konfirmasi candlestick?`,
   (i: XauusdIndicators) =>
-    `Harga XAUUSD $${i.price} sedang ${i.price > (i.ema200 ?? 0) ? "di atas" : "di bawah"} EMA200 ($${i.ema200}). Apa makna jangka panjang dari posisi ini dan kapan reversal biasanya terjadi pada kasus serupa?`,
-  // MACD-based
+    `Saat RSI XAUUSD di ${i.rsi14?.toFixed(1)} dan Bollinger Band width ${i.bbWidth?.toFixed(2)}%, apakah ada potensi squeeze breakout? Jelaskan kapan RSI ekstrem + Bollinger squeeze menghasilkan setup terbaik di gold.`,
+
+  // ── EMA / Trend ───────────────────────────────────────────────────────────────
   (i: XauusdIndicators) =>
-    `MACD XAUUSD: line=${i.macdLine?.toFixed(3)}, signal=${i.macdSignal?.toFixed(3)}, histogram=${i.macdHistogram?.toFixed(3)}. Signal type: ${i.macdSignalType}. Bagaimana interpretasi divergensi MACD vs price action di gold market?`,
-  // Bollinger Bands
+    `EMA9 XAUUSD (${i.ema9}) vs EMA21 (${i.ema21}) vs EMA50 (${i.ema50}) — alignment saat ini ${i.emaAlignment}. Jelaskan strategi "EMA fan" untuk gold dan kapan konfluens EMA paling reliable sebagai sinyal entry.`,
   (i: XauusdIndicators) =>
-    `Bollinger Bands XAUUSD: upper=$${i.bbUpper?.toFixed(2)}, middle=$${i.bbMiddle?.toFixed(2)}, lower=$${i.bbLower?.toFixed(2)}, width=${i.bbWidth?.toFixed(2)}%. Harga saat ini $${i.price}. Apa strategi squeeze breakout yang paling efektif untuk XAUUSD?`,
-  // Support/Resistance
+    `Harga XAUUSD ${i.price} berada ${i.price > (i.ema200 ?? 0) ? "di atas" : "di bawah"} EMA200 (${i.ema200}). Apa bias jangka panjang dari posisi ini? Kapan setup counter-trend trade aman dilakukan jika price jauh dari EMA200?`,
   (i: XauusdIndicators) =>
-    `XAUUSD mendekati resistance $${i.resistanceLevel?.toFixed(2)} dengan support di $${i.supportLevel?.toFixed(2)}. RSI ${i.rsi14?.toFixed(1)}, ATR ${i.atr14?.toFixed(2)}. Berapa risk:reward ratio optimal untuk setup ini?`,
-  // Trend-based
+    `Dengan EMA alignment ${i.emaAlignment} di XAUUSD, apa teknik terbaik untuk entry pullback? Jelaskan 3 level pullback ideal (EMA9, EMA21, EMA50) untuk trade dengan trend yang ada.`,
   (i: XauusdIndicators) =>
-    `Trend XAUUSD saat ini: ${i.trend}, dengan EMA alignment ${i.emaAlignment}. Faktor makro apa (DXY, yield treasury, inflasi) yang paling berpengaruh pada gold saat trend ${i.trend} seperti ini?`,
-  // ATR volatility
+    `EMA50 XAUUSD di ${i.ema50} dan EMA200 di ${i.ema200}. Harga ${i.price}. Seberapa jauh harga biasanya bisa jatuh ke EMA50 sebelum bounce saat uptrend? Berikan angka statistik historis jika memungkinkan.`,
+
+  // ── MACD ─────────────────────────────────────────────────────────────────────
   (i: XauusdIndicators) =>
-    `ATR14 XAUUSD saat ini ${i.atr14?.toFixed(2)} (${((i.atr14 ?? 0) / i.price * 100).toFixed(3)}% dari harga). Ini termasuk volatilitas tinggi atau rendah historisnya? Bagaimana pengaruhnya pada ukuran posisi optimal?`,
-  // Spike analysis
+    `MACD XAUUSD: line=${i.macdLine?.toFixed(3)}, signal=${i.macdSignal?.toFixed(3)}, histogram=${i.macdHistogram?.toFixed(3)} (${i.macdSignalType}). Bagaimana cara menggunakan MACD histogram untuk mengukur kekuatan momentum gold? Kapan MACD divergence lebih valid dari cross?`,
   (i: XauusdIndicators) =>
-    `Sebutkan 5 pola teknikal paling reliabel di XAUUSD/Gold yang memiliki win rate di atas 65%. Untuk setiap pola, jelaskan kondisi RSI (${i.rsi14?.toFixed(1)} saat ini) dan EMA yang mendukungnya.`,
-  // Multi-timeframe
+    `MACD XAUUSD signal type: ${i.macdSignalType}. Jelaskan perbedaan win rate MACD cross di trending market vs ranging market untuk XAUUSD. Bagaimana mengkonfirmasi dengan volume agar tidak terjebak false signal?`,
+
+  // ── Bollinger Bands ───────────────────────────────────────────────────────────
   (i: XauusdIndicators) =>
-    `Apa strategi multi-timeframe analysis terbaik untuk trading XAUUSD dengan modal kecil? Saat ini: H1 RSI=${i.rsi14?.toFixed(1)}, trend=${i.trend}. Timeframe mana yang paling kritis untuk entry?`,
-  // News impact
+    `Bollinger Bands XAUUSD: upper=${i.bbUpper?.toFixed(2)}, middle=${i.bbMiddle?.toFixed(2)}, lower=${i.bbLower?.toFixed(2)}, width=${i.bbWidth?.toFixed(2)}%. Harga saat ini ${i.price}. Strategi apa yang paling optimal: mean reversion ke BB middle, atau breakout melewati BB upper/lower?`,
+  (i: XauusdIndicators) =>
+    `BB width XAUUSD ${i.bbWidth?.toFixed(2)}% menunjukkan ${(i.bbWidth ?? 0) < 2 ? "squeeze (volatilitas rendah)" : "volatilitas normal/tinggi"}. Sebutkan setup breakout terbaik pasca BB squeeze di gold, termasuk volume dan indikator konfirmasi yang dibutuhkan.`,
+
+  // ── Support / Resistance ───────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `XAUUSD: support ${i.supportLevel?.toFixed(2)}, resistance ${i.resistanceLevel?.toFixed(2)}, harga ${i.price}, ATR ${i.atr14?.toFixed(2)}. Hitung risk:reward untuk trade buy dari support menuju resistance. Berapa SL dan TP idealnya berdasarkan ATR?`,
+  (i: XauusdIndicators) =>
+    `Jarak harga XAUUSD ${i.price} ke resistance ${i.resistanceLevel?.toFixed(2)} adalah ${((i.resistanceLevel ?? i.price) - i.price).toFixed(2)}. Berapa pips yang masih "layak" untuk entry buy, dan kapan setup ini harus dibatalkan karena terlalu dekat dengan resistance?`,
+  (i: XauusdIndicators) =>
+    `Level support ${i.supportLevel?.toFixed(2)} di XAUUSD. RSI saat ini ${i.rsi14?.toFixed(1)}. Bagaimana cara mengidentifikasi support yang kuat vs support yang lemah? Apa perbedaan antara "test support" dan "breakdown support" dari sisi price action?`,
+
+  // ── ATR & Volatility ───────────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `ATR14 XAUUSD ${i.atr14?.toFixed(2)} (${((i.atr14 ?? 0) / i.price * 100).toFixed(3)}% dari harga). Jelaskan secara detail metode ATR-based position sizing: cara menghitung lot size untuk account 10K USD dengan risiko max 2% per trade di harga gold saat ini.`,
+  (i: XauusdIndicators) =>
+    `Dengan ATR XAUUSD ${i.atr14?.toFixed(2)}, di mana stoploss dan takeprofit ideal untuk: (1) scalping 15-30 menit, (2) swing trading 4-8 jam, (3) positional trade 1-3 hari? Berikan multiplier ATR yang optimal untuk setiap gaya trading.`,
+
+  // ── Multi-timeframe ────────────────────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Strategi multi-timeframe untuk XAUUSD: H1 RSI=${i.rsi14?.toFixed(1)}, trend=${i.trend}. Jelaskan metode "Top-Down Analysis" — bagaimana menggunakan Daily timeframe untuk bias, H4 untuk setup, H1 untuk entry, dan 15M untuk timing presisi.`,
+  (i: XauusdIndicators) =>
+    `Saat trend H1 XAUUSD adalah ${i.trend} dengan EMA alignment ${i.emaAlignment}, bagaimana jika Daily trend berlawanan? Jelaskan cara mengelola konflik timeframe dan kapan sinyal Daily lebih kuat dari H1 untuk gold.`,
+
+  // ── Pola Teknikal ─────────────────────────────────────────────────────────────
   () =>
-    `Jelaskan hubungan antara data NFP (Non-Farm Payroll) Amerika, kebijakan Fed, dan pergerakan harga gold/XAUUSD. Berapa basis poin pergerakan rata-rata XAUUSD setelah rilis NFP?`,
-  // Session timing
+    `Sebutkan 5 pola candlestick paling reliabel untuk XAUUSD dengan win rate >65%. Untuk setiap pola: kondisi market ideal, volume konfirmasi yang dibutuhkan, dan target minimum yang realistis.`,
   () =>
-    `Di jam berapa (WIB/GMT) volatilitas XAUUSD paling tinggi dan paling rendah? Bagaimana strategi trading yang berbeda untuk London session vs New York session vs Asian session?`,
-  // Psychology
-  () =>
-    `Apa kesalahan psikologi trading paling umum yang dilakukan retail trader di XAUUSD? Bagaimana cara mendeteksi dan menghindarinya menggunakan indikator teknikal?`,
-  // Risk management
+    `Jelaskan pola "Smart Money Concepts" (SMC) di XAUUSD: apa itu Order Block, Fair Value Gap (FVG), dan Change of Character (ChoCH)? Bagaimana retail trader bisa menggunakannya untuk entry timing yang lebih presisi?`,
   (i: XauusdIndicators) =>
-    `Dengan ATR XAUUSD ${i.atr14?.toFixed(2)}, di mana sebaiknya stoploss dan takeprofit ditempatkan untuk trade buy/sell? Jelaskan metode ATR-based position sizing untuk gold.`,
-];
+    `Harga XAUUSD saat ini ${i.price} dengan BB middle ${i.bbMiddle?.toFixed(2)}. Jelaskan 3 setup "mean reversion" terbaik di gold — kapan bounce dari EMA atau BB middle paling reliable dan faktor apa yang menentukan strength bounce-nya?`,
+
+  // ── Makro & Fundamental ────────────────────────────────────────────────────────
+  () =>
+    `Jelaskan mekanisme transmisi kebijakan Fed pada harga gold: dari keputusan FOMC → DXY → real yield → XAUUSD. Berapa basis poin pergerakan rata-rata XAUUSD setelah hawkish vs dovish surprise dari Fed?`,
+  () =>
+    `Bagaimana DXY mempengaruhi XAUUSD dalam berbagai skenario: (1) DXY naik saat inflasi tinggi, (2) DXY naik karena safe haven flow, (3) DXY turun saat resesi? Apakah korelasi DXY-gold selalu negatif atau ada pengecualian?`,
+  () =>
+    `Jelaskan pengaruh US Treasury 10-year yield terhadap gold. Mengapa "real yield" (nominal yield - inflasi) lebih penting dari nominal yield? Di level real yield berapa gold biasanya paling bullish/bearish?`,
+  () =>
+    `NFP (Non-Farm Payroll), CPI, dan FOMC — urutkan 3 event ekonomi ini berdasarkan dampak rata-rata terhadap XAUUSD. Jelaskan strategi trading news: kapan masuk sebelum rilis, saat rilis, atau setelah spike awal reda?`,
+
+  // ── Session & Timing ───────────────────────────────────────────────────────────
+  () =>
+    `Volatilitas XAUUSD per sesi: Asian (06:00-14:00 WIB), London (15:00-21:00 WIB), New York (20:30-03:00 WIB). Berikan range pip rata-rata per sesi dan strategi terbaik untuk setiap sesi. Sesi overlap London-NY kapan tepatnya?`,
+  () =>
+    `Bagaimana pola pergerakan XAUUSD pada hari Senin vs Jumat? Apakah ada "Monday effect" atau "Friday effect" yang terukur? Hari apa dalam seminggu yang paling baik untuk open posisi baru di gold?`,
+
+  // ── Psikologi & Risk ──────────────────────────────────────────────────────────
+  () =>
+    `5 kesalahan terbesar retail trader di XAUUSD: FOMO entry, revenge trading, overleverage, tidak pakai SL, dan averaging loss. Untuk setiap kesalahan, berikan solusi konkret berbasis rule trading yang bisa langsung diterapkan.`,
+  () =>
+    `Jelaskan konsep "risiko ruin" di trading gold dengan leverage. Jika modal $10.000 dengan risiko 5% per trade, berapa probabilitas kehilangan 50% modal setelah 20 trade berturut-turut yang kalah? Mengapa 1-2% risiko per trade sangat krusial?`,
+  (i: XauusdIndicators) =>
+    `XAUUSD dengan ATR ${i.atr14?.toFixed(2)} — bagaimana trailing stop yang optimal untuk trade swing: apakah menggunakan ATR trailing, EMA trailing (${i.ema21?.toFixed(2)}), atau persentase tetap? Jelaskan pro dan kontra setiap metode.`,
+
+  // ── Pattern Recognition & Entry ───────────────────────────────────────────────
+  (i: XauusdIndicators) =>
+    `Kondisi saat ini: harga ${i.price}, RSI ${i.rsi14?.toFixed(1)}, MACD hist ${i.macdHistogram?.toFixed(3)}, BB width ${i.bbWidth?.toFixed(2)}%. Berdasarkan kombinasi ini, pola market apa yang paling mungkin terjadi dalam 2-4 jam ke depan? Jelaskan skenario bullish, bearish, dan sideways beserta probabilitasnya.`,
+  (i: XauusdIndicators) =>
+    `Jelaskan strategi "breakout retest" di XAUUSD: setelah resistance ${i.resistanceLevel?.toFixed(2)} ditembus, kapan dan bagaimana cara entry saat retest? Berapa konfirmasi yang dibutuhkan dan di mana stop loss ditempatkan?`,
+
+  // ── Manajemen Posisi ──────────────────────────────────────────────────────────
+  () =>
+    `Apa strategi terbaik untuk "scale in" dan "scale out" di XAUUSD? Jelaskan pendekatan pyramiding yang aman — kapan menambah posisi yang profit, berapa ukuran lot tambahan, dan bagaimana mengelola SL keseluruhan?`,
+  () =>
+    `Dalam kondisi uncertainty tinggi di gold market (misal sebelum FOMC), apakah lebih baik: tutup semua posisi, kurangi ukuran lot 50%, atau pasang hedging? Jelaskan pro-kontra setiap pendekatan dan bagaimana memilihnya.`,
+
+  // ── Korelasi Aset ──────────────────────────────────────────────────────────────
+  () =>
+    `Jelaskan korelasi antara XAUUSD dengan: (1) XAGUSD (silver), (2) oil (WTI), (3) S&P500, (4) Bitcoin. Kapan korelasi ini breakdown dan mengapa? Bagaimana trader gold menggunakan korelasi ini untuk konfirmasi bias?`,
+  () =>
+    `Bagaimana cara membaca COT (Commitment of Traders) report untuk gold futures? Apa posisi yang diperhatikan (non-commercial/speculative)? Di level positioning ekstrem berapa biasanya gold reversal terjadi?`,
+] as const;
 
 function generateQuestionHash(question: string): string {
   return crypto.createHash("sha256").update(question.trim().toLowerCase()).digest("hex");
@@ -322,50 +380,113 @@ async function makePrediction(indicators: XauusdIndicators): Promise<void> {
   // AI's prediction accounts for higher-timeframe trend and macro factors,
   // not just the 1H indicators. Both are best-effort — if either external
   // fetch fails, the prediction still proceeds using only 1H indicators.
+  // Fetch all context in parallel for speed
+  const [mtfResult, corrResult, winRateResult, newsResult] = await Promise.allSettled([
+    getMultiTimeframeAnalysis(),
+    getCorrelationAnalysis(),
+    // Win rate: last 50 verified predictions
+    db.select({
+      direction: xauusdPredictionsTable.direction,
+      isCorrect: xauusdPredictionsTable.isCorrect,
+    })
+      .from(xauusdPredictionsTable)
+      .where(eq(xauusdPredictionsTable.status, "verified"))
+      .orderBy(desc(xauusdPredictionsTable.predictedAt))
+      .limit(50),
+    // Recent news sentiment
+    db.select({
+      title: xauusdNewsTable.title,
+      sentiment: xauusdNewsTable.sentiment,
+      aiAnalysis: xauusdNewsTable.aiAnalysis,
+    })
+      .from(xauusdNewsTable)
+      .orderBy(desc(xauusdNewsTable.publishedAt))
+      .limit(4),
+  ]);
+
   let mtfContext = "";
-  try {
-    const mtf = await getMultiTimeframeAnalysis();
-    const confluence = summarizeTimeframeConfluence(mtf);
-    mtfContext = `\n\n=== ANALISIS MULTI-TIMEFRAME ===\n${mtf
-      .map((t) => `${t.label}: trend=${t.indicators?.trend ?? "n/a"}, RSI=${t.indicators?.rsi14?.toFixed(1) ?? "n/a"}, EMA alignment=${t.indicators?.emaAlignment ?? "n/a"}`)
-      .join("\n")}\nKesimpulan confluence: ${confluence.agreement} (${confluence.bullishCount} timeframe bullish, ${confluence.bearishCount} bearish)`;
-  } catch (err) {
-    console.error("[XAUUSD Brain] Multi-timeframe context error:", err);
+  if (mtfResult.status === "fulfilled") {
+    try {
+      const mtf = mtfResult.value;
+      const confluence = summarizeTimeframeConfluence(mtf);
+      mtfContext = `\n\n=== ANALISIS MULTI-TIMEFRAME ===\n${mtf
+        .map((t) => `${t.label}: trend=${t.indicators?.trend ?? "n/a"}, RSI=${t.indicators?.rsi14?.toFixed(1) ?? "n/a"}, EMA alignment=${t.indicators?.emaAlignment ?? "n/a"}`)
+        .join("\n")}\nKesimpulan confluence: ${confluence.agreement} (${confluence.bullishCount} TF bullish, ${confluence.bearishCount} TF bearish)`;
+    } catch (err) {
+      console.error("[XAUUSD Brain] Multi-timeframe context error:", err);
+    }
   }
 
   let correlationContext = "";
-  try {
-    const corr = await getCorrelationAnalysis();
-    correlationContext = `\n\n=== KORELASI MAKRO (DXY & US10Y) ===\nDXY: $${corr.dxy.price ?? "n/a"} (${corr.dxy.changePct != null ? (corr.dxy.changePct > 0 ? "+" : "") + corr.dxy.changePct.toFixed(2) + "%" : "n/a"}), korelasi vs gold=${corr.dxy.correlation ?? "n/a"}\nUS 10Y Yield: ${corr.us10y.price ?? "n/a"}% (${corr.us10y.changePct != null ? (corr.us10y.changePct > 0 ? "+" : "") + corr.us10y.changePct.toFixed(2) + "%" : "n/a"}), korelasi vs gold=${corr.us10y.correlation ?? "n/a"}`;
-  } catch (err) {
-    console.error("[XAUUSD Brain] Correlation context error:", err);
+  if (corrResult.status === "fulfilled") {
+    const corr = corrResult.value;
+    const dxyChange = corr.dxy.changePct != null ? `${corr.dxy.changePct > 0 ? "+" : ""}${corr.dxy.changePct.toFixed(2)}%` : "n/a";
+    const yieldChange = corr.us10y.changePct != null ? `${corr.us10y.changePct > 0 ? "+" : ""}${corr.us10y.changePct.toFixed(2)}%` : "n/a";
+    correlationContext = `\n\n=== KORELASI MAKRO (DXY & US10Y) ===\nDXY: ${corr.dxy.price ?? "n/a"} (${dxyChange}) — ${corr.dxy.interpretation}\nUS 10Y Yield: ${corr.us10y.price ?? "n/a"}% (${yieldChange}) — ${corr.us10y.interpretation}`;
   }
 
-  const systemPrompt = `Kamu adalah AI trading system untuk XAUUSD. 
-Buat prediksi arah harga untuk ${timeframeMinutes} menit ke depan berdasarkan indikator teknikal 1H, konfirmasi dari analisis multi-timeframe (1H/4H/Harian), dan faktor korelasi makro (DXY, US 10-Year Treasury Yield).
-Selain arah, tentukan juga rentang harga entry (entryLow-entryHigh) yang ideal untuk masuk posisi, dan level stop loss (stopLoss) untuk membatasi kerugian.
-Jawab SELALU dalam format JSON:
+  let winRateContext = "";
+  if (winRateResult.status === "fulfilled" && winRateResult.value.length > 0) {
+    const preds = winRateResult.value;
+    const correct = preds.filter((p) => p.isCorrect === true).length;
+    const total = preds.length;
+    const winRate = ((correct / total) * 100).toFixed(1);
+    const byDir = { up: { c: 0, t: 0 }, down: { c: 0, t: 0 }, sideways: { c: 0, t: 0 } };
+    for (const p of preds) {
+      const d = p.direction as "up" | "down" | "sideways";
+      if (byDir[d]) {
+        byDir[d].t++;
+        if (p.isCorrect) byDir[d].c++;
+      }
+    }
+    winRateContext = `\n\n=== WIN RATE AI (${total} prediksi terakhir) ===\nOverall: ${winRate}% akurat (${correct}/${total})\nBUY: ${byDir.up.t > 0 ? ((byDir.up.c / byDir.up.t) * 100).toFixed(0) : "n/a"}% (${byDir.up.c}/${byDir.up.t}) | SELL: ${byDir.down.t > 0 ? ((byDir.down.c / byDir.down.t) * 100).toFixed(0) : "n/a"}% (${byDir.down.c}/${byDir.down.t}) | SIDEWAYS: ${byDir.sideways.t > 0 ? ((byDir.sideways.c / byDir.sideways.t) * 100).toFixed(0) : "n/a"}% (${byDir.sideways.c}/${byDir.sideways.t})\nGunakan data ini untuk kalibrasi confidence — jika win rate direction tertentu rendah, turunkan confidence.`;
+  }
+
+  let newsContext = "";
+  if (newsResult.status === "fulfilled" && newsResult.value.length > 0) {
+    const newsList = newsResult.value;
+    newsContext = `\n\n=== SENTIMEN BERITA TERBARU (${newsList.length} berita) ===\n${newsList
+      .map((n) => `• [${(n.sentiment ?? "neutral").toUpperCase()}] ${n.title}${n.aiAnalysis ? ` — ${n.aiAnalysis}` : ""}`)
+      .join("\n")}`;
+  }
+
+  const systemPrompt = `Kamu adalah AI trading system untuk XAUUSD dengan kemampuan prediksi multi-faktor.
+Buat prediksi arah harga ${timeframeMinutes} menit ke depan berdasarkan:
+1. Indikator teknikal 1H (RSI, EMA, MACD, BB, ATR)
+2. Konfluens multi-timeframe (1H/4H/Harian)
+3. Faktor makro (DXY, US 10Y Yield)
+4. Sentimen berita terbaru
+5. Win rate historis sistem — kalibrasi confidence berdasarkan akurasi terbaru
+
+Aturan prediksi:
+- Confidence >0.75 hanya jika minimal 4 faktor dari 5 align searah
+- Confidence 0.55-0.75 jika 3 faktor align
+- Confidence <0.55 jika sinyal mixed atau sideways
+- Entry zone HARUS berdasarkan ATR (entryLow/entryHigh maks ±0.4×ATR dari harga sekarang)
+- Stop Loss HARUS 1.5×ATR dari entry
+
+Jawab HANYA dalam format JSON:
 {
   "direction": "up" | "down" | "sideways",
-  "targetPrice": <harga target dalam USD>,
-  "entryLow": <batas bawah rentang harga entry dalam USD>,
-  "entryHigh": <batas atas rentang harga entry dalam USD>,
-  "stopLoss": <harga stop loss dalam USD>,
-  "confidence": <0.0-1.0>,
-  "reasoning": "<2-3 kalimat alasan, sebutkan jika multi-timeframe atau DXY/yield mendukung atau bertentangan dengan sinyal 1H>"
+  "targetPrice": <harga target USD — setidaknya 2×ATR dari entry>,
+  "entryLow": <batas bawah entry USD>,
+  "entryHigh": <batas atas entry USD>,
+  "stopLoss": <harga stop loss USD>,
+  "confidence": <0.0-1.0 berdasarkan jumlah faktor yang align>,
+  "reasoning": "<3-4 kalimat — sebutkan faktor MTF, DXY/yield, news sentiment, dan win rate yang mempengaruhi keputusan>"
 }`;
 
-  const userMsg = `Indikator XAUUSD saat ini:
-Harga: $${indicators.price}
+  const userMsg = `=== INDIKATOR 1H XAUUSD ===
+Harga: ${indicators.price}
 RSI14: ${indicators.rsi14} (${indicators.rsiSignal})
-EMA9: ${indicators.ema9}, EMA21: ${indicators.ema21}, EMA50: ${indicators.ema50}, EMA200: ${indicators.ema200}
+EMA9/21/50/200: ${indicators.ema9} / ${indicators.ema21} / ${indicators.ema50} / ${indicators.ema200}
 MACD: line=${indicators.macdLine}, signal=${indicators.macdSignal}, hist=${indicators.macdHistogram} (${indicators.macdSignalType})
 BB: upper=${indicators.bbUpper}, mid=${indicators.bbMiddle}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
 ATR14: ${indicators.atr14}
-Trend: ${indicators.trend}, EMA Alignment: ${indicators.emaAlignment}${mtfContext}${correlationContext}
-Support: $${indicators.supportLevel}, Resistance: $${indicators.resistanceLevel}
+Trend: ${indicators.trend} | EMA Alignment: ${indicators.emaAlignment}
+Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${winRateContext}${newsContext}
 
-Buat prediksi ${timeframeMinutes} menit ke depan dalam format JSON, termasuk entryLow, entryHigh, dan stopLoss.`;
+Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks lain.`;
 
   // Always compute the rule-based prediction first (real technical analysis
   // from ATR/support/resistance/EMA/RSI/MACD) — this is the source of truth
@@ -672,9 +793,9 @@ export async function runLearningCycle(): Promise<{
       resistanceLevel: indicators.resistanceLevel,
     });
 
-    // 4. Generate & ask unique questions (3 per cycle, 5 on spike)
-    const questionCount = spikeDetected ? 5 : 3;
-    const candidates = getRandomQuestions(indicators, questionCount + 4); // extras for filtering
+    // 4. Generate & ask unique questions (5 per cycle, 8 on spike)
+    const questionCount = spikeDetected ? 8 : 5;
+    const candidates = getRandomQuestions(indicators, questionCount + 6); // extras for filtering
     const newQuestions = await filterNewQuestions(candidates);
     const toAsk = newQuestions.slice(0, questionCount);
 
@@ -778,7 +899,7 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
 export function startXauusdBrainEngine(): void {
   if (learningTimer) return; // already running
 
-  console.log("[XAUUSD Brain] Engine started. Learning cycle every 15 minutes.");
+  console.log("[XAUUSD Brain] Engine started. Learning cycle every 5 minutes.");
 
   // Run first cycle immediately (non-blocking); runLearningCycle owns the lock
   runLearningCycle().catch((err) =>

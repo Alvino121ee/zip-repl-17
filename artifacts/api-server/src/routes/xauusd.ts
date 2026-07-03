@@ -359,40 +359,73 @@ xauusdRouter.post("/chat", async (req, res) => {
   }
 
   try {
-    // Build live context from latest snapshot or live fetch
+    // Build rich live context — all queries in parallel
     let contextData = "";
     try {
-      const ind = await fetchXauusdIndicators("1h");
-      if (ind) {
-        // Get top brain insights for context
-        const topInsights = await db
-          .select({ title: xauusdBrainTable.title, content: xauusdBrainTable.content })
+      const [indRes, insightsRes, predsRes, newsRes] = await Promise.allSettled([
+        fetchXauusdIndicators("1h"),
+        db.select({ title: xauusdBrainTable.title, content: xauusdBrainTable.content, category: xauusdBrainTable.category })
           .from(xauusdBrainTable)
           .where(eq(xauusdBrainTable.isActive, true))
           .orderBy(desc(xauusdBrainTable.confidence))
-          .limit(5);
-
-        const lastPred = await db
-          .select()
+          .limit(6),
+        db.select({
+          direction: xauusdPredictionsTable.direction,
+          confidence: xauusdPredictionsTable.confidence,
+          targetPrice: xauusdPredictionsTable.targetPrice,
+          entryLow: xauusdPredictionsTable.entryLow,
+          entryHigh: xauusdPredictionsTable.entryHigh,
+          stopLoss: xauusdPredictionsTable.stopLoss,
+          status: xauusdPredictionsTable.status,
+          isCorrect: xauusdPredictionsTable.isCorrect,
+          reasoning: xauusdPredictionsTable.reasoning,
+          predictedAt: xauusdPredictionsTable.predictedAt,
+        })
           .from(xauusdPredictionsTable)
           .orderBy(desc(xauusdPredictionsTable.predictedAt))
-          .limit(1);
+          .limit(3),
+        db.select({ title: xauusdNewsTable.title, sentiment: xauusdNewsTable.sentiment, aiAnalysis: xauusdNewsTable.aiAnalysis })
+          .from(xauusdNewsTable)
+          .orderBy(desc(xauusdNewsTable.publishedAt))
+          .limit(3),
+      ]);
 
-        contextData = `
-=== DATA LIVE XAUUSD ===
-Harga Saat Ini: $${ind.price}
-RSI14: ${ind.rsi14} (${ind.rsiSignal})
-EMA9/21/50/200: $${ind.ema9} / $${ind.ema21} / $${ind.ema50} / $${ind.ema200}
-MACD: ${ind.macdLine} | Signal: ${ind.macdSignal} | Hist: ${ind.macdHistogram} (${ind.macdSignalType})
-Bollinger: Upper=$${ind.bbUpper} | Mid=$${ind.bbMiddle} | Lower=$${ind.bbLower} | Width=${ind.bbWidth}%
-ATR14: ${ind.atr14}
-Trend: ${ind.trend} | EMA Alignment: ${ind.emaAlignment}
-Support: $${ind.supportLevel} | Resistance: $${ind.resistanceLevel}
-${lastPred[0] ? `\n=== PREDIKSI TERAKHIR AI ===\nArah: ${lastPred[0].direction} | Confidence: ${((lastPred[0].confidence ?? 0) * 100).toFixed(0)}% | Status: ${lastPred[0].status}` : ""}
-${topInsights.length > 0 ? `\n=== PENGETAHUAN AI (Top Insights) ===\n${topInsights.map((i: { title: string }) => `• ${i.title}`).join("\n")}` : ""}`;
+      const ind = indRes.status === "fulfilled" ? indRes.value : null;
+      const topInsights = insightsRes.status === "fulfilled" ? insightsRes.value : [];
+      const recentPreds = predsRes.status === "fulfilled" ? predsRes.value : [];
+      const recentNews = newsRes.status === "fulfilled" ? newsRes.value : [];
+
+      if (ind) {
+        // Win rate dari prediksi terverifikasi
+        const verified = recentPreds.filter((p) => p.status === "verified" || p.status === "revised");
+        const correct = verified.filter((p) => p.isCorrect === true).length;
+        const winRateStr = verified.length > 0
+          ? `${((correct / verified.length) * 100).toFixed(0)}% (${correct}/${verified.length})`
+          : "belum ada data";
+
+        const lastPred = recentPreds[0];
+
+        contextData = `=== DATA LIVE XAUUSD ===
+Harga: ${ind.price} | Open: ${ind.open} | H: ${ind.high} | L: ${ind.low}
+RSI14: ${ind.rsi14} → ${ind.rsiSignal}
+EMA 9/21/50/200: ${ind.ema9} / ${ind.ema21} / ${ind.ema50} / ${ind.ema200}
+EMA Alignment: ${ind.emaAlignment}
+MACD: line=${ind.macdLine} | signal=${ind.macdSignal} | hist=${ind.macdHistogram} → ${ind.macdSignalType}
+Bollinger: Upper=${ind.bbUpper} | Mid=${ind.bbMiddle} | Lower=${ind.bbLower} | Width=${ind.bbWidth}%
+ATR14: ${ind.atr14} | Trend: ${ind.trend}
+Support: ${ind.supportLevel} | Resistance: ${ind.resistanceLevel}
+${lastPred ? `\n=== PREDIKSI AKTIF AI ===
+Arah: ${lastPred.direction.toUpperCase()} | Confidence: ${((lastPred.confidence ?? 0) * 100).toFixed(0)}% | Status: ${lastPred.status}
+Entry: ${lastPred.entryLow}–${lastPred.entryHigh} | Target: ${lastPred.targetPrice} | SL: ${lastPred.stopLoss}
+Alasan: ${lastPred.reasoning?.slice(0, 200) ?? "-"}
+Win Rate 3 pred terakhir: ${winRateStr}` : ""}
+${recentNews.length > 0 ? `\n=== SENTIMEN BERITA TERBARU ===
+${recentNews.map((n) => `• [${(n.sentiment ?? "neutral").toUpperCase()}] ${n.title}${n.aiAnalysis ? ` — ${n.aiAnalysis}` : ""}`).join("\n")}` : ""}
+${topInsights.length > 0 ? `\n=== PENGETAHUAN OTAK AI (${topInsights.length} insights teratas) ===
+${topInsights.map((ins) => `[${ins.category}] ${ins.title}\n  → ${ins.content.slice(0, 180).replace(/\n/g, " ")}…`).join("\n")}` : ""}`;
       }
     } catch {
-      // context injection optional
+      // context injection optional — chat tetap berjalan tanpa konteks
     }
 
     const reply = await chatWithAgent("xauusd", sessionId, message, contextData);
