@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { TrendingUp, Settings, Menu, X, Zap, Users, Lock } from "lucide-react";
-import { isAdmin, isMember } from "@/lib/auth";
+import { TrendingUp, Settings, Menu, X, Zap, Lock } from "lucide-react";
+import { isAdmin } from "@/lib/auth";
 
+// Layout hanya digunakan untuk halaman admin
 const navItems = [
-  { href: "/", label: "Gold AI", sublabel: "XAUUSD Dashboard", icon: TrendingUp, requiresAuth: false },
-  { href: "/member", label: "Member", sublabel: "Chat & Analisis AI", icon: Users, requiresAuth: true, role: "member" as const },
-  { href: "/admin", label: "System", sublabel: "Admin & Status", icon: Settings, requiresAuth: true, role: "admin" as const },
+  { href: "/admin", label: "Dashboard AI", sublabel: "Semua tools & analisis", icon: TrendingUp, role: "admin" as const },
+  { href: "/admin/settings", label: "Pengaturan", sublabel: "Konfigurasi sistem", icon: Settings, role: "admin" as const },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -79,7 +79,6 @@ function SidebarContent({
   onNavigate?: () => void;
 }) {
   const adminAuthed = isAdmin();
-  const memberAuthed = isMember();
 
   return (
     <>
@@ -87,7 +86,7 @@ function SidebarContent({
       <div className="px-5 py-5 border-b border-border/40">
         <Brand />
         <p className="mt-1.5 text-[10px] font-medium tracking-widest uppercase text-muted-foreground/60 pl-0.5">
-          AI Trading Intelligence
+          Admin Panel
         </p>
       </div>
 
@@ -95,16 +94,13 @@ function SidebarContent({
       <nav className="flex-1 px-3 py-4 space-y-1">
         {navItems.map((item) => {
           const isActive = location === item.href;
-          const locked =
-            item.role === "admin" ? !adminAuthed :
-            item.role === "member" ? !memberAuthed :
-            false;
+          const locked = !adminAuthed;
 
           return (
             <Link
               key={item.href}
               href={locked
-                ? `/login?role=${item.role}&redirect=${item.href}`
+                ? `/login?role=admin&redirect=${item.href}`
                 : item.href}
               onClick={onNavigate}
               className={`

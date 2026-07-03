@@ -633,6 +633,8 @@ function TradingViewAdvancedChart() {
 }
 
 // ─── API ──────────────────────────────────────────────────────────────────────
+import { getAdminToken, clearAdminToken } from "@/lib/auth";
+
 const BASE = import.meta.env.BASE_URL;
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -2140,16 +2142,16 @@ export default function XauusdAi() {
                 <Settings className="w-8 h-8 text-amber-400" />
               </div>
               <div className="text-center max-w-sm">
-                <h3 className="text-base font-semibold text-foreground mb-2">Pengaturan khusus Admin</h3>
+                <h3 className="text-base font-semibold text-foreground mb-2">Pengaturan Sistem</h3>
                 <p className="text-sm text-muted-foreground mb-5">
-                  Pengaturan sistem (API key, interval prediksi, WhatsApp, password member) hanya bisa diakses oleh admin. Silakan login sebagai admin untuk mengubah konfigurasi.
+                  Kelola API key, interval prediksi, WhatsApp, dan password member dari halaman pengaturan admin.
                 </p>
                 <a
-                  href="/login?role=admin&redirect=/admin"
+                  href="/admin/settings"
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-semibold text-sm transition-colors"
                 >
                   <Settings className="w-4 h-4" />
-                  Login sebagai Admin
+                  Buka Pengaturan
                 </a>
               </div>
             </div>

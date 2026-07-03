@@ -1,4 +1,5 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
+import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,6 +9,21 @@ import XauusdAi from "@/pages/xauusd-ai";
 import AdminPanel from "@/pages/admin";
 import LoginPage from "@/pages/login";
 import MemberPage from "@/pages/member";
+import HomePage from "@/pages/home";
+import { getAdminToken } from "@/lib/auth";
+
+// ── Wrapper: halaman admin hanya bisa diakses saat sudah login ────────────────
+function AdminRoute({ component: Component }: { component: React.ComponentType }) {
+  const [, navigate] = useLocation();
+  const token = getAdminToken();
+
+  useEffect(() => {
+    if (!token) navigate("/login?role=admin&redirect=/admin");
+  }, [token, navigate]);
+
+  if (!token) return null;
+  return <Component />;
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,16 +37,21 @@ const queryClient = new QueryClient({
 function Router() {
   return (
     <Switch>
-      {/* Halaman tanpa layout sidebar */}
+      {/* Halaman publik & tanpa sidebar */}
+      <Route path="/" component={HomePage} />
       <Route path="/login" component={LoginPage} />
       <Route path="/member" component={MemberPage} />
 
-      {/* Halaman dengan layout sidebar */}
+      {/* Halaman admin dengan layout sidebar — wajib login admin */}
       <Route>
         <Layout>
           <Switch>
-            <Route path="/" component={XauusdAi} />
-            <Route path="/admin" component={AdminPanel} />
+            <Route path="/admin">
+              <AdminRoute component={XauusdAi} />
+            </Route>
+            <Route path="/admin/settings">
+              <AdminRoute component={AdminPanel} />
+            </Route>
             <Route component={NotFound} />
           </Switch>
         </Layout>
