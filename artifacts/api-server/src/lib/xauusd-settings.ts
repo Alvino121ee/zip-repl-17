@@ -100,10 +100,6 @@ export async function setWhatsappEnabled(enabled: boolean): Promise<void> {
   await setValue(KEY_WHATSAPP_ENABLED, enabled ? "true" : "false");
 }
 
-export function isWhatsappConfigured(): boolean {
-  return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
-}
-
 export async function getSettingsSummary(): Promise<{
   hasDeepseekKey: boolean;
   deepseekKeySource: "database" | "environment" | "none";
@@ -111,7 +107,6 @@ export async function getSettingsSummary(): Promise<{
   whatsapp: {
     number: string;
     enabled: boolean;
-    configured: boolean;
   };
 }> {
   const fromDb = await getValue(KEY_DEEPSEEK);
@@ -124,7 +119,6 @@ export async function getSettingsSummary(): Promise<{
     whatsapp: {
       number: await getWhatsappNumber(),
       enabled: await isWhatsappEnabled(),
-      configured: isWhatsappConfigured(),
     },
   };
 }
