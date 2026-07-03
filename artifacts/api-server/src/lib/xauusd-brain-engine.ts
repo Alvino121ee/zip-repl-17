@@ -637,11 +637,16 @@ async function retrieveRelevantBrainEntries(
 
 // ─── Prediction maker ──────────────────────────────────────────────────────────
 
-async function makePrediction(indicators: XauusdIndicators): Promise<void> {
+async function makePrediction(
+  indicators: XauusdIndicators,
+  predType: "training" | "main" = "training"
+): Promise<void> {
   // Jangan buat prediksi saat market XAUUSD tutup (weekend / Jumat malam)
   const marketStatus = isXauusdMarketOpen();
   if (!marketStatus.open) {
-    console.log(`[XAUUSD Brain] Prediksi dilewati — ${marketStatus.reason}`);
+    if (predType === "main") {
+      console.log(`[XAUUSD Brain] Prediksi UTAMA dilewati — ${marketStatus.reason}`);
+    }
     return;
   }
 
@@ -946,6 +951,7 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
 
     await db.insert(xauusdPredictionsTable).values({
       timeframe: timeframeLabel,
+      predictionType: predType,
       direction: finalDirection,
       targetPrice,
       entryLow,
@@ -1491,18 +1497,44 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
     predictionsChecked = verifyResult.checked;
     wrongPredictions = verifyResult.wrong;
 
-    // 7. Make new prediction — hanya jika tidak ada prediksi pending yang masih terbuka
-    // Dengan validasi SL/TP, satu prediksi per waktu jauh lebih bermakna dari 12/jam overlapping
-    const pendingRows = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(xauusdPredictionsTable)
-      .where(eq(xauusdPredictionsTable.status, "pending"));
-    const pendingCount = pendingRows[0]?.count ?? 0;
+    // 7. Prediksi dua mode:
+    //    TRAINING — setiap siklus tanpa batas, untuk melatih AI mencatat pola & akurasi
+    //    MAIN (utama) — hanya dibuat saat arah berubah dari main pending saat ini, untuk ditampilkan ke user
+    await makePrediction(indicators, "training");
 
-    if (pendingCount === 0) {
-      await makePrediction(indicators);
-    } else {
-      console.log(`[XAUUSD Brain] Prediksi dilewati — ${pendingCount} prediksi pending masih menunggu SL/TP`);
+    // Cek apakah perlu buat prediksi UTAMA baru (saat arah berubah / belum ada main pending)
+    try {
+      const lastMainPending = await db
+        .select({ id: xauusdPredictionsTable.id, direction: xauusdPredictionsTable.direction })
+        .from(xauusdPredictionsTable)
+        .where(
+          and(
+            eq(xauusdPredictionsTable.predictionType, "main"),
+            eq(xauusdPredictionsTable.status, "pending")
+          )
+        )
+        .orderBy(desc(xauusdPredictionsTable.predictedAt))
+        .limit(1);
+
+      // Ambil arah dari training prediction yang baru saja dibuat (ambil latest)
+      const latestTraining = await db
+        .select({ direction: xauusdPredictionsTable.direction })
+        .from(xauusdPredictionsTable)
+        .where(eq(xauusdPredictionsTable.predictionType, "training"))
+        .orderBy(desc(xauusdPredictionsTable.predictedAt))
+        .limit(1);
+
+      const latestDir = latestTraining[0]?.direction;
+      const mainPendingDir = lastMainPending[0]?.direction;
+
+      // Buat prediksi UTAMA jika: (1) tidak ada main pending, atau (2) arah berubah
+      if (latestDir && (!mainPendingDir || latestDir !== mainPendingDir)) {
+        const changeReason = !mainPendingDir ? "belum ada prediksi utama" : `arah berubah ${mainPendingDir} → ${latestDir}`;
+        console.log(`[XAUUSD Brain] Prediksi UTAMA dibuat — ${changeReason}`);
+        await makePrediction(indicators, "main");
+      }
+    } catch (err) {
+      console.error("[XAUUSD Brain] Main prediction check error:", err);
     }
 
     // 8. Fetch & analyze news (every 3rd cycle to save API calls)

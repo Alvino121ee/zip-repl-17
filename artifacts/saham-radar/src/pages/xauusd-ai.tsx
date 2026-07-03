@@ -707,6 +707,7 @@ interface Prediction {
   reasoning: string; priceAtPrediction: number; predictedAt: string;
   actualPrice: number | null; actualDirection: string | null; isCorrect: boolean | null;
   status: string; revisionNote: string | null; timeframe: string;
+  predictionType: "training" | "main";
   entryLow: number | null; entryHigh: number | null; stopLoss: number | null;
   indicatorsAtPrediction?: { ensembleVotes?: EnsembleVotes; [key: string]: unknown };
 }
@@ -1223,20 +1224,20 @@ function LearningLogPanel({ logs }: { logs: LearningLog[] }) {
 }
 
 // ─── Prediction Tracker ───────────────────────────────────────────────────────
-function PredictionPanel({ preds }: { preds: Prediction[] }) {
+function PredictionList({ preds }: { preds: Prediction[] }) {
   const [expanded, setExpanded] = useState<number | null>(null);
 
   if (preds.length === 0) {
     return (
-      <div className="text-center py-12 text-muted-foreground">
-        <Target className="w-12 h-12 mx-auto mb-3 opacity-30" />
-        <p>Belum ada prediksi yang dibuat oleh AI.</p>
+      <div className="text-center py-10 text-muted-foreground">
+        <Target className="w-10 h-10 mx-auto mb-2 opacity-30" />
+        <p className="text-sm">Belum ada prediksi.</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+    <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
       {preds.map((p) => (
         <div key={p.id} className="bg-card/40 rounded-lg border border-border/50 overflow-hidden">
           <button
@@ -1739,8 +1740,14 @@ export default function XauusdAi() {
 
   const predictionsQ = useQuery({
     queryKey: ["xauusd-predictions"],
-    queryFn: () => apiGet<Prediction[]>("/predictions?limit=20"),
+    queryFn: () => apiGet<Prediction[]>("/predictions?limit=30"),
     refetchInterval: 60_000,
+  });
+
+  const mainPredictionsQ = useQuery({
+    queryKey: ["xauusd-main-predictions"],
+    queryFn: () => apiGet<Prediction[]>("/predictions?type=main&limit=10"),
+    refetchInterval: 30_000,
   });
 
   const questionsQ = useQuery({
@@ -1870,7 +1877,7 @@ export default function XauusdAi() {
     { id: "correlation", label: "Korelasi", icon: <Link2 className="w-3.5 h-3.5" /> },
     { id: "brain", label: `Otak AI (${statsQ.data?.totalInsights ?? 0})`, icon: <Brain className="w-3.5 h-3.5" /> },
     { id: "chat", label: "Chat", icon: <MessageSquare className="w-3.5 h-3.5" /> },
-    { id: "predictions", label: `Prediksi (${predictionsQ.data?.length ?? 0})`, icon: <Target className="w-3.5 h-3.5" /> },
+    { id: "predictions", label: `Prediksi (${mainPredictionsQ.data?.length ?? 0} utama)`, icon: <Target className="w-3.5 h-3.5" /> },
     { id: "questions", label: `Pertanyaan (${statsQ.data?.totalQuestionsAsked ?? 0})`, icon: <BookOpen className="w-3.5 h-3.5" /> },
     { id: "news", label: "Berita", icon: <Newspaper className="w-3.5 h-3.5" /> },
     { id: "log", label: `Log Belajar (${logQ.data?.length ?? 0})`, icon: <History className="w-3.5 h-3.5" /> },
@@ -1991,56 +1998,63 @@ export default function XauusdAi() {
         </Card>
       )}
 
-      {/* Latest AI prediction banner */}
-      {predictionsQ.data && predictionsQ.data[0] && predictionsQ.data[0].status === "pending" && (
-        <Card className={`border ${predictionsQ.data[0].direction === "up" ? "border-emerald-500/30 bg-emerald-500/5" : predictionsQ.data[0].direction === "down" ? "border-red-500/30 bg-red-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+      {/* Latest MAIN AI prediction banner */}
+      {mainPredictionsQ.data && mainPredictionsQ.data[0] && mainPredictionsQ.data[0].status === "pending" && (
+        <Card className={`border-2 ${mainPredictionsQ.data[0].direction === "up" ? "border-emerald-500/50 bg-emerald-500/5" : mainPredictionsQ.data[0].direction === "down" ? "border-red-500/50 bg-red-500/5" : "border-amber-500/50 bg-amber-500/5"}`}>
           <CardContent className="p-4 flex items-center gap-4">
-            <div className="text-3xl">{predictionsQ.data[0].direction === "up" ? "🚀" : predictionsQ.data[0].direction === "down" ? "📉" : "↔️"}</div>
+            <div className="text-3xl">{mainPredictionsQ.data[0].direction === "up" ? "🚀" : mainPredictionsQ.data[0].direction === "down" ? "📉" : "↔️"}</div>
             <div className="flex-1">
-              <p className="text-xs text-muted-foreground">Prediksi AI Terakhir ({predictionsQ.data[0].timeframe ?? `${settingsQ.data?.predictionTimeframeMinutes ?? 15}m`} ke depan)</p>
-              <p className="font-bold">
-                <span className={predictionsQ.data[0].direction === "up" ? "text-emerald-400" : predictionsQ.data[0].direction === "down" ? "text-red-400" : "text-amber-400"}>
-                  {predictionsQ.data[0].direction === "up" ? "▲ NAIK" : predictionsQ.data[0].direction === "down" ? "▼ TURUN" : "↔ SIDEWAYS"}
-                </span>
-                {predictionsQ.data[0].targetPrice && <span className="text-muted-foreground text-sm ml-2">target ${predictionsQ.data[0].targetPrice.toFixed(2)}</span>}
-                <span className="text-amber-400 text-sm ml-2">• {(predictionsQ.data[0].confidence * 100).toFixed(0)}% confidence</span>
-              </p>
-              {/* Ensemble votes display */}
-              {predictionsQ.data[0].indicatorsAtPrediction?.ensembleVotes && (() => {
-                const ev = predictionsQ.data![0].indicatorsAtPrediction!.ensembleVotes!;
-                const agentLabels: Record<string, string> = { technical: "📐 Teknikal", macro: "🌐 Makro", ai: "🤖 AI", rule: "📏 Rule" };
+              <div className="flex items-center gap-2 mb-0.5">
+                <p className="text-xs text-muted-foreground">Sinyal Utama AI</p>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">UTAMA</span>
+              </div>
+              {(() => {
+                const mp = mainPredictionsQ.data![0];
                 return (
-                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                    {(["technical", "macro", "ai"] as const).map(key => {
-                      const v = ev[key];
-                      if (!v) return null;
-                      const d = v.direction;
+                  <>
+                    <p className="font-bold">
+                      <span className={mp.direction === "up" ? "text-emerald-400" : mp.direction === "down" ? "text-red-400" : "text-amber-400"}>
+                        {mp.direction === "up" ? "▲ NAIK" : mp.direction === "down" ? "▼ TURUN" : "↔ SIDEWAYS"}
+                      </span>
+                      {mp.targetPrice && <span className="text-muted-foreground text-sm ml-2">target ${mp.targetPrice.toFixed(2)}</span>}
+                      <span className="text-amber-400 text-sm ml-2">• {(mp.confidence * 100).toFixed(0)}% confidence</span>
+                    </p>
+                    {mp.indicatorsAtPrediction?.ensembleVotes && (() => {
+                      const ev = mp.indicatorsAtPrediction!.ensembleVotes!;
+                      const agentLabels: Record<string, string> = { technical: "📐 Teknikal", macro: "🌐 Makro", ai: "🤖 AI", rule: "📏 Rule" };
                       return (
-                        <span key={key} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium
-                          ${d === "up" ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10" : d === "down" ? "text-red-400 border-red-500/30 bg-red-500/10" : "text-amber-400 border-amber-500/30 bg-amber-500/10"}`}>
-                          {agentLabels[v.label] ?? v.label}: {d === "up" ? "▲" : d === "down" ? "▼" : "↔"} {(v.confidence * 100).toFixed(0)}%
-                        </span>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {(["technical", "macro", "ai"] as const).map(key => {
+                            const v = ev[key];
+                            if (!v) return null;
+                            const d = v.direction;
+                            return (
+                              <span key={key} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium
+                                ${d === "up" ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10" : d === "down" ? "text-red-400 border-red-500/30 bg-red-500/10" : "text-amber-400 border-amber-500/30 bg-amber-500/10"}`}>
+                                {agentLabels[v.label] ?? v.label}: {d === "up" ? "▲" : d === "down" ? "▼" : "↔"} {(v.confidence * 100).toFixed(0)}%
+                              </span>
+                            );
+                          })}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${ev.agreementCount === 3 ? "text-emerald-400" : ev.agreementCount === 2 ? "text-amber-400" : "text-slate-400"}`}>
+                            {ev.agreementCount === 3 ? "✓ Semua sepakat" : ev.agreementCount === 2 ? "2/3 sepakat" : "Split vote"}
+                          </span>
+                        </div>
                       );
-                    })}
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${ev.agreementCount === 3 ? "text-emerald-400" : ev.agreementCount === 2 ? "text-amber-400" : "text-slate-400"}`}>
-                      {ev.agreementCount === 3 ? "✓ Semua sepakat" : ev.agreementCount === 2 ? "2/3 sepakat" : "Split vote"}
-                    </span>
-                  </div>
+                    })()}
+                    {(mp.entryLow != null || mp.stopLoss != null) && (
+                      <p className="text-xs mt-1 flex flex-wrap gap-3">
+                        {mp.entryLow != null && mp.entryHigh != null && (
+                          <span className="text-blue-400">Entry: ${mp.entryLow.toFixed(2)} – ${mp.entryHigh.toFixed(2)}</span>
+                        )}
+                        {mp.stopLoss != null && <span className="text-red-400">SL: ${mp.stopLoss.toFixed(2)}</span>}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{mp.reasoning}</p>
+                  </>
                 );
               })()}
-              {(predictionsQ.data[0].entryLow != null || predictionsQ.data[0].stopLoss != null) && (
-                <p className="text-xs mt-1 flex flex-wrap gap-3">
-                  {predictionsQ.data[0].entryLow != null && predictionsQ.data[0].entryHigh != null && (
-                    <span className="text-blue-400">Entry: ${predictionsQ.data[0].entryLow.toFixed(2)} – ${predictionsQ.data[0].entryHigh.toFixed(2)}</span>
-                  )}
-                  {predictionsQ.data[0].stopLoss != null && (
-                    <span className="text-red-400">SL: ${predictionsQ.data[0].stopLoss.toFixed(2)}</span>
-                  )}
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{predictionsQ.data[0].reasoning}</p>
             </div>
-            <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 border text-xs">PENDING VERIFIKASI</Badge>
+            <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 border text-xs">PENDING</Badge>
           </CardContent>
         </Card>
       )}
@@ -2111,7 +2125,12 @@ export default function XauusdAi() {
             </div>
           )}
 
-          {activeTab === "predictions" && <PredictionPanel preds={predictionsQ.data ?? []} />}
+          {activeTab === "predictions" && (
+            <PredictionPanel
+              mainPreds={mainPredictionsQ.data ?? []}
+              trainingPreds={predictionsQ.data?.filter(p => p.predictionType === "training") ?? []}
+            />
+          )}
 
           {activeTab === "questions" && <QuestionsPanel questions={questionsQ.data ?? []} />}
 

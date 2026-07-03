@@ -351,12 +351,18 @@ xauusdRouter.get("/questions", async (req, res) => {
   return res.json(rows);
 });
 
-// ─── GET /xauusd/predictions — prediction history ────────────────────────────
+// ─── GET /xauusd/predictions — prediction history (opsional ?type=main|training) ─
 xauusdRouter.get("/predictions", async (req, res) => {
-  const limit = Math.min(100, parseInt(String(req.query.limit ?? "20"), 10));
+  const limit = Math.min(200, parseInt(String(req.query.limit ?? "20"), 10));
+  const typeFilter = req.query.type as string | undefined;
   const rows = await db
     .select()
     .from(xauusdPredictionsTable)
+    .where(
+      typeFilter === "main" ? eq(xauusdPredictionsTable.predictionType, "main")
+        : typeFilter === "training" ? eq(xauusdPredictionsTable.predictionType, "training")
+        : undefined
+    )
     .orderBy(desc(xauusdPredictionsTable.predictedAt))
     .limit(limit);
   return res.json(rows);

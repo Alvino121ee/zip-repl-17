@@ -96,6 +96,8 @@ export const xauusdPredictionsTable = pgTable("xauusd_predictions", {
   priceP10: real("price_p10"), // 10th percentile price target (pessimistic)
   priceP50: real("price_p50"), // median price target
   priceP90: real("price_p90"), // 90th percentile price target (optimistic)
+  // Tipe prediksi — 'training' (setiap siklus, untuk latih AI) | 'main' (hanya saat arah berubah, ditampilkan ke user)
+  predictionType: text("prediction_type").notNull().default("training"),
   // Actual outcome (filled later)
   verifyAt: timestamp("verify_at"), // when to check the outcome
   actualPrice: real("actual_price"),
