@@ -7,6 +7,7 @@ import { db } from "@workspace/db";
 import { agentConfigsTable, agentMemoriesTable } from "@workspace/db";
 import { eq, and, asc, desc } from "drizzle-orm";
 import { logger } from "./logger";
+import { getDeepseekApiKey } from "./xauusd-settings.js";
 
 export interface TrainingExample {
   input: string;
@@ -21,49 +22,76 @@ export interface ChatMessage {
 const MEMORY_LIMIT = 20; // simpan 20 pesan terakhir per sesi
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 
-// ─── Seed default agents jika belum ada ──────────────────────────────────────
+// ─── Seed / upsert default agents ────────────────────────────────────────────
 export async function ensureAgentsExist() {
-  const existing = await db.select({ agentId: agentConfigsTable.agentId }).from(agentConfigsTable);
-  const existingIds = new Set(existing.map((a) => a.agentId));
-
   const defaults = getDefaultAgentConfigs();
   for (const config of defaults) {
-    if (!existingIds.has(config.agentId)) {
-      await db.insert(agentConfigsTable).values(config);
-      logger.info({ agentId: config.agentId }, "Agent default di-seed");
-    }
+    await db
+      .insert(agentConfigsTable)
+      .values(config)
+      .onConflictDoUpdate({
+        target: agentConfigsTable.agentId,
+        set: {
+          name: config.name,
+          description: config.description,
+          avatar: config.avatar,
+          color: config.color,
+          systemPrompt: config.systemPrompt,
+          trainingExamples: config.trainingExamples,
+          isActive: config.isActive,
+        },
+      });
+    logger.info({ agentId: config.agentId }, "Agent upserted");
   }
 }
 
 function getDefaultAgentConfigs() {
   return [
+    // ── XAUUSD Gold AI Trader (satu-satunya agent aktif) ─────────────────────
     {
-      agentId: "fundamental",
-      name: "Professor Funda",
-      description: "Spesialis analisis laporan keuangan, valuasi (P/E, P/B, PEG), ROE, neraca, dan keberlanjutan dividen saham BEI.",
-      avatar: "📊",
-      color: "#3b82f6",
-      systemPrompt: `Kamu adalah Professor Funda, AI Analis Fundamental Saham BEI berpengalaman 20 tahun. Kamu telah menganalisis ratusan laporan keuangan perusahaan IDX.
+      agentId: "xauusd",
+      name: "Gold AI Trader",
+      description: "AI khusus XAUUSD/Gold — membaca RSI, EMA, MACD, Bollinger Bands secara realtime. Belajar mandiri dari DeepSeek, merevisi prediksinya sendiri.",
+      avatar: "🥇",
+      color: "#f59e0b",
+      systemPrompt: `Kamu adalah Gold AI Trader, sistem AI trading XAUUSD (Gold/USD) yang sangat canggih. Kamu BUKAN sekadar asisten — kamu adalah sistem yang terus belajar dan merevisi diri sendiri.
 
-SPESIALISASI UTAMA:
-- Analisis rasio valuasi: P/E Ratio, P/B Ratio, PEG Ratio, EV/EBITDA
-- Kualitas laba: ROE, ROA, Net Profit Margin, pertumbuhan EPS
-- Kesehatan neraca: Debt/Equity Ratio, Current Ratio, Free Cash Flow
-- Analisis dividen: Dividend Yield, Payout Ratio, keberlanjutan dividen
-- Perbandingan antar sektor BEI (perbankan, energi, konsumer, properti, dll)
+IDENTITAS:
+- Nama: Gold AI Trader
+- Spesialisasi: XAUUSD (Spot Gold vs USD), 24/5 market
+- Basis pengetahuan: Analisis teknikal mendalam + dampak makroekonomi + news sentiment
+
+SPESIALISASI TEKNIKAL XAUUSD:
+- RSI14: oversold <30 (peluang beli), overbought >70 (potensi reversal)
+- EMA 9/21/50/200: alignment bullish jika price > EMA9 > EMA21 > EMA50 > EMA200
+- MACD (12,26,9): bullish cross histogram, bearish cross histogram
+- Bollinger Bands (20,2): squeeze breakout, price ke upper/lower band
+- ATR14: mengukur volatilitas untuk sizing posisi
+- Support/Resistance: level kritis dari 100 candle terakhir
+
+FAKTOR FUNDAMENTAL GOLD:
+- DXY (Dollar Index): negatif korelasi — DXY naik, gold turun dan sebaliknya
+- US Treasury Yields (10Y): negatif korelasi dengan gold
+- Inflasi (CPI/PCE): gold sebagai hedge inflasi
+- Fed policy: dovish → bullish gold | hawkish → bearish gold
+- Geopolitical risk: safe haven demand
+- Sesi trading kritis: London (15:00-21:00 WIB), New York (20:30-03:00 WIB)
 
 CARA MENJAWAB:
-1. Selalu fokus pada data FUNDAMENTAL (angka laporan keuangan)
-2. Bandingkan rasio dengan rata-rata industri/sektor di BEI
-3. Identifikasi apakah saham undervalued, fair value, atau overvalued
-4. Berikan pandangan jangka menengah-panjang (1-3 tahun)
-5. Gunakan bahasa Indonesia profesional tapi mudah dipahami
-6. Selalu tambahkan disclaimer: bukan saran investasi resmi
+1. Selalu sebut kondisi indikator yang relevan dari data live
+2. Berikan level entry, stop loss, dan take profit KONKRET
+3. Risk:Reward minimal 1:2 untuk setiap setup
+4. Sebutkan timeframe yang paling relevan
+5. Gunakan bahasa Indonesia yang jelas dan profesional
+6. Jika ada data otak AI (brain insights), jadikan sebagai referensi utama
 
-Benchmark umum BEI:
-- P/E wajar perbankan: 8-15x | Konsumer: 15-25x | Properti: 5-12x
-- ROE bagus: >15% | P/B menarik: <2x untuk perbankan | D/E aman: <2x
-- Dividen yield menarik di BEI: >3%`,
+SISTEM BELAJAR MANDIRI:
+- Kamu memiliki "otak" (brain storage) yang terus diperbarui setiap 15 menit
+- Setiap siklus belajar: generate pertanyaan baru → tanya DeepSeek → simpan jawaban terbaik
+- Prediksi arah diperiksa setelah 15-30 menit → jika salah, self-critique disimpan sebagai pelajaran
+- Setiap spike harga memicu 5 pertanyaan ekstra untuk memperkuat pemahaman
+
+⚠️ Disclaimer: Ini adalah sistem AI untuk edukasi dan analisis. Bukan sinyal trading profesional. Selalu gunakan manajemen risiko ketat.`,
       trainingExamples: JSON.stringify([
         {
           input: "Apakah BBCA layak dibeli dari sisi fundamental?",
@@ -237,10 +265,10 @@ export async function chatWithAgent(
   userMessage: string,
   contextData?: string
 ): Promise<{ reply: string; aiPowered: boolean }> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = await getDeepseekApiKey();
   if (!apiKey) {
     return {
-      reply: "AI belum aktif. Tambahkan DEEPSEEK_API_KEY di Secrets.",
+      reply: "AI belum aktif. Masukkan DeepSeek API Key di tab Settings.",
       aiPowered: false,
     };
   }

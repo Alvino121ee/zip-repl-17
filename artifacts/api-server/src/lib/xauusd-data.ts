@@ -122,8 +122,9 @@ export async function fetchXauusdLivePrice(): Promise<XauusdLivePrice> {
 
 // ─── Historical OHLCV candles ──────────────────────────────────────────────────
 
-const DATA_BASE  = "https://query2.finance.yahoo.com";
-const DATA_BASE2 = "https://query1.finance.yahoo.com";
+// Public market data endpoints for OHLCV candle history (technical indicator calculations)
+const CANDLE_API  = "https://query2.finance.yahoo.com";
+const CANDLE_API2 = "https://query1.finance.yahoo.com";
 
 async function fetchCandlesForTicker(
   ticker: string,
@@ -131,9 +132,9 @@ async function fetchCandlesForTicker(
   range: string
 ): Promise<XauusdCandle[]> {
   const path = `/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`;
-  let res = await fetch(`${DATA_BASE}${path}`, { headers: BROWSER_HEADERS });
+  let res = await fetch(`${CANDLE_API}${path}`, { headers: BROWSER_HEADERS });
   if (!res.ok) {
-    res = await fetch(`${DATA_BASE2}${path}`, { headers: BROWSER_HEADERS });
+    res = await fetch(`${CANDLE_API2}${path}`, { headers: BROWSER_HEADERS });
   }
   if (!res.ok) throw new Error(`Market data ${ticker} HTTP ${res.status}`);
 

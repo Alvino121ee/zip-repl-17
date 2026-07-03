@@ -1601,7 +1601,7 @@ export default function XauusdAi() {
             {snapshotQ.isLoading ? (
               <div className="flex items-center justify-center gap-2 text-muted-foreground">
                 <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Mengambil data XAUUSD dari Yahoo Finance...</span>
+                <span>Mengambil data XAUUSD dari pasar global...</span>
               </div>
             ) : (
               <div className="text-muted-foreground">
@@ -1744,7 +1744,7 @@ export default function XauusdAi() {
         <CardContent>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { step: "1", title: "Pantau Pasar", desc: "Fetch XAUUSD realtime dari Yahoo Finance + hitung RSI, EMA, MACD, BB, ATR setiap 15 menit", color: "text-amber-400" },
+              { step: "1", title: "Pantau Pasar", desc: "Fetch harga XAUUSD realtime dari Swissquote + hitung RSI, EMA, MACD, BB, ATR setiap 15 menit", color: "text-amber-400" },
               { step: "2", title: "Deteksi Spike", desc: "Jika harga bergerak >0.3% dalam 1 siklus, AI generate 5 pertanyaan ekstra untuk belajar dari spike", color: "text-orange-400" },
               { step: "3", title: "Belajar dari DeepSeek", desc: "Generate pertanyaan unik (tidak pernah sama) → kirim ke DeepSeek → simpan jawaban terbaik ke 'otak AI'", color: "text-purple-400" },
               { step: "4", title: "Revisi Diri Sendiri", desc: `Setelah ${settingsQ.data?.predictionTimeframeMinutes ?? 15} menit, cek apakah prediksi benar. Jika salah → AI menulis self-critique dan menyimpannya sebagai pelajaran`, color: "text-cyan-400" },
