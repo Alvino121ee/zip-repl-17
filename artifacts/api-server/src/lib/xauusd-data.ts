@@ -51,6 +51,74 @@ const HEADERS = {
 // ─── Candle fetcher ────────────────────────────────────────────────────────────
 
 /**
+ * Fetch candles for any Yahoo Finance ticker/interval/range combo. Used both
+ * for XAUUSD itself (GC=F) and for correlated instruments like DXY / US10Y.
+ */
+export async function fetchTickerCandles(
+  ticker: string,
+  interval: "15m" | "1h" | "1d" = "1h",
+  range = "60d"
+): Promise<XauusdCandle[]> {
+  const url = `${YAHOO_BASE}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`;
+
+  let res = await fetch(url, { headers: HEADERS });
+  if (!res.ok) {
+    res = await fetch(
+      `${YAHOO_BASE2}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`,
+      { headers: HEADERS }
+    );
+  }
+  if (!res.ok) {
+    throw new Error(`Yahoo Finance ${ticker} HTTP ${res.status}`);
+  }
+
+  const json = (await res.json()) as {
+    chart: {
+      result?: Array<{
+        timestamp: number[];
+        indicators: {
+          quote: Array<{
+            open: number[];
+            high: number[];
+            low: number[];
+            close: number[];
+            volume: number[];
+          }>;
+        };
+      }>;
+      error?: { message: string };
+    };
+  };
+
+  if (json.chart.error) throw new Error(json.chart.error.message);
+  const result = json.chart.result?.[0];
+  if (!result) throw new Error(`No data from Yahoo Finance for ${ticker}`);
+
+  const { timestamp, indicators } = result;
+  const q = indicators.quote[0];
+
+  const candles: XauusdCandle[] = [];
+  for (let i = 0; i < timestamp.length; i++) {
+    if (
+      q.close[i] == null ||
+      q.open[i] == null ||
+      q.high[i] == null ||
+      q.low[i] == null
+    )
+      continue;
+    candles.push({
+      timestamp: timestamp[i] * 1000,
+      open: q.open[i],
+      high: q.high[i],
+      low: q.low[i],
+      close: q.close[i],
+      volume: q.volume[i] ?? 0,
+    });
+  }
+  return candles;
+}
+
+/**
  * Fetch XAUUSD hourly candles (last 60 days = ~1440 candles, enough for EMA200)
  */
 export async function fetchXauusdCandles(
@@ -410,6 +478,171 @@ export async function fetchXauusdLivePrice(): Promise<XauusdLivePrice> {
     change: change != null ? parseFloat(change.toFixed(2)) : null,
     changePct: changePct != null ? parseFloat(changePct.toFixed(3)) : null,
     timestamp: meta.regularMarketTime ? meta.regularMarketTime * 1000 : Date.now(),
+  };
+}
+
+// ─── Multi-timeframe analysis ──────────────────────────────────────────────────
+// Yahoo Finance has no native 4h interval, so 4h candles are built by resampling
+// the 1h series (every 4 consecutive 1h candles → 1 candle).
+
+function resampleCandles(candles: XauusdCandle[], groupSize: number): XauusdCandle[] {
+  const out: XauusdCandle[] = [];
+  for (let i = 0; i < candles.length; i += groupSize) {
+    const group = candles.slice(i, i + groupSize);
+    if (group.length === 0) continue;
+    out.push({
+      timestamp: group[0].timestamp,
+      open: group[0].open,
+      high: Math.max(...group.map((c) => c.high)),
+      low: Math.min(...group.map((c) => c.low)),
+      close: group[group.length - 1].close,
+      volume: group.reduce((sum, c) => sum + c.volume, 0),
+    });
+  }
+  return out;
+}
+
+export interface TimeframeAnalysis {
+  timeframe: "1h" | "4h" | "1d";
+  label: string;
+  indicators: XauusdIndicators | null;
+}
+
+/**
+ * Computes indicators for 1H, 4H (resampled from 1H) and Daily timeframes so
+ * traders can see whether shorter and longer-term trends agree or conflict.
+ */
+export async function getMultiTimeframeAnalysis(): Promise<TimeframeAnalysis[]> {
+  const [hourly, daily] = await Promise.all([
+    fetchXauusdCandles("1h", "60d"),
+    fetchXauusdCandles("1d", "2y"),
+  ]);
+
+  const fourHour = resampleCandles(hourly, 4);
+
+  return [
+    { timeframe: "1h", label: "1 Jam", indicators: calculateIndicators(hourly) },
+    { timeframe: "4h", label: "4 Jam", indicators: calculateIndicators(fourHour) },
+    { timeframe: "1d", label: "Harian", indicators: calculateIndicators(daily) },
+  ];
+}
+
+/**
+ * Combines the per-timeframe trends into a single confluence read: how many
+ * of the 3 timeframes agree on direction, used to boost/reduce AI confidence.
+ */
+export function summarizeTimeframeConfluence(
+  analyses: TimeframeAnalysis[]
+): { agreement: "strong_bullish" | "strong_bearish" | "mixed"; bullishCount: number; bearishCount: number } {
+  let bullishCount = 0;
+  let bearishCount = 0;
+  for (const a of analyses) {
+    if (!a.indicators) continue;
+    if (a.indicators.trend === "bullish") bullishCount++;
+    else if (a.indicators.trend === "bearish") bearishCount++;
+  }
+  let agreement: "strong_bullish" | "strong_bearish" | "mixed" = "mixed";
+  if (bullishCount >= 2 && bullishCount > bearishCount) agreement = "strong_bullish";
+  else if (bearishCount >= 2 && bearishCount > bullishCount) agreement = "strong_bearish";
+  return { agreement, bullishCount, bearishCount };
+}
+
+// ─── DXY & US Treasury yield correlation ──────────────────────────────────────
+
+const DXY_TICKER = "DX-Y.NYB";
+const US10Y_TICKER = "^TNX";
+
+function pearsonCorrelation(a: number[], b: number[]): number | null {
+  const n = Math.min(a.length, b.length);
+  if (n < 10) return null;
+  const x = a.slice(a.length - n);
+  const y = b.slice(b.length - n);
+  const meanX = x.reduce((s, v) => s + v, 0) / n;
+  const meanY = y.reduce((s, v) => s + v, 0) / n;
+  let num = 0;
+  let denX = 0;
+  let denY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = x[i] - meanX;
+    const dy = y[i] - meanY;
+    num += dx * dy;
+    denX += dx * dx;
+    denY += dy * dy;
+  }
+  const den = Math.sqrt(denX * denY);
+  if (den === 0) return null;
+  return num / den;
+}
+
+export interface CorrelationFactor {
+  name: string;
+  ticker: string;
+  price: number | null;
+  changePct: number | null;
+  correlation: number | null; // Pearson correlation vs gold closes, last ~60 hourly candles
+  interpretation: string;
+}
+
+export interface CorrelationAnalysis {
+  gold: { price: number; changePct: number | null };
+  dxy: CorrelationFactor;
+  us10y: CorrelationFactor;
+  computedAt: string;
+}
+
+/**
+ * Fetches DXY (US Dollar Index) and US 10-Year Treasury yield alongside gold,
+ * and computes their statistical correlation with gold's recent price moves.
+ * Gold is historically negatively correlated with both DXY and real yields.
+ */
+export async function getCorrelationAnalysis(): Promise<CorrelationAnalysis> {
+  const [goldCandles, dxyCandles, yieldCandles] = await Promise.all([
+    fetchXauusdCandles("1h", "60d"),
+    fetchTickerCandles(DXY_TICKER, "1h", "60d").catch(() => [] as XauusdCandle[]),
+    fetchTickerCandles(US10Y_TICKER, "1h", "60d").catch(() => [] as XauusdCandle[]),
+  ]);
+
+  const goldCloses = goldCandles.map((c) => c.close);
+  const goldLast = goldCandles[goldCandles.length - 1];
+  const goldPrev = goldCandles[goldCandles.length - 2];
+  const goldChangePct = goldPrev ? ((goldLast.close - goldPrev.close) / goldPrev.close) * 100 : null;
+
+  function buildFactor(name: string, ticker: string, candles: XauusdCandle[]): CorrelationFactor {
+    if (candles.length < 10) {
+      return { name, ticker, price: null, changePct: null, correlation: null, interpretation: "Data tidak tersedia" };
+    }
+    const closes = candles.map((c) => c.close);
+    const last = candles[candles.length - 1];
+    const prev = candles[candles.length - 2];
+    const changePct = prev ? ((last.close - prev.close) / prev.close) * 100 : null;
+    const correlation = pearsonCorrelation(goldCloses, closes);
+
+    let interpretation = "Korelasi lemah/tidak signifikan dengan gold saat ini.";
+    if (correlation != null) {
+      if (correlation <= -0.5) {
+        interpretation = `Korelasi negatif kuat (${correlation.toFixed(2)}) — saat ${name} naik, gold cenderung turun, sesuai pola historis.`;
+      } else if (correlation >= 0.5) {
+        interpretation = `Korelasi positif kuat (${correlation.toFixed(2)}) — tidak biasa, ${name} dan gold bergerak searah saat ini.`;
+      } else {
+        interpretation = `Korelasi lemah (${correlation.toFixed(2)}) — pergerakan ${name} kurang berpengaruh langsung pada gold saat ini.`;
+      }
+    }
+
+    return {
+      name,
+      ticker,
+      price: parseFloat(last.close.toFixed(3)),
+      changePct: changePct != null ? parseFloat(changePct.toFixed(3)) : null,
+      correlation: correlation != null ? parseFloat(correlation.toFixed(3)) : null,
+      interpretation,
+    };
+  }
+
+  return {
+    gold: { price: parseFloat(goldLast.close.toFixed(2)), changePct: goldChangePct != null ? parseFloat(goldChangePct.toFixed(3)) : null },
+    dxy: buildFactor("DXY (Dollar Index)", DXY_TICKER, dxyCandles),
+    us10y: buildFactor("US 10-Year Treasury Yield", US10Y_TICKER, yieldCandles),
+    computedAt: new Date().toISOString(),
   };
 }
 

@@ -29,9 +29,13 @@ import {
   fetchXauusdCandles,
   calculateIndicators,
   fetchXauusdNews,
+  getMultiTimeframeAnalysis,
+  summarizeTimeframeConfluence,
+  getCorrelationAnalysis,
   type XauusdIndicators,
 } from "./xauusd-data.js";
 import { getDeepseekApiKey, getPredictionTimeframeMinutes } from "./xauusd-settings.js";
+import { notifyNewPrediction } from "./xauusd-whatsapp.js";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 const LEARN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
@@ -315,8 +319,31 @@ async function makePrediction(indicators: XauusdIndicators): Promise<void> {
   const timeframeMinutes = await getPredictionTimeframeMinutes();
   const timeframeLabel = `${timeframeMinutes}m`;
 
+  // Gather multi-timeframe confluence + DXY/yield correlation context so the
+  // AI's prediction accounts for higher-timeframe trend and macro factors,
+  // not just the 1H indicators. Both are best-effort — if either external
+  // fetch fails, the prediction still proceeds using only 1H indicators.
+  let mtfContext = "";
+  try {
+    const mtf = await getMultiTimeframeAnalysis();
+    const confluence = summarizeTimeframeConfluence(mtf);
+    mtfContext = `\n\n=== ANALISIS MULTI-TIMEFRAME ===\n${mtf
+      .map((t) => `${t.label}: trend=${t.indicators?.trend ?? "n/a"}, RSI=${t.indicators?.rsi14?.toFixed(1) ?? "n/a"}, EMA alignment=${t.indicators?.emaAlignment ?? "n/a"}`)
+      .join("\n")}\nKesimpulan confluence: ${confluence.agreement} (${confluence.bullishCount} timeframe bullish, ${confluence.bearishCount} bearish)`;
+  } catch (err) {
+    console.error("[XAUUSD Brain] Multi-timeframe context error:", err);
+  }
+
+  let correlationContext = "";
+  try {
+    const corr = await getCorrelationAnalysis();
+    correlationContext = `\n\n=== KORELASI MAKRO (DXY & US10Y) ===\nDXY: $${corr.dxy.price ?? "n/a"} (${corr.dxy.changePct != null ? (corr.dxy.changePct > 0 ? "+" : "") + corr.dxy.changePct.toFixed(2) + "%" : "n/a"}), korelasi vs gold=${corr.dxy.correlation ?? "n/a"}\nUS 10Y Yield: ${corr.us10y.price ?? "n/a"}% (${corr.us10y.changePct != null ? (corr.us10y.changePct > 0 ? "+" : "") + corr.us10y.changePct.toFixed(2) + "%" : "n/a"}), korelasi vs gold=${corr.us10y.correlation ?? "n/a"}`;
+  } catch (err) {
+    console.error("[XAUUSD Brain] Correlation context error:", err);
+  }
+
   const systemPrompt = `Kamu adalah AI trading system untuk XAUUSD. 
-Buat prediksi arah harga untuk ${timeframeMinutes} menit ke depan berdasarkan indikator teknikal.
+Buat prediksi arah harga untuk ${timeframeMinutes} menit ke depan berdasarkan indikator teknikal 1H, konfirmasi dari analisis multi-timeframe (1H/4H/Harian), dan faktor korelasi makro (DXY, US 10-Year Treasury Yield).
 Selain arah, tentukan juga rentang harga entry (entryLow-entryHigh) yang ideal untuk masuk posisi, dan level stop loss (stopLoss) untuk membatasi kerugian.
 Jawab SELALU dalam format JSON:
 {
@@ -326,7 +353,7 @@ Jawab SELALU dalam format JSON:
   "entryHigh": <batas atas rentang harga entry dalam USD>,
   "stopLoss": <harga stop loss dalam USD>,
   "confidence": <0.0-1.0>,
-  "reasoning": "<2-3 kalimat alasan>"
+  "reasoning": "<2-3 kalimat alasan, sebutkan jika multi-timeframe atau DXY/yield mendukung atau bertentangan dengan sinyal 1H>"
 }`;
 
   const userMsg = `Indikator XAUUSD saat ini:
@@ -336,7 +363,7 @@ EMA9: ${indicators.ema9}, EMA21: ${indicators.ema21}, EMA50: ${indicators.ema50}
 MACD: line=${indicators.macdLine}, signal=${indicators.macdSignal}, hist=${indicators.macdHistogram} (${indicators.macdSignalType})
 BB: upper=${indicators.bbUpper}, mid=${indicators.bbMiddle}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
 ATR14: ${indicators.atr14}
-Trend: ${indicators.trend}, EMA Alignment: ${indicators.emaAlignment}
+Trend: ${indicators.trend}, EMA Alignment: ${indicators.emaAlignment}${mtfContext}${correlationContext}
 Support: $${indicators.supportLevel}, Resistance: $${indicators.resistanceLevel}
 
 Buat prediksi ${timeframeMinutes} menit ke depan dalam format JSON, termasuk entryLow, entryHigh, dan stopLoss.`;
@@ -391,21 +418,42 @@ Buat prediksi ${timeframeMinutes} menit ke depan dalam format JSON, termasuk ent
   try {
     const verifyAt = new Date(Date.now() + timeframeMinutes * 60 * 1000);
 
+    const direction = pred.direction ?? ruleBased.direction;
+    const targetPrice = pred.targetPrice ?? ruleBased.targetPrice;
+    const entryLow = pred.entryLow ?? ruleBased.entryLow;
+    const entryHigh = pred.entryHigh ?? ruleBased.entryHigh;
+    const stopLoss = pred.stopLoss ?? ruleBased.stopLoss;
+    const confidence = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
+    const reasoning = aiPowered
+      ? (pred.reasoning ?? ruleBased.reasoning)
+      : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`;
+
     await db.insert(xauusdPredictionsTable).values({
       timeframe: timeframeLabel,
-      direction: pred.direction ?? ruleBased.direction,
-      targetPrice: pred.targetPrice ?? ruleBased.targetPrice,
-      entryLow: pred.entryLow ?? ruleBased.entryLow,
-      entryHigh: pred.entryHigh ?? ruleBased.entryHigh,
-      stopLoss: pred.stopLoss ?? ruleBased.stopLoss,
-      confidence: Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence)),
-      reasoning: aiPowered
-        ? (pred.reasoning ?? ruleBased.reasoning)
-        : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`,
+      direction,
+      targetPrice,
+      entryLow,
+      entryHigh,
+      stopLoss,
+      confidence,
+      reasoning,
       priceAtPrediction: indicators.price,
       indicatorsAtPrediction: indicators as unknown as Record<string, unknown>,
       verifyAt,
       status: "pending",
+    });
+
+    // Fire-and-forget WhatsApp alert — no-ops if not configured/enabled.
+    void notifyNewPrediction({
+      direction,
+      targetPrice,
+      entryLow,
+      entryHigh,
+      stopLoss,
+      confidence,
+      reasoning,
+      priceAtPrediction: indicators.price,
+      timeframe: timeframeLabel,
     });
   } catch (err) {
     console.error("[XAUUSD Brain] Prediction save error:", err);

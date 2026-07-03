@@ -10,6 +10,8 @@ import { eq } from "drizzle-orm";
 
 const KEY_DEEPSEEK = "deepseek_api_key";
 const KEY_TIMEFRAME = "prediction_timeframe_minutes";
+const KEY_WHATSAPP_NUMBER = "whatsapp_number";
+const KEY_WHATSAPP_ENABLED = "whatsapp_enabled";
 
 let cache: Map<string, string> | null = null;
 let cacheLoadedAt = 0;
@@ -78,10 +80,39 @@ export async function setPredictionTimeframeMinutes(minutes: number): Promise<vo
   await setValue(KEY_TIMEFRAME, String(minutes));
 }
 
+// ─── WhatsApp notification settings ───────────────────────────────────────────
+
+export async function getWhatsappNumber(): Promise<string> {
+  const fromDb = await getValue(KEY_WHATSAPP_NUMBER);
+  return fromDb?.trim() ?? "";
+}
+
+export async function setWhatsappNumber(number: string): Promise<void> {
+  await setValue(KEY_WHATSAPP_NUMBER, number.trim());
+}
+
+export async function isWhatsappEnabled(): Promise<boolean> {
+  const fromDb = await getValue(KEY_WHATSAPP_ENABLED);
+  return fromDb === "true";
+}
+
+export async function setWhatsappEnabled(enabled: boolean): Promise<void> {
+  await setValue(KEY_WHATSAPP_ENABLED, enabled ? "true" : "false");
+}
+
+export function isWhatsappConfigured(): boolean {
+  return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+}
+
 export async function getSettingsSummary(): Promise<{
   hasDeepseekKey: boolean;
   deepseekKeySource: "database" | "environment" | "none";
   predictionTimeframeMinutes: PredictionTimeframeMinutes;
+  whatsapp: {
+    number: string;
+    enabled: boolean;
+    configured: boolean;
+  };
 }> {
   const fromDb = await getValue(KEY_DEEPSEEK);
   const hasDbKey = !!fromDb && fromDb.trim().length > 0;
@@ -90,5 +121,10 @@ export async function getSettingsSummary(): Promise<{
     hasDeepseekKey: hasDbKey || hasEnvKey,
     deepseekKeySource: hasDbKey ? "database" : hasEnvKey ? "environment" : "none",
     predictionTimeframeMinutes: await getPredictionTimeframeMinutes(),
+    whatsapp: {
+      number: await getWhatsappNumber(),
+      enabled: await isWhatsappEnabled(),
+      configured: isWhatsappConfigured(),
+    },
   };
 }

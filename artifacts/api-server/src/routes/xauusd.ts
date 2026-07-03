@@ -16,6 +16,9 @@ import { eq, desc, and } from "drizzle-orm";
 import {
   fetchXauusdCandles,
   calculateIndicators,
+  getMultiTimeframeAnalysis,
+  summarizeTimeframeConfluence,
+  getCorrelationAnalysis,
 } from "../lib/xauusd-data.js";
 import {
   runLearningCycle,
@@ -30,8 +33,11 @@ import {
   setDeepseekApiKey,
   clearDeepseekApiKey,
   setPredictionTimeframeMinutes,
+  setWhatsappNumber,
+  setWhatsappEnabled,
   VALID_TIMEFRAMES,
 } from "../lib/xauusd-settings.js";
+import { sendTestWhatsappMessage } from "../lib/xauusd-whatsapp.js";
 
 export const xauusdRouter = Router();
 
@@ -63,6 +69,29 @@ xauusdRouter.get("/snapshot", async (_req, res) => {
     });
   } catch (err) {
     console.error("[XAUUSD] /snapshot error:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── GET /xauusd/multi-timeframe — 1H/4H/Daily trend confluence ──────────────
+xauusdRouter.get("/multi-timeframe", async (_req, res) => {
+  try {
+    const analyses = await getMultiTimeframeAnalysis();
+    const confluence = summarizeTimeframeConfluence(analyses);
+    return res.json({ timeframes: analyses, confluence });
+  } catch (err) {
+    console.error("[XAUUSD] /multi-timeframe error:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── GET /xauusd/correlation — DXY & US10Y correlation with gold ─────────────
+xauusdRouter.get("/correlation", async (_req, res) => {
+  try {
+    const analysis = await getCorrelationAnalysis();
+    return res.json(analysis);
+  } catch (err) {
+    console.error("[XAUUSD] /correlation error:", err);
     return res.status(500).json({ error: String(err) });
   }
 });
@@ -283,6 +312,35 @@ xauusdRouter.post("/settings/timeframe", async (req, res) => {
     }
     await setPredictionTimeframeMinutes(minutes);
     return res.json({ ok: true, predictionTimeframeMinutes: minutes });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /xauusd/settings/whatsapp — set WhatsApp number + enable/disable ───
+// Note: not admin-gated — this is a user-facing settings page with no login system.
+xauusdRouter.post("/settings/whatsapp", async (req, res) => {
+  const { number, enabled } = req.body as { number?: string; enabled?: boolean };
+  try {
+    if (typeof number === "string") {
+      await setWhatsappNumber(number);
+    }
+    if (typeof enabled === "boolean") {
+      await setWhatsappEnabled(enabled);
+    }
+    const summary = await getSettingsSummary();
+    return res.json({ ok: true, whatsapp: summary.whatsapp });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /xauusd/settings/whatsapp/test — send a test WhatsApp message ──────
+xauusdRouter.post("/settings/whatsapp/test", async (_req, res) => {
+  try {
+    const result = await sendTestWhatsappMessage();
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+    return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }

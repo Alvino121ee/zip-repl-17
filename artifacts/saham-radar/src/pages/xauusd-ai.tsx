@@ -16,7 +16,7 @@ import {
   MessageSquare, Newspaper, Activity, Zap, RefreshCw,
   Send, Play, ChevronDown, ChevronUp, Target, History,
   CheckCircle2, XCircle, Clock, Loader2, Settings, KeyRound,
-  Calendar, BarChart2, Trophy
+  Calendar, BarChart2, Trophy, Layers, Link2, Phone, Bell
 } from "lucide-react";
 
 // ─── TradingView Widgets ────────────────────────────────────────────────────
@@ -470,6 +470,39 @@ interface XauusdSettings {
   deepseekKeySource: "database" | "environment" | "none";
   predictionTimeframeMinutes: number;
   validTimeframes: number[];
+  whatsapp: { number: string; enabled: boolean; configured: boolean };
+}
+
+interface TimeframeIndicators {
+  price: number; open: number; high: number; low: number; volume: number;
+  rsi14: number | null; ema9: number | null; ema21: number | null;
+  ema50: number | null; ema200: number | null;
+  macdLine: number | null; macdSignal: number | null; macdHistogram: number | null;
+  bbUpper: number | null; bbMiddle: number | null; bbLower: number | null; bbWidth: number | null;
+  atr14: number | null; trend: string; rsiSignal: string;
+  macdSignalType: string; emaAlignment: string;
+  supportLevel: number | null; resistanceLevel: number | null;
+}
+
+interface TimeframeEntry {
+  timeframe: string; label: string; indicators: TimeframeIndicators | null; error?: string;
+}
+
+interface MultiTimeframeResponse {
+  timeframes: TimeframeEntry[];
+  confluence: { agreement: string; bullishCount: number; bearishCount: number; sidewaysCount: number };
+}
+
+interface CorrelationFactor {
+  name: string; ticker: string; price: number | null; changePct: number | null;
+  correlation: number | null; interpretation: string;
+}
+
+interface CorrelationResponse {
+  gold: { price: number | null; changePct: number | null };
+  dxy: CorrelationFactor;
+  us10y: CorrelationFactor;
+  computedAt: string;
 }
 
 interface NewsItem {
@@ -998,6 +1031,137 @@ function NewsPanel({ news }: { news: NewsItem[] }) {
   );
 }
 
+// ─── Multi-Timeframe Panel ──────────────────────────────────────────────────
+function trendBadgeSmall(trend: string | undefined) {
+  const t = trend ?? "sideways";
+  const cls = t === "bullish" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+    : t === "bearish" ? "bg-red-500/20 text-red-300 border-red-500/30"
+    : "bg-slate-500/20 text-slate-300 border-slate-500/30";
+  const label = t === "bullish" ? "Bullish" : t === "bearish" ? "Bearish" : "Sideways";
+  return <Badge className={`text-[10px] border ${cls}`}>{label}</Badge>;
+}
+
+function MultiTimeframePanel({ data, isLoading }: { data: MultiTimeframeResponse | undefined; isLoading: boolean }) {
+  if (isLoading && !data) return (
+    <div className="text-center py-16 text-muted-foreground">
+      <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+    </div>
+  );
+  if (!data) return (
+    <div className="text-center py-16 text-muted-foreground">
+      <Layers className="w-12 h-12 mx-auto mb-3 opacity-30" />
+      <p>Gagal memuat data multi-timeframe.</p>
+    </div>
+  );
+
+  const confluenceColor = data.confluence.agreement.toLowerCase().includes("bullish")
+    ? "text-emerald-400" : data.confluence.agreement.toLowerCase().includes("bearish")
+    ? "text-red-400" : "text-amber-400";
+
+  return (
+    <div className="space-y-6">
+      <p className="text-xs text-muted-foreground">
+        Membandingkan tren, RSI, dan struktur EMA di tiga timeframe (1 Jam, 4 Jam, Harian) untuk melihat apakah sinyal saling mendukung (confluence).
+      </p>
+
+      <div className="rounded-lg p-4 border border-amber-500/30 bg-amber-500/5 text-center">
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Kesimpulan Confluence</p>
+        <p className={`text-2xl font-bold ${confluenceColor}`}>{data.confluence.agreement}</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          {data.confluence.bullishCount} bullish · {data.confluence.bearishCount} bearish · {data.confluence.sidewaysCount} sideways
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        {data.timeframes.map((tf) => (
+          <div key={tf.timeframe} className="bg-card/40 rounded-lg border border-border/50 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold">{tf.label}</h4>
+              {tf.indicators && trendBadgeSmall(tf.indicators.trend)}
+            </div>
+            {tf.indicators ? (
+              <div className="space-y-2 text-xs">
+                <div className="flex justify-between"><span className="text-muted-foreground">Harga</span><span className="font-medium">${fmt(tf.indicators.price)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">RSI14</span><span className={`font-medium ${rsiColor(tf.indicators.rsi14)}`}>{fmt(tf.indicators.rsi14, 1)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">EMA Alignment</span><span className="font-medium">{tf.indicators.emaAlignment.replace(/_/g, " ")}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">MACD</span><span className="font-medium">{tf.indicators.macdSignalType.replace(/_/g, " ")}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Support</span><span className="font-medium text-emerald-400">${fmt(tf.indicators.supportLevel)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Resistance</span><span className="font-medium text-red-400">${fmt(tf.indicators.resistanceLevel)}</span></div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">{tf.error ?? "Data tidak tersedia."}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Correlation Panel ──────────────────────────────────────────────────────
+function CorrelationPanel({ data, isLoading }: { data: CorrelationResponse | undefined; isLoading: boolean }) {
+  if (isLoading && !data) return (
+    <div className="text-center py-16 text-muted-foreground">
+      <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+    </div>
+  );
+  if (!data) return (
+    <div className="text-center py-16 text-muted-foreground">
+      <Link2 className="w-12 h-12 mx-auto mb-3 opacity-30" />
+      <p>Gagal memuat data korelasi.</p>
+    </div>
+  );
+
+  const factors = [
+    { key: "dxy", data: data.dxy },
+    { key: "us10y", data: data.us10y },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <p className="text-xs text-muted-foreground">
+        AI juga mempertimbangkan pergerakan Dollar Index (DXY) dan yield Obligasi AS 10 Tahun (US10Y) — dua faktor makro yang secara historis berkorelasi dengan harga emas.
+      </p>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {factors.map((f) => {
+          const corr = f.data.correlation;
+          const strength = corr === null ? "text-muted-foreground"
+            : Math.abs(corr) >= 0.6 ? "text-red-400"
+            : Math.abs(corr) >= 0.3 ? "text-amber-400"
+            : "text-slate-400";
+          return (
+            <div key={f.key} className="bg-card/40 rounded-lg border border-border/50 p-4">
+              <h4 className="text-sm font-semibold mb-2">{f.data.name}</h4>
+              <div className="flex items-center gap-4 mb-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Harga</p>
+                  <p className="text-lg font-bold">{f.data.price != null ? f.data.price.toLocaleString() : "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Perubahan</p>
+                  <p className={`text-sm font-medium ${(f.data.changePct ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {f.data.changePct != null ? `${f.data.changePct > 0 ? "+" : ""}${f.data.changePct.toFixed(2)}%` : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Korelasi vs Gold</p>
+                  <p className={`text-sm font-bold ${strength}`}>{corr != null ? corr.toFixed(2) : "—"}</p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground italic">{f.data.interpretation}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="text-[10px] text-muted-foreground text-right">
+        Dihitung: {new Date(data.computedAt).toLocaleString("id-ID")}
+      </p>
+    </div>
+  );
+}
+
 // ─── Settings Panel ─────────────────────────────────────────────────────────
 function SettingsPanel({
   settings,
@@ -1006,6 +1170,10 @@ function SettingsPanel({
   onSaveTimeframe,
   savingKey,
   savingTimeframe,
+  onSaveWhatsapp,
+  savingWhatsapp,
+  onTestWhatsapp,
+  testingWhatsapp,
 }: {
   settings: XauusdSettings | undefined;
   onSaveKey: (key: string) => void;
@@ -1013,8 +1181,19 @@ function SettingsPanel({
   onSaveTimeframe: (minutes: number) => void;
   savingKey: boolean;
   savingTimeframe: boolean;
+  onSaveWhatsapp: (number: string, enabled: boolean) => void;
+  savingWhatsapp: boolean;
+  onTestWhatsapp: () => void;
+  testingWhatsapp: boolean;
 }) {
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [waNumber, setWaNumber] = useState(settings?.whatsapp.number ?? "");
+  const [waEnabled, setWaEnabled] = useState(settings?.whatsapp.enabled ?? false);
+
+  useEffect(() => {
+    setWaNumber(settings?.whatsapp.number ?? "");
+    setWaEnabled(settings?.whatsapp.enabled ?? false);
+  }, [settings?.whatsapp.number, settings?.whatsapp.enabled]);
 
   return (
     <div className="space-y-6 max-w-xl">
@@ -1092,12 +1271,71 @@ function SettingsPanel({
           ))}
         </div>
       </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Bell className="w-4 h-4 text-amber-400" />
+          <h3 className="text-sm font-semibold">Notifikasi WhatsApp</h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Dapatkan notifikasi WhatsApp otomatis setiap kali AI membuat prediksi baru.
+        </p>
+        <div className="flex items-center gap-2 mb-3">
+          <Badge
+            className={`text-[10px] border ${
+              settings?.whatsapp.configured
+                ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                : "bg-amber-500/20 text-amber-300 border-amber-500/30"
+            }`}
+          >
+            {settings?.whatsapp.configured ? "Server WhatsApp terkonfigurasi" : "Server WhatsApp belum dikonfigurasi (perlu WHATSAPP_ACCESS_TOKEN & WHATSAPP_PHONE_NUMBER_ID)"}
+          </Badge>
+        </div>
+        <div className="flex items-center gap-2 mb-3">
+          <Phone className="w-4 h-4 text-muted-foreground" />
+          <Input
+            type="tel"
+            placeholder="cth: 6281234567890 (kode negara tanpa +)"
+            value={waNumber}
+            onChange={(e) => setWaNumber(e.target.value)}
+            className="flex-1"
+          />
+        </div>
+        <div className="flex items-center gap-2 mb-3">
+          <input
+            type="checkbox"
+            id="wa-enabled"
+            checked={waEnabled}
+            onChange={(e) => setWaEnabled(e.target.checked)}
+            className="w-4 h-4 accent-amber-500"
+          />
+          <Label htmlFor="wa-enabled" className="text-xs cursor-pointer">Aktifkan notifikasi WhatsApp untuk prediksi baru</Label>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            onClick={() => onSaveWhatsapp(waNumber, waEnabled)}
+            disabled={savingWhatsapp || waNumber.trim().length === 0}
+            className="bg-amber-500 hover:bg-amber-600 text-black"
+          >
+            {savingWhatsapp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Simpan"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onTestWhatsapp}
+            disabled={testingWhatsapp || !settings?.whatsapp.number}
+          >
+            {testingWhatsapp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Kirim Pesan Tes"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings" | "calendar" | "winrate" | "backtest";
+type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "questions" | "news" | "log" | "settings" | "calendar" | "winrate" | "backtest" | "multitimeframe" | "correlation";
 
 export default function XauusdAi() {
   const [activeTab, setActiveTab] = useState<Tab>("chart");
@@ -1169,6 +1407,18 @@ export default function XauusdAi() {
     refetchInterval: 60_000,
   });
 
+  const multiTimeframeQ = useQuery({
+    queryKey: ["xauusd-multi-timeframe"],
+    queryFn: () => apiGet<MultiTimeframeResponse>("/multi-timeframe"),
+    refetchInterval: 60_000,
+  });
+
+  const correlationQ = useQuery({
+    queryKey: ["xauusd-correlation"],
+    queryFn: () => apiGet<CorrelationResponse>("/correlation"),
+    refetchInterval: 60_000,
+  });
+
   const learnNowMutation = useMutation({
     mutationFn: () => apiPost("/learn-now"),
     onSuccess: () => {
@@ -1213,9 +1463,33 @@ export default function XauusdAi() {
   const engine = engineQ.data;
   const live = livePriceQ.data;
 
+  const saveWhatsappMutation = useMutation({
+    mutationFn: ({ number, enabled }: { number: string; enabled: boolean }) =>
+      apiPost("/settings/whatsapp", { number, enabled }),
+    onSuccess: () => {
+      toast({ title: "✅ Pengaturan WhatsApp Disimpan", description: "Nomor WhatsApp tujuan berhasil disimpan." });
+      void qc.invalidateQueries({ queryKey: ["xauusd-settings"] });
+    },
+    onError: (err) => toast({ title: "Error", description: String(err), variant: "destructive" }),
+  });
+
+  const testWhatsappMutation = useMutation({
+    mutationFn: () => apiPost<{ success: boolean; error?: string }>("/settings/whatsapp/test"),
+    onSuccess: (res) => {
+      if (res.success) {
+        toast({ title: "✅ Pesan Tes Terkirim", description: "Cek WhatsApp Anda untuk pesan tes." });
+      } else {
+        toast({ title: "Gagal Mengirim", description: res.error ?? "Gagal mengirim pesan tes.", variant: "destructive" });
+      }
+    },
+    onError: (err) => toast({ title: "Error", description: String(err), variant: "destructive" }),
+  });
+
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "chart", label: "Chart TradingView", icon: <TrendingUp className="w-3.5 h-3.5" /> },
     { id: "indicators", label: "Indikator Live", icon: <Activity className="w-3.5 h-3.5" /> },
+    { id: "multitimeframe", label: "Multi-Timeframe", icon: <Layers className="w-3.5 h-3.5" /> },
+    { id: "correlation", label: "Korelasi", icon: <Link2 className="w-3.5 h-3.5" /> },
     { id: "brain", label: `Otak AI (${statsQ.data?.totalInsights ?? 0})`, icon: <Brain className="w-3.5 h-3.5" /> },
     { id: "chat", label: "Chat", icon: <MessageSquare className="w-3.5 h-3.5" /> },
     { id: "predictions", label: `Prediksi (${predictionsQ.data?.length ?? 0})`, icon: <Target className="w-3.5 h-3.5" /> },
@@ -1403,6 +1677,14 @@ export default function XauusdAi() {
             </div>
           )}
 
+          {activeTab === "multitimeframe" && (
+            <MultiTimeframePanel data={multiTimeframeQ.data} isLoading={multiTimeframeQ.isLoading} />
+          )}
+
+          {activeTab === "correlation" && (
+            <CorrelationPanel data={correlationQ.data} isLoading={correlationQ.isLoading} />
+          )}
+
           {activeTab === "brain" && (
             <BrainPanel stats={statsQ.data} entries={brainQ.data ?? []} />
           )}
@@ -1442,6 +1724,10 @@ export default function XauusdAi() {
               onSaveTimeframe={(minutes) => saveTimeframeMutation.mutate(minutes)}
               savingKey={saveKeyMutation.isPending || clearKeyMutation.isPending}
               savingTimeframe={saveTimeframeMutation.isPending}
+              onSaveWhatsapp={(number, enabled) => saveWhatsappMutation.mutate({ number, enabled })}
+              savingWhatsapp={saveWhatsappMutation.isPending}
+              onTestWhatsapp={() => testWhatsappMutation.mutate()}
+              testingWhatsapp={testWhatsappMutation.isPending}
             />
           )}
         </CardContent>
