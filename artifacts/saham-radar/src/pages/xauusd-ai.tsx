@@ -702,44 +702,97 @@ function BrainPanel({ stats, entries }: { stats: BrainStats | undefined; entries
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
-interface ChatMsg { role: "user" | "assistant"; content: string }
+interface ChatMsg { role: "user" | "assistant"; content: string; ts: number }
+
+function MarkdownText({ text }: { text: string }) {
+  const lines = text.split("\n");
+  return (
+    <div className="space-y-0.5 leading-relaxed">
+      {lines.map((line, i) => {
+        if (line.trim() === "") return <div key={i} className="h-2" />;
+
+        const isBullet = /^[•\-\*]\s/.test(line.trim());
+        const isNumbered = /^\d+\.\s/.test(line.trim());
+
+        const renderInline = (raw: string) => {
+          const parts = raw.split(/(\*\*[^*]+\*\*)/g);
+          return parts.map((part, j) => {
+            if (part.startsWith("**") && part.endsWith("**"))
+              return <strong key={j} className="font-semibold text-foreground">{part.slice(2, -2)}</strong>;
+            return <span key={j}>{part}</span>;
+          });
+        };
+
+        if (isBullet) {
+          const content = line.trim().replace(/^[•\-\*]\s/, "");
+          return (
+            <div key={i} className="flex gap-1.5 items-start">
+              <span className="text-amber-400 mt-0.5 shrink-0">•</span>
+              <span>{renderInline(content)}</span>
+            </div>
+          );
+        }
+        if (isNumbered) {
+          const num = line.trim().match(/^(\d+)\.\s/)?.[1];
+          const content = line.trim().replace(/^\d+\.\s/, "");
+          return (
+            <div key={i} className="flex gap-1.5 items-start">
+              <span className="text-amber-400 font-bold shrink-0 min-w-[1.2em]">{num}.</span>
+              <span>{renderInline(content)}</span>
+            </div>
+          );
+        }
+        return <div key={i}>{renderInline(line)}</div>;
+      })}
+    </div>
+  );
+}
 
 function ChatPanel() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
 
   const sendMutation = useMutation({
     mutationFn: (msg: string) =>
       apiPost<{ reply: string; aiPowered: boolean }>("/chat", { message: msg, sessionId: SESSION_ID }),
     onSuccess: (data) => {
-      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: data.reply, ts: Date.now() }]);
     },
     onError: (err) => {
       toast({ title: "Error", description: String(err), variant: "destructive" });
     },
   });
 
-  const send = () => {
-    const msg = input.trim();
-    if (!msg || sendMutation.isPending) return;
-    setMessages((prev) => [...prev, { role: "user", content: msg }]);
+  const send = (msg?: string) => {
+    const text = (msg ?? input).trim();
+    if (!text || sendMutation.isPending) return;
+    setMessages((prev) => [...prev, { role: "user", content: text, ts: Date.now() }]);
     setInput("");
-    sendMutation.mutate(msg);
+    sendMutation.mutate(text);
+    setTimeout(() => textareaRef.current?.focus(), 50);
   };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sendMutation.isPending]);
 
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  };
+
   const QUICK = [
-    "Analisis kondisi XAUUSD saat ini", "RSI sudah overbought, apa yang harus dilakukan?",
-    "Berikan setup trading untuk hari ini", "Kapan waktu terbaik buy gold?",
+    "Analisis kondisi XAUUSD saat ini",
+    "RSI sudah overbought, apa yang harus dilakukan?",
+    "Berikan setup trading untuk hari ini",
+    "Kapan waktu terbaik buy gold?",
   ];
 
   return (
-    <div className="flex flex-col h-[520px]">
+    <div className="flex flex-col h-[560px]">
       <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-3">
         {messages.length === 0 ? (
           <div className="py-8 text-center">
@@ -749,7 +802,7 @@ function ChatPanel() {
               {QUICK.map((q) => (
                 <button
                   key={q}
-                  onClick={() => { setInput(q); }}
+                  onClick={() => send(q)}
                   className="text-xs px-3 py-1.5 rounded-full border border-amber-500/30 text-amber-400 hover:bg-amber-500/10 transition-colors text-left"
                 >
                   💬 {q}
@@ -758,14 +811,32 @@ function ChatPanel() {
             </div>
           </div>
         ) : (
-          messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm ${m.role === "user" ? "bg-amber-500/20 text-amber-100 border border-amber-500/30" : "bg-card/60 text-foreground border border-border/50"}`}>
-                {m.role === "assistant" && <span className="text-xs text-amber-400 block mb-1">🥇 Gold AI Trader</span>}
-                <p className="whitespace-pre-wrap">{m.content}</p>
+          <>
+            {messages.map((m, i) => (
+              <div key={i} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
+                <div className={`max-w-[88%] rounded-xl px-4 py-2.5 text-sm ${m.role === "user" ? "bg-amber-500/20 text-amber-100 border border-amber-500/30" : "bg-card/60 text-foreground border border-border/50"}`}>
+                  {m.role === "assistant" && (
+                    <span className="text-xs text-amber-400 block mb-1.5 font-medium">🥇 Gold AI Trader</span>
+                  )}
+                  {m.role === "assistant"
+                    ? <MarkdownText text={m.content} />
+                    : <p className="whitespace-pre-wrap">{m.content}</p>
+                  }
+                </div>
+                <span className="text-[10px] text-muted-foreground mt-0.5 px-1">{fmtTime(m.ts)}</span>
               </div>
-            </div>
-          ))
+            ))}
+            {messages.length > 0 && (
+              <div className="flex justify-center pt-1">
+                <button
+                  onClick={() => setMessages([])}
+                  className="text-[11px] text-muted-foreground hover:text-red-400 transition-colors px-3 py-1 rounded-full border border-border/30 hover:border-red-400/30"
+                >
+                  🗑 Hapus percakapan
+                </button>
+              </div>
+            )}
+          </>
         )}
         {sendMutation.isPending && (
           <div className="flex justify-start">
@@ -778,21 +849,22 @@ function ChatPanel() {
         <div ref={bottomRef} />
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-end">
         <textarea
+          ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder="Tanya Gold AI... (Enter untuk kirim)"
-          className="flex-1 bg-background/50 border border-border/50 rounded-lg px-3 py-2 text-sm resize-none h-[70px] focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+          placeholder="Tanya Gold AI... (Enter kirim, Shift+Enter baris baru)"
+          className="flex-1 bg-background/50 border border-border/50 rounded-lg px-3 py-2 text-sm resize-none h-[60px] focus:outline-none focus:ring-1 focus:ring-amber-500/50 placeholder:text-muted-foreground/50"
         />
         <Button
-          onClick={send}
+          onClick={() => send()}
           disabled={!input.trim() || sendMutation.isPending}
-          className="bg-amber-500 hover:bg-amber-600 text-black self-end"
+          className="bg-amber-500 hover:bg-amber-600 text-black shrink-0"
           size="sm"
         >
-          <Send className="w-4 h-4" />
+          {sendMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </Button>
       </div>
     </div>

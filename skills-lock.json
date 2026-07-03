@@ -13,6 +13,12 @@
       "skillPath": "audit-website/SKILL.md",
       "computedHash": "045c144e81e4b758e747b43fa2a94ddde93cf7b628f195b2098fd4927e449a0c"
     },
+    "backtesting-frameworks": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/quantitative-trading/skills/backtesting-frameworks/SKILL.md",
+      "computedHash": "c186baf4119dafbf2e457abef8c6aebc10177074c4be4b8118edbbb3c396f869"
+    },
     "browser-use": {
       "source": "browser-use/browser-use",
       "sourceType": "github",
