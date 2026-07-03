@@ -26,6 +26,9 @@ interface ExtremeMode {
   cycles: number;
   startedAt: string | null;
   percentDone: number;
+  stopRequested: boolean;
+  speedQph: number;
+  etaMs: number | null;
 }
 
 interface SystemStatus {
@@ -289,6 +292,17 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
 }
 
 // ─── Extreme Learning Mode Panel ──────────────────────────────────────────────
+
+function formatEta(ms: number): string {
+  const totalMin = Math.round(ms / 60_000);
+  if (totalMin < 60) return `${totalMin} menit`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m > 0 ? `${h}j ${m}m` : `${h} jam`;
+}
+
+const TARGET_PRESETS = [50, 100, 250, 500, 1000];
+
 function ExtremeModePanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () => void }) {
   const { toast } = useToast();
   const em = data.engine.extremeMode;
@@ -307,24 +321,34 @@ function ExtremeModePanel({ data, onRefetch }: { data: SystemStatus; onRefetch: 
   const stopMut = useMutation({
     mutationFn: () => adminPost("/api/xauusd/engine/extreme/stop"),
     onSuccess: () => {
-      toast({ title: "⛔ Berhenti", description: "Mode ekstrem dihentikan" });
+      toast({ title: "⛔ Permintaan Berhenti Dikirim", description: "Menunggu pertanyaan selesai…" });
       onRefetch();
     },
     onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
   });
 
+  const isStopping = em.active && em.stopRequested;
+  const qualityRate = em.progress > 0 ? Math.round((em.insights / em.progress) * 100) : null;
+
   return (
-    <Card className={`border-2 transition-colors ${em.active ? "border-orange-500/50 bg-orange-500/5" : "border-border/50"}`}>
+    <Card className={`border-2 transition-colors ${em.active ? (isStopping ? "border-red-500/40 bg-red-500/5" : "border-orange-500/50 bg-orange-500/5") : "border-border/50"}`}>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center justify-between text-base">
           <span className="flex items-center gap-2">
-            <Flame className={`w-5 h-5 ${em.active ? "text-orange-400 animate-pulse" : "text-muted-foreground"}`} />
+            <Flame className={`w-5 h-5 ${em.active ? (isStopping ? "text-red-400" : "text-orange-400 animate-pulse") : "text-muted-foreground"}`} />
             Mode Belajar Ekstrem
           </span>
           {em.active && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 border border-orange-500/30 animate-pulse">
-              AKTIF
-            </span>
+            isStopping ? (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                MENGHENTIKAN…
+              </span>
+            ) : (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 border border-orange-500/30 animate-pulse">
+                AKTIF
+              </span>
+            )
           )}
         </CardTitle>
       </CardHeader>
@@ -336,64 +360,101 @@ function ExtremeModePanel({ data, onRefetch }: { data: SystemStatus; onRefetch: 
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Progress</span>
-                <span className="font-semibold tabular-nums text-orange-400">
+                <span className={`font-semibold tabular-nums ${isStopping ? "text-red-400" : "text-orange-400"}`}>
                   {em.progress} / {em.target} pertanyaan ({em.percentDone}%)
                 </span>
               </div>
               <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
                 <div
-                  className="h-2.5 rounded-full bg-gradient-to-r from-orange-500 to-amber-400 transition-all duration-500"
+                  className={`h-2.5 rounded-full transition-all duration-700 ${isStopping ? "bg-gradient-to-r from-red-600 to-red-400" : "bg-gradient-to-r from-orange-500 to-amber-400"}`}
                   style={{ width: `${em.percentDone}%` }}
                 />
               </div>
             </div>
 
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-2">
-              <div className="text-center rounded-lg bg-muted/40 py-2">
-                <p className="text-lg font-bold tabular-nums text-orange-400">{em.progress}</p>
+            {/* Stats grid */}
+            <div className="grid grid-cols-4 gap-2">
+              <div className="text-center rounded-lg bg-muted/40 py-2 px-1">
+                <p className="text-base font-bold tabular-nums text-orange-400">{em.progress}</p>
                 <p className="text-[10px] text-muted-foreground">Dijawab</p>
               </div>
-              <div className="text-center rounded-lg bg-muted/40 py-2">
-                <p className="text-lg font-bold tabular-nums text-emerald-400">{em.insights}</p>
+              <div className="text-center rounded-lg bg-muted/40 py-2 px-1">
+                <p className="text-base font-bold tabular-nums text-emerald-400">{em.insights}</p>
                 <p className="text-[10px] text-muted-foreground">Insights</p>
               </div>
-              <div className="text-center rounded-lg bg-muted/40 py-2">
-                <p className="text-lg font-bold tabular-nums text-violet-400">{em.cycles}</p>
+              <div className="text-center rounded-lg bg-muted/40 py-2 px-1">
+                <p className="text-base font-bold tabular-nums text-violet-400">{em.cycles}</p>
                 <p className="text-[10px] text-muted-foreground">Siklus</p>
+              </div>
+              <div className="text-center rounded-lg bg-muted/40 py-2 px-1">
+                <p className={`text-base font-bold tabular-nums ${qualityRate !== null && qualityRate >= 60 ? "text-emerald-400" : "text-amber-400"}`}>
+                  {qualityRate !== null ? `${qualityRate}%` : "—"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">Kualitas</p>
               </div>
             </div>
 
-            {em.startedAt && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Clock className="w-3.5 h-3.5" />
-                Mulai: {new Date(em.startedAt).toLocaleString("id-ID")}
-              </div>
-            )}
+            {/* ETA & speed row */}
+            <div className="rounded-lg bg-muted/30 px-3 py-2 text-xs text-muted-foreground space-y-1.5">
+              {em.speedQph > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Kecepatan</span>
+                  <span className="font-medium text-foreground/70 tabular-nums">{em.speedQph} pertanyaan/jam</span>
+                </div>
+              )}
+              {em.etaMs !== null && (
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> Estimasi selesai</span>
+                  <span className="font-medium text-orange-400/90 tabular-nums">~{formatEta(em.etaMs)}</span>
+                </div>
+              )}
+              {em.startedAt && (
+                <div className="flex items-center justify-between">
+                  <span>Mulai</span>
+                  <span className="font-medium text-foreground/60">{new Date(em.startedAt).toLocaleString("id-ID")}</span>
+                </div>
+              )}
+            </div>
 
             <Button
-              className="w-full gap-2 bg-red-600/80 hover:bg-red-600 text-white border-0"
+              className={`w-full gap-2 border-0 text-white ${isStopping ? "bg-red-800/60 cursor-not-allowed" : "bg-red-600/80 hover:bg-red-600"}`}
               size="sm"
               onClick={() => stopMut.mutate()}
-              disabled={stopMut.isPending}
+              disabled={stopMut.isPending || isStopping}
             >
-              {stopMut.isPending
-                ? <Loader2 className="w-4 h-4 animate-spin" />
-                : <StopCircle className="w-4 h-4" />}
-              Hentikan Mode Ekstrem
+              {isStopping
+                ? <><Loader2 className="w-4 h-4 animate-spin" />Menghentikan…</>
+                : <><StopCircle className="w-4 h-4" />Hentikan Mode Ekstrem</>}
             </Button>
 
-            <p className="text-[11px] text-muted-foreground/70 text-center">
-              Akan berhenti setelah pertanyaan yang sedang berjalan selesai dijawab
-            </p>
+            {!isStopping && (
+              <p className="text-[11px] text-muted-foreground/70 text-center">
+                Akan berhenti setelah pertanyaan yang sedang berjalan selesai dijawab
+              </p>
+            )}
           </div>
         ) : (
           /* Konfigurasi saat tidak aktif */
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Belajar non-stop tanpa jeda antar siklus. Jeda 15–30 detik antar pertanyaan (menunggu jawaban AI penuh).
-              Deduplication in-memory — tidak mungkin tanya pertanyaan yang sama. Kualitas threshold lebih tinggi (0.65 vs 0.6 normal).
+              Belajar non-stop sampai target tercapai. Jeda 15–30 detik antar pertanyaan, pool otomatis diperluas ke timeframe 4h/1d saat 1h habis. Circuit breaker dengan retry otomatis (3×) jika AI gagal merespons.
             </p>
+
+            {/* Preset buttons */}
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground flex items-center gap-1"><Target className="w-3 h-3" /> Preset Target</p>
+              <div className="flex gap-1.5 flex-wrap">
+                {TARGET_PRESETS.map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setTarget(p)}
+                    className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${target === p ? "bg-orange-500/20 border-orange-500/50 text-orange-400 font-semibold" : "border-border/50 text-muted-foreground hover:border-orange-500/30 hover:text-orange-400/80"}`}
+                  >
+                    {p >= 1000 ? `${p / 1000}k` : p}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -438,6 +499,14 @@ function ExtremeModePanel({ data, onRefetch }: { data: SystemStatus; onRefetch: 
               <div className="flex items-center justify-between">
                 <span>Quality threshold</span>
                 <span className="font-medium text-emerald-400">≥ 0.65 (ketat)</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Pool expansion</span>
+                <span className="font-medium text-blue-400">1h → 4h → 1d otomatis</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Circuit breaker</span>
+                <span className="font-medium text-amber-400">5 min backoff × 3 retry</span>
               </div>
             </div>
 
@@ -489,8 +558,8 @@ export default function AdminPanel() {
       return res.json();
     },
     enabled: !!token,
-    // Refresh lebih cepat saat extreme mode aktif agar progress bar update real-time
-    refetchInterval: (q) => (q.state.data?.engine?.extremeMode?.active ? 5_000 : 20_000),
+    // Refresh 3s saat extreme mode aktif agar progress bar, ETA, dan kecepatan update real-time
+    refetchInterval: (q) => (q.state.data?.engine?.extremeMode?.active ? 3_000 : 20_000),
   });
 
   const handleLogout = () => {

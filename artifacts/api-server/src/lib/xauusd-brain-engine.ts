@@ -55,6 +55,8 @@ const EXTREME_PAUSE_MIN_MS = 15_000;
 const EXTREME_PAUSE_MAX_MS = 30_000;
 const EXTREME_QUALITY_THRESHOLD = 0.65; // lebih ketat dari normal (0.6)
 const EXTREME_QUESTIONS_PER_CYCLE = 10; // default per siklus
+const EXTREME_CIRCUIT_BACKOFF_MS = 5 * 60_000; // 5 menit backoff sebelum retry
+const EXTREME_CIRCUIT_MAX_RETRIES = 3; // maks retry setelah circuit breaker
 
 let isExtremeRunning = false;
 let extremeTarget = 0;
@@ -63,7 +65,10 @@ let extremeInsightsTotal = 0;   // total insights disimpan ke brain
 let extremeCycleCount = 0;      // siklus dalam sesi ini
 let extremeStartedAt: Date | null = null;
 let extremeAbort = false;
+let extremeStopRequested = false;              // flag UI: user minta berhenti
 let extremeHashCache: Set<string> | null = null; // dedup in-memory antar siklus
+let extremeProgressHistory: Array<{ ts: number; count: number }> = []; // untuk hitung kecepatan
+let extremeLastProgressAt: number | null = null; // timestamp progress terakhir (untuk deteksi stale)
 
 // ─── DeepSeek query ────────────────────────────────────────────────────────────
 
@@ -1613,25 +1618,53 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Jeda yang bisa diinterupsi oleh extremeAbort.
+ * Tidur dalam chunk 1 detik, cek flag setiap chunk.
+ * Mengembalikan true jika diinterupsi sebelum waktu habis.
+ */
+async function sleepOrAbort(ms: number): Promise<boolean> {
+  const CHUNK = 1_000;
+  let remaining = ms;
+  while (remaining > 0) {
+    if (extremeAbort) return true;
+    await sleep(Math.min(CHUNK, remaining));
+    remaining -= CHUNK;
+  }
+  return extremeAbort;
+}
+
 async function runExtremeLearningLoop(target: number, questionsPerCycle: number): Promise<void> {
   const SYS_PR = `Kamu adalah expert trader XAUUSD/Gold dengan pengalaman 20 tahun. 
 Berikan jawaban SANGAT SPESIFIK, dengan angka konkret, strategi actionable, dan pelajaran yang bisa langsung diaplikasikan.
 Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin actionable per jawaban.`;
 
-  // Circuit breaker — berhenti otomatis jika DeepSeek terus gagal
+  // Circuit breaker — jeda 5 menit lalu coba lagi (maks 3 kali) sebelum benar-benar berhenti
   const MAX_CONSECUTIVE_ERRORS = 5;
   let consecutiveErrors = 0;
+  let circuitRetries = 0;
 
   while (extremeProgress < target && !extremeAbort) {
     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-      console.error(
-        `[Extreme Mode] 🚨 Circuit breaker aktif — ${consecutiveErrors} kegagalan berturut-turut. ` +
-        `Periksa DeepSeek API key dan koneksi. Mode ekstrem dihentikan otomatis.`
+      if (circuitRetries >= EXTREME_CIRCUIT_MAX_RETRIES) {
+        console.error(
+          `[Extreme Mode] 🚨 Circuit breaker final — ${EXTREME_CIRCUIT_MAX_RETRIES} kali retry gagal. ` +
+          `Periksa DeepSeek API key dan koneksi. Mode ekstrem dihentikan otomatis.`
+        );
+        extremeAbort = true;
+        break;
+      }
+      circuitRetries++;
+      console.warn(
+        `[Extreme Mode] ⚡ Circuit breaker (retry ${circuitRetries}/${EXTREME_CIRCUIT_MAX_RETRIES}) — ` +
+        `jeda ${EXTREME_CIRCUIT_BACKOFF_MS / 60_000} menit lalu lanjut...`
       );
-      extremeAbort = true;
-      break;
+      consecutiveErrors = 0;
+      if (await sleepOrAbort(EXTREME_CIRCUIT_BACKOFF_MS)) break;
+      continue;
     }
-    // 1. Fetch indicators
+
+    // 1. Fetch indicators (1h default)
     let indicators: Awaited<ReturnType<typeof fetchXauusdIndicators>> | null = null;
     try {
       indicators = await fetchXauusdIndicators("1h");
@@ -1640,7 +1673,7 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
     }
     if (!indicators) {
       console.warn("[Extreme Mode] TradingView tidak merespons, coba lagi 30s...");
-      await sleep(30_000);
+      if (await sleepOrAbort(30_000)) break;
       continue;
     }
 
@@ -1692,11 +1725,29 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
     const remaining = target - extremeProgress;
     const count = Math.min(questionsPerCycle, remaining);
     const candidates = getMarketAwareQuestions(indicators, count + 12, spikeDetected);
-    const toAsk = candidates.filter(c => !extremeHashCache!.has(c.hash)).slice(0, count);
+    let toAsk = candidates.filter(c => !extremeHashCache!.has(c.hash)).slice(0, count);
+
+    // Pool 1h habis → coba ekspansi ke timeframe lain sebelum tidur 60s
+    if (toAsk.length === 0) {
+      for (const altTf of (["4h", "1d"] as const)) {
+        try {
+          const altInd = await fetchXauusdIndicators(altTf);
+          if (!altInd) continue;
+          const altCandidates = getMarketAwareQuestions(altInd, count + 12, spikeDetected);
+          const altNew = altCandidates.filter(c => !extremeHashCache!.has(c.hash)).slice(0, count);
+          if (altNew.length > 0) {
+            toAsk = altNew;
+            indicators = altInd;
+            console.log(`[Extreme Mode] 🔀 Pool 1h habis — ekspansi ke ${altTf} (${altNew.length} pertanyaan baru)`);
+            break;
+          }
+        } catch { /* non-fatal */ }
+      }
+    }
 
     if (toAsk.length === 0) {
-      console.warn(`[Extreme Mode] ⚠️ Pool habis — semua kandidat sudah pernah ditanya. Tunggu 60s agar harga bergerak...`);
-      await sleep(60_000);
+      console.warn(`[Extreme Mode] ⚠️ Pool habis di semua timeframe — tunggu 60s agar harga bergerak...`);
+      if (await sleepOrAbort(60_000)) break;
       extremeCycleCount++;
       continue;
     }
@@ -1747,8 +1798,15 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
         }
 
         consecutiveErrors = 0; // reset circuit breaker saat berhasil
+        circuitRetries = 0;    // reset retry counter juga
         extremeProgress++;
         cycleAnswered++;
+
+        // Catat ke history untuk perhitungan kecepatan (simpan maks 30 titik)
+        const nowTs = Date.now();
+        extremeLastProgressAt = nowTs;
+        extremeProgressHistory.push({ ts: nowTs, count: extremeProgress });
+        if (extremeProgressHistory.length > 30) extremeProgressHistory.shift();
 
         // Progress report setiap 10 pertanyaan atau saat target tercapai
         if (extremeProgress % 10 === 0 || extremeProgress === target) {
@@ -1763,7 +1821,7 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
         // Jeda acak 15–30 detik setelah jawaban diterima sebelum pertanyaan berikutnya
         const pause = EXTREME_PAUSE_MIN_MS + Math.random() * (EXTREME_PAUSE_MAX_MS - EXTREME_PAUSE_MIN_MS);
         console.log(`[Extreme Mode] ⏱ Jeda ${(pause / 1000).toFixed(0)}s → pertanyaan ke-${extremeProgress + 1}/${target}`);
-        await sleep(pause);
+        if (await sleepOrAbort(pause)) break;
 
       } catch (err) {
         consecutiveErrors++;
@@ -1772,7 +1830,7 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
           String(err)
         );
         extremeHashCache!.delete(hash); // hapus dari cache agar bisa dicoba ulang
-        await sleep(5_000);
+        if (await sleepOrAbort(5_000)) break;
       }
     }
 
@@ -1822,6 +1880,9 @@ export function startExtremeLearningMode(
   extremeCycleCount = 0;
   extremeStartedAt = new Date();
   extremeAbort = false;
+  extremeStopRequested = false;
+  extremeProgressHistory = [];
+  extremeLastProgressAt = null;
   extremeHashCache = new Set(); // kosong dulu, isi dari DB sebelum loop mulai
 
   console.log(`[Extreme Mode] 🚀 Mulai — target: ${target} pertanyaan, ${safeQpc}/siklus`);
@@ -1858,6 +1919,7 @@ export function startExtremeLearningMode(
 export function stopExtremeLearningMode(): void {
   if (!isExtremeRunning) return;
   extremeAbort = true;
+  extremeStopRequested = true;
   console.log("[Extreme Mode] ⛔ Permintaan berhenti diterima — akan berhenti setelah pertanyaan selesai...");
 }
 
@@ -2176,8 +2238,33 @@ export function getEngineStatus(): {
     cycles: number;
     startedAt: Date | null;
     percentDone: number;
+    stopRequested: boolean;
+    speedQph: number;      // pertanyaan per jam (rolling)
+    etaMs: number | null;  // estimasi sisa waktu dalam ms
   };
 } {
+  // Hitung kecepatan rolling dari riwayat progress
+  // Jika tidak ada progress baru selama 3 menit (stall/backoff), anggap speed = 0
+  const SPEED_STALE_MS = 3 * 60_000;
+  const isSpeedStale =
+    extremeLastProgressAt === null ||
+    (isExtremeRunning && Date.now() - extremeLastProgressAt > SPEED_STALE_MS);
+
+  let speedQph = 0;
+  if (!isSpeedStale && extremeProgressHistory.length >= 2) {
+    const oldest = extremeProgressHistory[0];
+    const newest = extremeProgressHistory[extremeProgressHistory.length - 1];
+    const deltaCount = newest.count - oldest.count;
+    const deltaMs = newest.ts - oldest.ts;
+    if (deltaMs > 0 && deltaCount > 0) {
+      speedQph = Math.round((deltaCount / deltaMs) * 3_600_000);
+    }
+  }
+  const remaining = extremeTarget - extremeProgress;
+  const etaMs: number | null = speedQph > 0 && remaining > 0
+    ? Math.round((remaining / speedQph) * 3_600_000)
+    : null;
+
   return {
     running: learningTimer !== null,
     lastCycleAt,
@@ -2192,6 +2279,9 @@ export function getEngineStatus(): {
       cycles: extremeCycleCount,
       startedAt: extremeStartedAt,
       percentDone: extremeTarget > 0 ? Math.round((extremeProgress / extremeTarget) * 100) : 0,
+      stopRequested: extremeStopRequested,
+      speedQph,
+      etaMs,
     },
   };
 }
