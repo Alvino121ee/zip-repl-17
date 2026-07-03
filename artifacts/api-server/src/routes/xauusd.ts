@@ -25,6 +25,9 @@ import {
   getEngineStatus,
   startXauusdBrainEngine,
   stopXauusdBrainEngine,
+  detectTradingSession,
+  detectMarketRegime,
+  computeClusterLabel,
 } from "../lib/xauusd-brain-engine.js";
 import { chatWithAgent } from "../lib/agent-engine.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
@@ -68,6 +71,20 @@ xauusdRouter.get("/snapshot", async (_req, res) => {
     });
   } catch (err) {
     console.error("[XAUUSD] /snapshot error:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Feature 4/5/7: GET /xauusd/market-regime — live session + regime + cluster
+xauusdRouter.get("/market-regime", async (_req, res) => {
+  try {
+    const indicators = await fetchXauusdIndicators("1h");
+    const session = detectTradingSession();
+    const regime = indicators ? detectMarketRegime(indicators) : null;
+    const cluster = indicators ? computeClusterLabel(indicators) : null;
+    return res.json({ session, regime, cluster, price: indicators?.price ?? null });
+  } catch (err) {
+    console.error("[XAUUSD] /market-regime error:", err);
     return res.status(500).json({ error: String(err) });
   }
 });

@@ -1,0 +1,32 @@
+1. Ensemble Voting System
+Saat ini AI menghasilkan 1 prediksi. Upgrade ke sistem multi-agen voting: buat 3 "sub-agen" dengan perspektif berbeda (technical-only, macro-only, sentiment-only) — prediksi akhir adalah hasil voting mayoritas. Win rate biasanya naik 8-15% karena saling mengkoreksi.
+
+2. Dynamic Confidence Calibration
+AI mungkin sering bilang "90% confidence" padahal win rate-nya 55%. Tambahkan kalibrasi otomatis: jika AI bilang 80% confident tapi historis hanya benar 60% pada level itu, tampilkan angka yang sudah dikoreksi. Membuat AI lebih jujur dan bisa dipercaya.
+
+3. Feature Importance Tracker
+Setelah 100+ prediksi, hitung indikator mana yang paling prediktif menggunakan mutual information score. Tampilkan di dashboard: "RSI-14 berkontribusi 34% akurasi, DXY berkontribusi 28%, dll." AI bisa otomatis membobot indikator paling akurat lebih berat.
+
+📊 Analisis & Signal
+4. Session-Aware Prediction
+Emas berperilaku berbeda di sesi Asia vs London vs New York. Buat AI sadar sesi trading — gunakan waktu saat ini untuk memilih model prediksi yang berbeda. Misal: di sesi Asia volatilitas rendah, di sesi New York lebih reaktif ke data ekonomi.
+
+5. Market Regime Detector
+Otomatis klasifikasi kondisi pasar: Trending / Ranging / Volatile. Prediksi AI bisa berbeda strateginya tergantung regime. Bisa dihitung dari ATR (average true range) dan slope EMA jangka panjang.
+
+6. News Sentiment Scoring
+Ambil berita gold/USD dari RSS/API, lakukan sentiment analysis sederhana (positif/negatif/netral terhadap harga emas), masukkan sebagai salah satu input AI. Berita "Fed hawkish" → bearish gold, "geopolitical risk up" → bullish gold.
+
+🔄 Learning & Memory
+7. Prediction Clustering
+Setelah 200+ prediksi, gunakan k-means clustering untuk mengelompokkan kondisi pasar yang mirip. AI bisa bilang: "Situasi ini mirip cluster #3 yang historis bullish 73%." Ini membuat prediksi jauh lebih kontekstual.
+
+8. Forget Curve (Time-Weighted Memory)
+Pengetahuan lama mungkin sudah tidak relevan. Terapkan exponential decay pada bobot pattern lama — pattern yang dibuat 30 hari lalu bobotnya setengah dari yang dibuat kemarin. AI lebih adaptif terhadap perubahan kondisi pasar.
+
+📈 UI & UX
+9. Probability Distribution Chart
+Alih-alih hanya menampilkan "NAIK 78%", tampilkan distribusi kemungkinan harga: candlestick probabilistik yang menunjukkan range harga yang diperkirakan 1 jam ke depan (P10, P50, P90). Lebih informatif untuk position sizing.
+
+10. Alert & Notifikasi Browser
+Ketika AI menghasilkan prediksi baru dengan confidence ≥75%, kirim browser push notification ke pengguna — bahkan saat tab tidak aktif. Sangat berguna untuk trader aktif

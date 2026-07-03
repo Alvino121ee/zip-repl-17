@@ -1,51 +1,67 @@
-# SahamRadar AI
+# GoldRadar.ai — XAUUSD AI Trading Intelligence
 
-Platform analisis saham BEI (Bursa Efek Indonesia) berbasis AI dengan fitur screening, daily picks, risk radar, dan AI analyst chat.
-
-## Stack
-- **Frontend**: React + Vite, Tailwind CSS, Shadcn UI, TanStack Query, Recharts, Wouter
-- **Backend**: Express.js + TypeScript (Node.js), Pino logging
-- **Database**: PostgreSQL (Drizzle ORM)
-- **Data**: Yahoo Finance API, berita dari RSS feeds
-- **AI**: DeepSeek / OpenAI (opsional)
+Platform trading emas (XAUUSD) berbasis AI yang belajar mandiri 24/7.
 
 ## Cara Menjalankan
 
-### 1. Install dependencies
-```bash
-pnpm install
+Dua workflow harus berjalan bersamaan:
+
+| Workflow | Perintah | Port |
+|---|---|---|
+| `artifacts/saham-radar: web` | `cd artifacts/saham-radar && pnpm run dev` | 5000 |
+| `artifacts/api-server: API Server` | `cd artifacts/api-server && pnpm run dev` | 8080 |
+
+Buka preview di port **5000**.
+
+## Stack
+
+- **Frontend**: React 19 + Vite, Tailwind CSS 4, Shadcn UI, TanStack Query, Wouter
+- **Backend**: Express.js + TypeScript, Pino logging
+- **Database**: PostgreSQL (Replit managed) + Drizzle ORM
+- **AI**: OpenAI / DeepSeek / AI_API_KEY (opsional — ada fallback template jika tidak ada key)
+- **Data**: TradingView Scanner API untuk harga live XAUUSD
+- **Package Manager**: pnpm (monorepo)
+
+## Struktur Monorepo
+
+```
+artifacts/
+  api-server/   — Express API server (port 8080)
+  saham-radar/  — React frontend (port 5000)
+lib/
+  db/           — Schema Drizzle ORM + shared DB client
+  api-spec/     — OpenAPI spec
+  api-client-react/ — Generated API client (React Query)
+scripts/        — Utility scripts (seed, dll)
 ```
 
-### 2. Push schema database
-```bash
-pnpm --filter @workspace/db run push
-```
+## Setup Awal (sudah selesai)
 
-### 3. Seed data (opsional)
 ```bash
-pnpm --filter @workspace/api-server exec tsx src/scripts/seed.ts
+pnpm install                      # install semua dependensi
+tsc --build                       # build lib/db dan shared packages
+pnpm --filter @workspace/db run push  # push schema ke database
 ```
-
-### 4. Jalankan workflows
-- **Frontend**: workflow `artifacts/saham-radar: web`
-- **API Server**: workflow `artifacts/api-server: API Server`
 
 ## Environment Variables
-- `DATABASE_URL` — dikelola otomatis oleh Replit
-- `DEEPSEEK_API_KEY` — opsional, untuk AI Analyst chat penuh
-- `OPENAI_API_KEY` — alternatif AI provider
-- `AI_MODEL` — opsional, default `gpt-4o-mini`
-- `AI_API_BASE_URL` — opsional, custom AI endpoint
 
-## Fitur Utama
-- **Dashboard**: Ringkasan pasar BEI (advancers, decliners, top gainers/losers, sektor)
-- **Screener**: Filter dan ranking 368 saham berdasarkan skor AI
-- **Daily Picks**: 5 saham pilihan AI per hari dengan simulasi profit
-- **AI Analyst**: Chat AI tentang saham BEI + berita pasar terkini
-- **Risk Radar**: Daftar saham dengan risiko tinggi
-- **Watchlist**: Pantau saham favorit
-- **Compare**: Perbandingan antar saham
-- **Admin**: Sinkronisasi data harga realtime dari Yahoo Finance
+| Key | Keterangan |
+|---|---|
+| `DATABASE_URL` | Dikelola otomatis oleh Replit |
+| `SESSION_SECRET` | Secret session (sudah diset) |
+| `OPENAI_API_KEY` | Opsional — untuk fitur AI report |
+| `DEEPSEEK_API_KEY` | Opsional — untuk analisis DeepSeek |
+| `AI_API_KEY` + `AI_API_BASE_URL` + `AI_MODEL` | Opsional — custom AI provider |
+
+Tanpa API key AI, aplikasi tetap berjalan dengan template berbasis data.
+
+## Setelah Ubah Schema Database
+
+```bash
+pnpm --filter @workspace/db run push   # sinkronkan schema ke DB
+tsc --build                            # rebuild type definitions
+```
 
 ## User Preferences
-- Bahasa komunikasi: Indonesia
+
+- Gunakan Bahasa Indonesia dalam komunikasi

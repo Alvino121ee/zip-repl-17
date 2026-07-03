@@ -388,6 +388,162 @@ function computeMacroVote(corr: { dxy: { changePct?: number | null }; us10y: { c
   return { direction, confidence };
 }
 
+// ─── Feature 4: Trading Session Detector ──────────────────────────────────────
+// Deteksi sesi trading berdasarkan waktu UTC
+
+export function detectTradingSession(): "asia" | "london" | "new_york" | "overlap_london_ny" {
+  const now = new Date();
+  const h = now.getUTCHours() + now.getUTCMinutes() / 60;
+  // London-NY overlap: 13:00–16:00 UTC
+  if (h >= 13 && h < 16) return "overlap_london_ny";
+  // New York: 13:00–22:00 UTC
+  if (h >= 13 && h < 22) return "new_york";
+  // London: 07:00–16:00 UTC
+  if (h >= 7 && h < 16) return "london";
+  // Asia: 00:00–07:00 + 22:00–24:00 UTC
+  return "asia";
+}
+
+// ─── Feature 5: Market Regime Detector ───────────────────────────────────────
+// Klasifikasikan kondisi pasar: Trending / Ranging / Volatile
+// menggunakan ATR% dan EMA alignment
+
+export function detectMarketRegime(
+  indicators: XauusdIndicators
+): "trending_up" | "trending_down" | "ranging" | "volatile" {
+  const atr = indicators.atr14 ?? 0;
+  const price = indicators.price;
+  const atrPct = price > 0 ? (atr / price) * 100 : 0;
+
+  // Volatile: ATR > 0.75% dari harga — pasar bergejolak
+  if (atrPct > 0.75) return "volatile";
+
+  // Trending: EMA bullish/bearish stack + ATR moderat
+  if (indicators.emaAlignment === "bullish_stack" && indicators.trend === "bullish")
+    return "trending_up";
+  if (indicators.emaAlignment === "bearish_stack" && indicators.trend === "bearish")
+    return "trending_down";
+
+  // Ranging: sinyal mixed, volatilitas rendah
+  return "ranging";
+}
+
+// ─── Feature 9: Price Distribution P10/P50/P90 ────────────────────────────────
+// Hitung estimasi distribusi harga (probabilistik) berdasarkan ATR dan confidence
+
+function computePriceDistribution(
+  price: number,
+  direction: "up" | "down" | "sideways",
+  confidence: number,
+  atr: number
+): { p10: number; p50: number; p90: number } {
+  const a = atr > 0 ? atr : price * 0.003;
+  const mult = 0.5 + confidence; // range: 0.5–1.5× ATR
+
+  if (direction === "up") {
+    return {
+      p10: parseFloat((price + a * 0.2).toFixed(2)),          // minimal move
+      p50: parseFloat((price + a * 1.2 * mult).toFixed(2)),   // median target
+      p90: parseFloat((price + a * 2.5 * mult).toFixed(2)),   // optimistic
+    };
+  } else if (direction === "down") {
+    return {
+      p10: parseFloat((price - a * 2.5 * mult).toFixed(2)),   // optimistic downside
+      p50: parseFloat((price - a * 1.2 * mult).toFixed(2)),   // median target
+      p90: parseFloat((price - a * 0.2).toFixed(2)),          // minimal move
+    };
+  } else {
+    return {
+      p10: parseFloat((price - a * 0.6).toFixed(2)),
+      p50: parseFloat(price.toFixed(2)),
+      p90: parseFloat((price + a * 0.6).toFixed(2)),
+    };
+  }
+}
+
+// ─── Feature 7: Prediction Cluster Label ──────────────────────────────────────
+// Label cluster kondisi pasar berdasarkan RSI + EMA + Trend + MACD
+
+export function computeClusterLabel(indicators: XauusdIndicators): string {
+  const rsi = indicators.rsi14 ?? 50;
+  const rsiZone = rsi < 35 ? "RSI_OS" : rsi > 65 ? "RSI_OB" : "RSI_N";
+  const emaZone = indicators.emaAlignment === "bullish_stack" ? "EMA_Bull"
+    : indicators.emaAlignment === "bearish_stack" ? "EMA_Bear"
+    : "EMA_Mix";
+  const trendZone = indicators.trend === "bullish" ? "T_Up"
+    : indicators.trend === "bearish" ? "T_Dn"
+    : "T_Sd";
+  const macdZone = indicators.macdSignalType === "bullish_cross" ? "MACD_B"
+    : indicators.macdSignalType === "bearish_cross" ? "MACD_S"
+    : "MACD_N";
+  return `${rsiZone}+${emaZone}+${trendZone}+${macdZone}`;
+}
+
+// ─── Feature 1 (extended): Sentiment Vote ─────────────────────────────────────
+// Agen ke-3 dari ensemble: menghitung arah berdasarkan sentimen berita
+
+function computeSentimentVote(
+  news: Array<{ sentiment: string | null }>
+): { direction: "up" | "down" | "sideways"; confidence: number; label: string } {
+  if (news.length === 0)
+    return { direction: "sideways", confidence: 0.42, label: "sentiment" };
+
+  let score = 0;
+  for (const n of news) {
+    if (n.sentiment === "bullish") score += 1;
+    else if (n.sentiment === "bearish") score -= 1;
+  }
+  score /= news.length; // normalize −1..+1
+
+  if (score > 0.25) {
+    return {
+      direction: "up",
+      confidence: Math.min(0.70, 0.48 + Math.abs(score) * 0.25),
+      label: "sentiment",
+    };
+  }
+  if (score < -0.25) {
+    return {
+      direction: "down",
+      confidence: Math.min(0.70, 0.48 + Math.abs(score) * 0.25),
+      label: "sentiment",
+    };
+  }
+  return { direction: "sideways", confidence: 0.42, label: "sentiment" };
+}
+
+// ─── Feature 8: Forget Curve — Exponential Decay on Brain Entries ─────────────
+// Pattern lama kehilangan bobot secara eksponensial.
+// Half-life ≈ 30 hari (lambda ≈ 0.023/day).
+
+async function applyForgetCurve(): Promise<void> {
+  const LAMBDA = 0.023; // daily decay rate
+  const now = Date.now();
+
+  const entries = await db
+    .select({
+      id: xauusdBrainTable.id,
+      createdAt: xauusdBrainTable.createdAt,
+      decayWeight: xauusdBrainTable.decayWeight,
+    })
+    .from(xauusdBrainTable)
+    .where(eq(xauusdBrainTable.isActive, true));
+
+  for (const entry of entries) {
+    const ageDays = (now - new Date(entry.createdAt).getTime()) / 86_400_000;
+    const newWeight = parseFloat(Math.exp(-LAMBDA * ageDays).toFixed(4));
+    const currentWeight = entry.decayWeight ?? 1.0;
+    // Only update if change is significant (>1%)
+    if (Math.abs(newWeight - currentWeight) > 0.01) {
+      await db
+        .update(xauusdBrainTable)
+        .set({ decayWeight: newWeight, updatedAt: new Date() })
+        .where(eq(xauusdBrainTable.id, entry.id));
+    }
+  }
+  console.log(`[XAUUSD Brain] Forget curve applied to ${entries.length} brain entries.`);
+}
+
 // ─── Prediction maker ──────────────────────────────────────────────────────────
 
 async function makePrediction(indicators: XauusdIndicators): Promise<void> {
@@ -494,6 +650,9 @@ Jawab HANYA dalam format JSON:
   "reasoning": "<3-4 kalimat — sebutkan faktor MTF, DXY/yield, news sentiment, dan win rate yang mempengaruhi keputusan>"
 }`;
 
+  // Feature 4 & 5: Session + Regime context untuk AI
+  const sessionRegimeContext = `\n\n=== KONTEKS PASAR ===\nSesi Trading: ${tradingSession.toUpperCase()} | Market Regime: ${marketRegime.toUpperCase()} | Cluster: ${clusterLabel}\nSentimen Berita: ${sentimentVote.direction.toUpperCase()} (${(sentimentVote.confidence * 100).toFixed(0)}% confident)`;
+
   const userMsg = `=== INDIKATOR 1H XAUUSD ===
 Harga: ${indicators.price}
 RSI14: ${indicators.rsi14} (${indicators.rsiSignal})
@@ -502,7 +661,7 @@ MACD: line=${indicators.macdLine}, signal=${indicators.macdSignal}, hist=${indic
 BB: upper=${indicators.bbUpper}, mid=${indicators.bbMiddle}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
 ATR14: ${indicators.atr14}
 Trend: ${indicators.trend} | EMA Alignment: ${indicators.emaAlignment}
-Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${winRateContext}${newsContext}
+Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${winRateContext}${newsContext}${sessionRegimeContext}
 
 Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks lain.`;
 
@@ -511,6 +670,15 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
   // for entry range + stop loss when the AI is unavailable or unparseable,
   // and also used to sanity-check the AI's numbers.
   const ruleBased = computeRuleBasedPrediction(indicators);
+
+  // ── Features 4, 5, 7: Session / Regime / Cluster ─────────────────────────
+  const tradingSession = detectTradingSession();
+  const marketRegime = detectMarketRegime(indicators);
+  const clusterLabel = computeClusterLabel(indicators);
+
+  // ── Feature 1 (extended): Sentiment Vote — agen ke-3 dari ensemble ────────
+  const newsForSentiment = newsResult.status === "fulfilled" ? newsResult.value : [];
+  const sentimentVote = computeSentimentVote(newsForSentiment);
 
   let pred: {
     direction: string;
@@ -565,36 +733,60 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
       ? (pred.reasoning ?? ruleBased.reasoning)
       : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`;
 
-    // ── Ensemble Voting (Feature 1) ──────────────────────────────────────────
+    // ── Ensemble Voting (Feature 1 — 4 agents: technical/macro/sentiment/AI) ──
     const techVote = { direction: ruleBased.direction, confidence: ruleBased.confidence, label: "technical" };
     const macroVote = corrResult.status === "fulfilled"
       ? { ...computeMacroVote(corrResult.value), label: "macro" }
       : { direction: "sideways" as const, confidence: 0.45, label: "macro" };
     const baseAiConf = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
     const aiVote = { direction, confidence: baseAiConf, label: aiPowered ? "ai" : "rule" };
+    // Feature 1 (extended): sentimentVote = agen ke-3 (dari data berita, tanpa API call ekstra)
+    const sentimentVoteForEnsemble = { ...sentimentVote, label: "sentiment" };
 
-    const allDirs = [techVote.direction, macroVote.direction, aiVote.direction];
+    // Majority vote dari 3 core agents (tech + macro + sentiment) → arah final
+    const coreVotes = [techVote.direction, macroVote.direction, sentimentVote.direction];
+    const upVotes = coreVotes.filter(d => d === "up").length;
+    const downVotes = coreVotes.filter(d => d === "down").length;
+    const sideVotes = coreVotes.filter(d => d === "sideways").length;
+    const majorityDir = upVotes >= 2 ? "up" : downVotes >= 2 ? "down" : sideVotes >= 2 ? "sideways" : null;
+    // Gunakan majority jika jelas (≥2/3); jika tie → AI jadi tiebreaker
+    const finalDirection = (majorityDir ?? direction) as "up" | "down" | "sideways";
+
+    const allDirs = [techVote.direction, macroVote.direction, sentimentVote.direction, aiVote.direction];
     const agreementCount = Math.max(
       allDirs.filter(d => d === "up").length,
       allDirs.filter(d => d === "down").length,
       allDirs.filter(d => d === "sideways").length
     );
-    // +8% when unanimous, -6% when split 3-ways, no change for 2/3 agreement
-    const agreementBonus = agreementCount === 3 ? 0.08 : agreementCount === 1 ? -0.06 : 0;
+    // +8% semua setuju, +4% tiga setuju, -6% penuh split
+    const agreementBonus = agreementCount === 4 ? 0.08 : agreementCount === 3 ? 0.04 : agreementCount === 1 ? -0.06 : 0;
     const confidence = Math.min(1, Math.max(0, baseAiConf + agreementBonus));
+
+    // Feature 9: Price Distribution P10/P50/P90 berdasarkan ATR + confidence
+    const distribution = computePriceDistribution(
+      indicators.price,
+      finalDirection,
+      confidence,
+      indicators.atr14 ?? indicators.price * 0.003
+    );
 
     const ensembleVotes = {
       technical: techVote,
       macro: macroVote,
+      sentiment: sentimentVoteForEnsemble,
       ai: aiVote,
       agreementCount,
       agreementBonus: parseFloat(agreementBonus.toFixed(3)),
+      finalDirection,
+      session: tradingSession,
+      regime: marketRegime,
+      cluster: clusterLabel,
     };
     // ─────────────────────────────────────────────────────────────────────────
 
     await db.insert(xauusdPredictionsTable).values({
       timeframe: timeframeLabel,
-      direction,
+      direction: finalDirection,
       targetPrice,
       entryLow,
       entryHigh,
@@ -603,6 +795,16 @@ Buat prediksi ${timeframeMinutes} menit ke depan. Jawab JSON saja, tanpa teks la
       reasoning,
       priceAtPrediction: indicators.price,
       indicatorsAtPrediction: { ...(indicators as unknown as Record<string, unknown>), ensembleVotes },
+      // Feature 4: Session-Aware
+      tradingSession,
+      // Feature 5: Market Regime Detector
+      marketRegime,
+      // Feature 7: Prediction Clustering
+      clusterLabel,
+      // Feature 9: Price Distribution
+      priceP10: distribution.p10,
+      priceP50: distribution.p50,
+      priceP90: distribution.p90,
       verifyAt,
       status: "pending",
     });
@@ -1036,6 +1238,13 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
     // 8. Fetch & analyze news (every 3rd cycle to save API calls)
     if (totalCycles % 3 === 0) {
       await analyzeAndSaveNews();
+    }
+
+    // Feature 8: Forget Curve — decay lama brain entries setiap 12 siklus
+    if (totalCycles % 12 === 0) {
+      void applyForgetCurve().catch(err =>
+        console.error("[XAUUSD Brain] Forget curve error:", err)
+      );
     }
 
     // 9. Save learning log

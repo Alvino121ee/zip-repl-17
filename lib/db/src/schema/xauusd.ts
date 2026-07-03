@@ -54,6 +54,7 @@ export const xauusdBrainTable = pgTable("xauusd_brain", {
   isActive: boolean("is_active").notNull().default(true),
   sourceQuestion: text("source_question"), // question that generated this
   marketConditionTags: text("market_condition_tags"), // comma-separated tags e.g. "rsi_oversold,spike_up"
+  decayWeight: real("decay_weight").notNull().default(1.0), // Feature 8: Forget Curve — exponential decay by age
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -85,6 +86,16 @@ export const xauusdPredictionsTable = pgTable("xauusd_predictions", {
   reasoning: text("reasoning").notNull(),
   priceAtPrediction: real("price_at_prediction").notNull(),
   indicatorsAtPrediction: jsonb("indicators_at_prediction"),
+  // Feature 4: Session-Aware — trading session at prediction time
+  tradingSession: text("trading_session"), // 'asia'|'london'|'new_york'|'overlap_london_ny'
+  // Feature 5: Market Regime Detector
+  marketRegime: text("market_regime"), // 'trending_up'|'trending_down'|'ranging'|'volatile'
+  // Feature 7: Prediction Clustering
+  clusterLabel: text("cluster_label"), // e.g. "RSI_OS+EMA_Bull+T_Up+MACD_B"
+  // Feature 9: Probability Distribution
+  priceP10: real("price_p10"), // 10th percentile price target (pessimistic)
+  priceP50: real("price_p50"), // median price target
+  priceP90: real("price_p90"), // 90th percentile price target (optimistic)
   // Actual outcome (filled later)
   verifyAt: timestamp("verify_at"), // when to check the outcome
   actualPrice: real("actual_price"),
