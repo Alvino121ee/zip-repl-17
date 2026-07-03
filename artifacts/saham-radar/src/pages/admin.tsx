@@ -29,6 +29,7 @@ interface ExtremeMode {
   stopRequested: boolean;
   speedQph: number;
   etaMs: number | null;
+  dataMode: "live" | "historical";
 }
 
 interface SystemStatus {
@@ -408,6 +409,20 @@ function ExtremeModePanel({ data, onRefetch }: { data: SystemStatus; onRefetch: 
                   <span className="font-medium text-orange-400/90 tabular-nums">~{formatEta(em.etaMs)}</span>
                 </div>
               )}
+                  <div className="flex items-center justify-between">
+                <span>Sumber data</span>
+                {em.dataMode === "live" ? (
+                  <span className="flex items-center gap-1 font-medium text-emerald-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+                    Live market
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 font-medium text-blue-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block" />
+                    Data historis
+                  </span>
+                )}
+              </div>
               {em.startedAt && (
                 <div className="flex items-center justify-between">
                   <span>Mulai</span>

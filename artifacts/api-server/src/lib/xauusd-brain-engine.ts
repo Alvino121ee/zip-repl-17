@@ -69,6 +69,7 @@ let extremeStopRequested = false;              // flag UI: user minta berhenti
 let extremeHashCache: Set<string> | null = null; // dedup in-memory antar siklus
 let extremeProgressHistory: Array<{ ts: number; count: number }> = []; // untuk hitung kecepatan
 let extremeLastProgressAt: number | null = null; // timestamp progress terakhir (untuk deteksi stale)
+let extremeDataMode: "live" | "historical" = "live"; // mode sumber data saat ini
 
 // ─── DeepSeek query ────────────────────────────────────────────────────────────
 
@@ -1614,6 +1615,106 @@ async function analyzeAndSaveNews(): Promise<void> {
 
 // ─── Extreme Learning Mode ─────────────────────────────────────────────────────
 
+/**
+ * Ambil satu snapshot historis acak dari DB (90 hari terakhir) dan konversi ke XauusdIndicators.
+ * Digunakan saat market tutup agar mesin bisa terus belajar dari skenario pasar masa lalu.
+ */
+async function getHistoricalIndicators(): Promise<XauusdIndicators | null> {
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1_000);
+  const rows = await db
+    .select()
+    .from(xauusdSnapshotsTable)
+    .where(sql`${xauusdSnapshotsTable.snapshotAt} >= ${ninetyDaysAgo.toISOString()}`)
+    .orderBy(sql`RANDOM()`)
+    .limit(1);
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    price: r.price,
+    open: r.open ?? r.price,
+    high: r.high ?? r.price,
+    low: r.low ?? r.price,
+    volume: r.volume ?? 0,
+    rsi14: r.rsi14 ?? null,
+    ema9: r.ema9 ?? null,
+    ema21: r.ema21 ?? null,
+    ema50: r.ema50 ?? null,
+    ema200: r.ema200 ?? null,
+    macdLine: r.macdLine ?? null,
+    macdSignal: r.macdSignal ?? null,
+    macdHistogram: r.macdHistogram ?? null,
+    bbUpper: r.bbUpper ?? null,
+    bbMiddle: r.bbMiddle ?? null,
+    bbLower: r.bbLower ?? null,
+    bbWidth: r.bbWidth ?? null,
+    atr14: r.atr14 ?? null,
+    trend: (r.trend as XauusdIndicators["trend"]) ?? "sideways",
+    rsiSignal: (r.rsiSignal as XauusdIndicators["rsiSignal"]) ?? "neutral",
+    macdSignalType: (r.macdSignalType as XauusdIndicators["macdSignalType"]) ?? "neutral",
+    emaAlignment: (r.emaAlignment as XauusdIndicators["emaAlignment"]) ?? "mixed",
+    supportLevel: r.supportLevel ?? null,
+    resistanceLevel: r.resistanceLevel ?? null,
+  };
+}
+
+/**
+ * Minta DeepSeek untuk membuat pertanyaan studi unik berdasarkan kondisi pasar saat ini.
+ * Mengembalikan array pertanyaan yang sudah di-hash, difilter dari sessionCache.
+ */
+async function generateQuestionsWithDeepSeek(
+  indicators: XauusdIndicators,
+  count: number,
+  spikeDetected: boolean,
+  sessionCache: Set<string>
+): Promise<Array<{ question: string; hash: string }>> {
+  const apiKey = await getDeepseekApiKey();
+  if (!apiKey) throw new Error("DeepSeek API key tidak ada");
+
+  const marketCtx = [
+    `Harga XAUUSD   : ${indicators.price}`,
+    `RSI14          : ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal ?? "neutral"})`,
+    `Trend          : ${indicators.trend ?? "N/A"}`,
+    `EMA Alignment  : ${indicators.emaAlignment ?? "N/A"}`,
+    `EMA9/21/50/200 : ${indicators.ema9?.toFixed(2) ?? "N/A"} / ${indicators.ema21?.toFixed(2) ?? "N/A"} / ${indicators.ema50?.toFixed(2) ?? "N/A"} / ${indicators.ema200?.toFixed(2) ?? "N/A"}`,
+    `MACD           : ${indicators.macdSignalType ?? "N/A"} (hist ${indicators.macdHistogram?.toFixed(3) ?? "N/A"})`,
+    `ATR14          : ${indicators.atr14?.toFixed(2) ?? "N/A"}`,
+    `BB             : upper=${indicators.bbUpper?.toFixed(2) ?? "N/A"} middle=${indicators.bbMiddle?.toFixed(2) ?? "N/A"} lower=${indicators.bbLower?.toFixed(2) ?? "N/A"} width=${indicators.bbWidth?.toFixed(2) ?? "N/A"}%`,
+    `Support        : ${indicators.supportLevel?.toFixed(2) ?? "N/A"}`,
+    `Resistance     : ${indicators.resistanceLevel?.toFixed(2) ?? "N/A"}`,
+    spikeDetected ? `⚡ SPIKE TERDETEKSI: harga bergerak cepat` : null,
+  ].filter(Boolean).join("\n");
+
+  const prompt = `Kondisi pasar XAUUSD saat ini:\n${marketCtx}\n\n` +
+    `Buat ${count} pertanyaan studi trading XAUUSD yang SPESIFIK, UNIK, dan BERVARIASI topiknya. ` +
+    `Pertanyaan harus relevan dengan kondisi pasar di atas. ` +
+    `Topik boleh mencakup: analisis teknikal, manajemen risiko, psikologi trading, makro ekonomi, ` +
+    `timing entry/exit, pola candlestick, korelasi aset, strategi konkret, dll. ` +
+    `Format: satu pertanyaan per baris, awali dengan nomor (1. 2. 3. dst). ` +
+    `Gunakan Bahasa Indonesia. Sertakan angka spesifik dari data pasar di atas dalam pertanyaan jika relevan.`;
+
+  const raw = await queryDeepSeek(
+    "Kamu adalah expert trader XAUUSD/Gold 20 tahun yang bertugas merancang kurikulum belajar trading. Buat pertanyaan yang mendalam dan actionable.",
+    prompt,
+    600
+  );
+
+  // Parse: ambil baris yang diawali angka
+  const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+  const questions: Array<{ question: string; hash: string }> = [];
+  for (const line of lines) {
+    const m = line.match(/^\d+[\.\)]\s*(.+)/);
+    if (!m) continue;
+    const q = m[1].trim();
+    if (q.length < 20) continue; // terlalu pendek, skip
+    const h = generateQuestionHash(q);
+    if (sessionCache.has(h)) continue; // sudah tanya di sesi ini
+    questions.push({ question: q, hash: h });
+    if (questions.length >= count) break;
+  }
+
+  return questions;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -1664,15 +1765,39 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
       continue;
     }
 
-    // 1. Fetch indicators (1h default)
-    let indicators: Awaited<ReturnType<typeof fetchXauusdIndicators>> | null = null;
-    try {
-      indicators = await fetchXauusdIndicators("1h");
-    } catch (err) {
-      console.error("[Extreme Mode] Gagal fetch indicators:", err);
+    // 1. Ambil data pasar — live jika market buka, historis jika market tutup
+    let indicators: XauusdIndicators | null = null;
+    const marketStatus = isXauusdMarketOpen();
+
+    if (marketStatus.open) {
+      // Market buka → coba data live
+      try {
+        indicators = await fetchXauusdIndicators("1h");
+        if (indicators) {
+          extremeDataMode = "live";
+          console.log(`[Extreme Mode] 📡 Live — harga ${indicators.price} (${marketStatus.reason})`);
+        }
+      } catch (err) {
+        console.error("[Extreme Mode] Gagal fetch live indicators:", err);
+      }
     }
+
     if (!indicators) {
-      console.warn("[Extreme Mode] TradingView tidak merespons, coba lagi 30s...");
+      // Market tutup ATAU live gagal → pakai snapshot historis dari DB
+      try {
+        indicators = await getHistoricalIndicators();
+        if (indicators) {
+          extremeDataMode = "historical";
+          const reason = marketStatus.open ? "fallback: TradingView tidak merespons" : marketStatus.reason;
+          console.log(`[Extreme Mode] 📚 Historis — harga ${indicators.price} (${reason})`);
+        }
+      } catch (err) {
+        console.error("[Extreme Mode] Gagal ambil data historis:", err);
+      }
+    }
+
+    if (!indicators) {
+      console.warn("[Extreme Mode] Tidak ada data tersedia (live & historis gagal), coba lagi 30s...");
       if (await sleepOrAbort(30_000)) break;
       continue;
     }
@@ -1721,33 +1846,37 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
       resistanceLevel: indicators.resistanceLevel,
     }).catch(() => { /* non-fatal */ });
 
-    // 4. Build candidate list, filter via in-memory hash cache
+    // 4. Generate pertanyaan via DeepSeek (pool tak terbatas & kontekstual)
+    //    Fallback ke template statis jika DeepSeek gagal.
     const remaining = target - extremeProgress;
     const count = Math.min(questionsPerCycle, remaining);
-    const candidates = getMarketAwareQuestions(indicators, count + 12, spikeDetected);
-    let toAsk = candidates.filter(c => !extremeHashCache!.has(c.hash)).slice(0, count);
+    let toAsk: Array<{ question: string; hash: string }> = [];
 
-    // Pool 1h habis → coba ekspansi ke timeframe lain sebelum tidur 60s
-    if (toAsk.length === 0) {
-      for (const altTf of (["4h", "1d"] as const)) {
-        try {
-          const altInd = await fetchXauusdIndicators(altTf);
-          if (!altInd) continue;
-          const altCandidates = getMarketAwareQuestions(altInd, count + 12, spikeDetected);
-          const altNew = altCandidates.filter(c => !extremeHashCache!.has(c.hash)).slice(0, count);
-          if (altNew.length > 0) {
-            toAsk = altNew;
-            indicators = altInd;
-            console.log(`[Extreme Mode] 🔀 Pool 1h habis — ekspansi ke ${altTf} (${altNew.length} pertanyaan baru)`);
-            break;
-          }
-        } catch { /* non-fatal */ }
+    try {
+      toAsk = await generateQuestionsWithDeepSeek(indicators, count + 3, spikeDetected, extremeHashCache!);
+      toAsk = toAsk.slice(0, count);
+      if (toAsk.length > 0) {
+        console.log(`[Extreme Mode] 🤖 DeepSeek generate ${toAsk.length} pertanyaan baru`);
+      }
+    } catch (err) {
+      console.warn("[Extreme Mode] ⚠️ Generate pertanyaan via DeepSeek gagal, pakai template:", String(err));
+    }
+
+    // Fallback: template statis jika DeepSeek tidak menghasilkan cukup pertanyaan
+    if (toAsk.length < count) {
+      const need = count - toAsk.length;
+      const templateCandidates = getMarketAwareQuestions(indicators, need + 12, spikeDetected)
+        .filter(c => !extremeHashCache!.has(c.hash))
+        .slice(0, need);
+      if (templateCandidates.length > 0) {
+        console.log(`[Extreme Mode] 📋 Tambah ${templateCandidates.length} pertanyaan dari template`);
+        toAsk = [...toAsk, ...templateCandidates];
       }
     }
 
     if (toAsk.length === 0) {
-      console.warn(`[Extreme Mode] ⚠️ Pool habis di semua timeframe — tunggu 60s agar harga bergerak...`);
-      if (await sleepOrAbort(60_000)) break;
+      console.warn("[Extreme Mode] ⚠️ Tidak ada pertanyaan baru (DeepSeek & template habis) — coba lagi 30s...");
+      if (await sleepOrAbort(30_000)) break;
       extremeCycleCount++;
       continue;
     }
@@ -1883,28 +2012,19 @@ export function startExtremeLearningMode(
   extremeStopRequested = false;
   extremeProgressHistory = [];
   extremeLastProgressAt = null;
-  extremeHashCache = new Set(); // kosong dulu, isi dari DB sebelum loop mulai
+  extremeDataMode = "live";
+  extremeHashCache = new Set();
 
   console.log(`[Extreme Mode] 🚀 Mulai — target: ${target} pertanyaan, ${safeQpc}/siklus`);
 
-  // Bangun hash cache dari DB, lalu jalankan loop
-  (async () => {
-    try {
-      // Hanya blokir pertanyaan yang ditanya dalam 7 hari terakhir —
-      // sama dengan filterNewQuestions() di siklus normal.
-      // Pertanyaan lebih lama dari 7 hari boleh ditanya lagi (kondisi pasar sudah berubah).
-      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000);
-      const rows = await db
-        .select({ hash: xauusdQuestionsLogTable.questionHash })
-        .from(xauusdQuestionsLogTable)
-        .where(sql`${xauusdQuestionsLogTable.askedAt} >= ${sevenDaysAgo.toISOString()}`);
-      extremeHashCache = new Set(rows.map(r => r.hash));
-      console.log(`[Extreme Mode] 📚 Hash cache siap: ${extremeHashCache.size} pertanyaan (7 hari terakhir) sudah ada di DB`);
-    } catch (err) {
-      console.error("[Extreme Mode] Gagal load hash cache:", err);
-      extremeHashCache = new Set(); // lanjut dengan cache kosong
-    }
+  // Hash cache hanya melacak pertanyaan dalam SESI INI (tidak load dari DB).
+  // Banyak template bersifat statis (tidak pakai data harga), sehingga hashnya
+  // selalu sama di semua sesi — loading DB akan memblokir semua template selamanya.
+  // Dedup antar sesi ditangani oleh INSERT dengan ON CONFLICT di DB.
+  extremeHashCache = new Set();
+  console.log(`[Extreme Mode] 📚 Hash cache sesi baru (kosong) — dedup aktif dalam sesi ini saja`);
 
+  (async () => {
     try {
       await runExtremeLearningLoop(target, safeQpc);
     } catch (err) {
@@ -2244,8 +2364,9 @@ export function getEngineStatus(): {
     startedAt: Date | null;
     percentDone: number;
     stopRequested: boolean;
-    speedQph: number;      // pertanyaan per jam (rolling)
-    etaMs: number | null;  // estimasi sisa waktu dalam ms
+    speedQph: number;
+    etaMs: number | null;
+    dataMode: "live" | "historical";
   };
 } {
   // Hitung kecepatan rolling dari riwayat progress
@@ -2287,6 +2408,7 @@ export function getEngineStatus(): {
       stopRequested: extremeStopRequested,
       speedQph,
       etaMs,
+      dataMode: extremeDataMode,
     },
   };
 }
