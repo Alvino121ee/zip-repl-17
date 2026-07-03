@@ -1,5 +1,5 @@
 - [Daily picks staleness bug](daily-picks-staleness.md) — "close stale picks" logic must compare against today's date, not the generation target date.
-- [Agent system architecture](agent-system.md) — 3 AI agents (fundamental/technical/screening) share 1 DeepSeek API; each has DB-stored system prompt + few-shot training + session memory.
-- [Orval codegen command](orval-codegen.md) — run `pnpm --filter @workspace/api-spec run codegen` to regenerate API client after openapi.yaml changes.
 - [XAUUSD AI brain system](xauusd-brain.md) — autonomous gold trading AI: learns every 15 min, 6 DB tables, must run `tsc --build` in lib/db after schema changes, then restart API server.
-- [Web-only, no mobile artifact](project-scope-web-only.md) — user removed saham-radar-mobile; project is web-only (Replit + local via start.sh/start.bat), don't recreate a mobile artifact unless asked.
+- [Orval codegen command](orval-codegen.md) — run `pnpm --filter @workspace/api-spec run codegen` to regenerate API client after openapi.yaml changes.
+- [Web-only, XAUUSD-only scope](project-scope.md) — project is XAUUSD Gold AI only; all BEI/saham IDX features removed. Web frontend: 2 pages (/ = xauusd-ai, /admin). Backend: /xauusd + /admin + /health routes only.
+- [Typecheck pre-existing errors](typecheck-errors.md) — pnpm run typecheck fails with TS6305 (lib/db/api-zod dist not built) — pre-existing, not from refactor. esbuild build works fine; run `tsc --build` at root to fix before typechecking.

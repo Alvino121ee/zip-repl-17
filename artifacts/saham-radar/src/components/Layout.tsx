@@ -1,57 +1,147 @@
+import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Activity, BarChart2, Eye, GitCompare, AlertTriangle, Settings, Target, Bot, Cpu, TrendingUp } from "lucide-react";
+import { TrendingUp, Settings, Menu, X, Zap } from "lucide-react";
+
+const navItems = [
+  { href: "/", label: "Gold AI", sublabel: "XAUUSD Dashboard", icon: TrendingUp },
+  { href: "/admin", label: "System", sublabel: "Admin & Status", icon: Settings },
+];
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-
-  const navItems = [
-    { href: "/", label: "Dashboard", icon: Activity },
-    { href: "/screener", label: "Screener", icon: BarChart2 },
-    { href: "/picks", label: "Daily Picks", icon: Target },
-    { href: "/ai-analyst", label: "AI Analyst", icon: Bot },
-    { href: "/agents", label: "AI Agents", icon: Cpu },
-    { href: "/xauusd-ai", label: "Gold AI (XAUUSD)", icon: TrendingUp },
-    { href: "/watchlist", label: "Watchlist", icon: Eye },
-    { href: "/compare", label: "Compare", icon: GitCompare },
-    { href: "/risk-radar", label: "Risk Radar", icon: AlertTriangle },
-    { href: "/admin", label: "Admin", icon: Settings },
-  ];
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen flex-col bg-background md:flex-row">
-      {/* Sidebar */}
-      <aside className="flex flex-col w-full md:w-64 bg-sidebar border-r border-sidebar-border h-auto md:h-screen sticky top-0">
-        <div className="p-6 flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-primary flex items-center justify-center font-bold text-white">
-            SR
-          </div>
-          <span className="text-xl font-bold tracking-tight text-white">SahamRadar<span className="text-primary">.ai</span></span>
-        </div>
-        
-        <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
-          {navItems.map((item) => {
-            const isActive = location === item.href;
-            return (
-              <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors ${isActive ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium' : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'}`}>
-                <item.icon className="w-5 h-5" />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
+    <div className="flex min-h-dvh bg-background text-foreground">
+      {/* ── Sidebar (desktop) ───────────────────────────────── */}
+      <aside className="hidden md:flex flex-col w-60 shrink-0 border-r border-border/50 bg-sidebar sticky top-0 h-screen">
+        <SidebarContent location={location} />
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-h-screen">
-        <div className="flex-1 p-6 lg:p-8 overflow-y-auto">
+      {/* ── Mobile header + drawer ────────────────────────── */}
+      <div className="md:hidden fixed top-0 inset-x-0 z-50 flex items-center justify-between px-4 h-14 border-b border-border/50 bg-sidebar/95 backdrop-blur">
+        <Brand />
+        <button
+          onClick={() => setMobileOpen(!mobileOpen)}
+          className="p-2 rounded-lg text-foreground/70 hover:text-foreground hover:bg-white/5 transition-colors"
+          aria-label="Toggle menu"
+        >
+          {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </button>
+      </div>
+
+      {mobileOpen && (
+        <>
+          <div
+            className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+            onClick={() => setMobileOpen(false)}
+          />
+          <aside className="md:hidden fixed top-14 left-0 bottom-0 z-50 w-60 border-r border-border/50 bg-sidebar flex flex-col">
+            <SidebarContent location={location} onNavigate={() => setMobileOpen(false)} />
+          </aside>
+        </>
+      )}
+
+      {/* ── Main content ───────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-h-dvh md:min-h-screen">
+        <main className="flex-1 mt-14 md:mt-0 p-4 md:p-6 lg:p-8 overflow-y-auto">
           {children}
-        </div>
-        
-        {/* Footer Disclaimer */}
-        <footer className="border-t border-border p-4 text-center text-xs text-muted-foreground bg-card">
-          <p>Disclaimer: SahamRadar AI hanya menyajikan data dan scoring berbasis algoritma. Bukan rekomendasi investasi. Keputusan investasi sepenuhnya tanggung jawab Anda.</p>
+        </main>
+        <footer className="border-t border-border/40 px-6 py-3 text-center text-xs text-muted-foreground/60">
+          GoldRadar AI · Analisis berbasis algoritma, bukan rekomendasi trading · Gunakan dengan bijak
         </footer>
-      </main>
+      </div>
     </div>
+  );
+}
+
+function Brand() {
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-8 h-8 rounded-lg bg-primary/20 border border-primary/30 flex items-center justify-center shadow-[0_0_12px_rgba(245,158,11,0.25)]">
+        <Zap className="w-4 h-4 text-primary" />
+      </div>
+      <div className="leading-none">
+        <span className="text-base font-bold tracking-tight text-foreground">GoldRadar</span>
+        <span className="text-base font-bold tracking-tight text-primary">.ai</span>
+      </div>
+    </div>
+  );
+}
+
+function SidebarContent({
+  location,
+  onNavigate,
+}: {
+  location: string;
+  onNavigate?: () => void;
+}) {
+  return (
+    <>
+      {/* Brand */}
+      <div className="px-5 py-5 border-b border-border/40">
+        <Brand />
+        <p className="mt-1.5 text-[10px] font-medium tracking-widest uppercase text-muted-foreground/60 pl-0.5">
+          AI Trading Intelligence
+        </p>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-4 space-y-1">
+        {navItems.map((item) => {
+          const isActive = location === item.href;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onNavigate}
+              className={`
+                group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 cursor-pointer
+                ${isActive
+                  ? "bg-primary/15 border border-primary/25 shadow-[0_0_16px_rgba(245,158,11,0.12)]"
+                  : "hover:bg-white/5 border border-transparent"
+                }
+              `}
+            >
+              <div
+                className={`
+                  w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200
+                  ${isActive
+                    ? "bg-primary/20 border border-primary/30 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                    : "bg-white/5 border border-white/10 group-hover:bg-primary/10 group-hover:border-primary/20"
+                  }
+                `}
+              >
+                <item.icon
+                  className={`w-4 h-4 transition-colors ${isActive ? "text-primary" : "text-muted-foreground group-hover:text-primary/80"}`}
+                />
+              </div>
+              <div className="leading-none min-w-0">
+                <p
+                  className={`text-sm font-semibold truncate transition-colors ${isActive ? "text-primary" : "text-foreground/80 group-hover:text-foreground"}`}
+                >
+                  {item.label}
+                </p>
+                <p className="text-[10px] text-muted-foreground/60 mt-0.5 truncate">{item.sublabel}</p>
+              </div>
+              {isActive && (
+                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(245,158,11,0.8)] shrink-0" />
+              )}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Live indicator */}
+      <div className="px-4 py-4 border-t border-border/40">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/5 border border-emerald-500/15">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+          </span>
+          <span className="text-xs text-emerald-400/80 font-medium">Brain Engine Aktif</span>
+        </div>
+      </div>
+    </>
   );
 }

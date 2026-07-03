@@ -1,236 +1,235 @@
-import { useState, useEffect } from "react";
-import { useUploadCsv, useRecalculateScores, useSyncRealtime, useGetSyncStatus, CsvUploadInputDataType } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useToast } from "@/hooks/use-toast";
-import { AlertCircle, CheckCircle2, Upload, RefreshCw, Wifi, WifiOff, Clock } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+/**
+ * Admin / System page — status engine XAUUSD Brain
+ */
+import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Activity, Brain, Cpu, Clock, Key, Phone, Zap, CheckCircle2, XCircle, RefreshCw,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-function formatTime(isoStr: string) {
-  return new Date(isoStr).toLocaleString("id-ID", {
-    day: "2-digit", month: "short", year: "numeric",
-    hour: "2-digit", minute: "2-digit"
-  });
+interface SystemStatus {
+  ok: boolean;
+  engine: {
+    running: boolean;
+    cycleCount: number;
+    lastCycleAt: string | null;
+    nextCycleIn: number | null;
+  };
+  settings: {
+    hasDeepseekKey: boolean;
+    deepseekKeySource: "database" | "environment" | "none";
+    predictionTimeframeMinutes: number;
+    whatsapp: { number: string; enabled: boolean };
+  };
+  livePrice: {
+    price: number | null;
+    change: number | null;
+    changePct: number | null;
+    timestamp: number | null;
+    stale: boolean;
+    error: string | null;
+  } | null;
+  serverTime: string;
 }
 
-function SyncPanel() {
-  const { toast } = useToast();
-  const syncMutation = useSyncRealtime();
-  const { data: status, refetch } = useGetSyncStatus({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    query: { refetchInterval: 5000 } as any
-  });
-
-  const handleSync = () => {
-    syncMutation.mutate(undefined, {
-      onSuccess: () => {
-        toast({ title: "Sync Dimulai", description: "Data realtime sedang diambil dari Yahoo Finance. Proses berjalan di background (~2-3 menit)." });
-        setTimeout(() => refetch(), 2000);
-      },
-      onError: (err: any) => {
-        toast({ title: "Sync Gagal", description: err.message || "Terjadi kesalahan.", variant: "destructive" });
-      }
-    });
-  };
-
-  const inProgress = status?.inProgress ?? false;
-  const last = status?.lastSync;
-
+function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
   return (
-    <Card className="border-primary/30">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Wifi className="w-5 h-5 text-primary" />
-          Sync Data Realtime (Yahoo Finance)
-          {inProgress && (
-            <Badge variant="secondary" className="animate-pulse ml-2">Sedang Sync...</Badge>
-          )}
-        </CardTitle>
-        <CardDescription>
-          Ambil harga saham terkini langsung dari pasar IDX via Yahoo Finance. Harga, volume, dan skor AI akan diperbarui ke data aktual.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <Button
-          onClick={handleSync}
-          disabled={syncMutation.isPending || inProgress}
-          className="w-full"
-          size="lg"
-        >
-          {inProgress ? (
-            <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Sync Sedang Berjalan...</>
-          ) : (
-            <><Wifi className="w-4 h-4 mr-2" /> Sync Data Realtime Sekarang</>
-          )}
-        </Button>
-
-        {last && (
-          <div className="rounded-lg bg-muted/50 p-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Clock className="w-4 h-4 text-muted-foreground" />
-              Hasil Sync Terakhir
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="text-center p-3 rounded bg-positive/10 border border-positive/20">
-                <div className="text-2xl font-bold text-positive">{last.updated}</div>
-                <div className="text-xs text-muted-foreground mt-1">Saham Diperbarui</div>
-              </div>
-              <div className="text-center p-3 rounded bg-muted border">
-                <div className="text-2xl font-bold">{last.skipped}</div>
-                <div className="text-xs text-muted-foreground mt-1">Dilewati</div>
-              </div>
-              <div className="text-center p-3 rounded bg-destructive/10 border border-destructive/20">
-                <div className="text-2xl font-bold text-destructive">{last.errors.length}</div>
-                <div className="text-xs text-muted-foreground mt-1">Error</div>
-              </div>
-            </div>
-            <div className="text-xs text-muted-foreground">
-              Selesai: {formatTime(last.finishedAt)}
-            </div>
-            {last.errors.length > 0 && (
-              <div className="text-xs text-destructive font-mono bg-destructive/5 rounded p-2 max-h-24 overflow-y-auto">
-                {last.errors.slice(0, 5).join('\n')}
-              </div>
-            )}
-          </div>
-        )}
-
-        <Alert className="bg-blue-500/10 border-blue-500/20">
-          <AlertCircle className="h-4 w-4 text-blue-500" />
-          <AlertTitle className="text-blue-500">Informasi</AlertTitle>
-          <AlertDescription className="text-xs text-muted-foreground">
-            Data harga diambil dari Yahoo Finance (IDX: ticker.JK). Proses sync 75 saham membutuhkan sekitar 2-3 menit.
-            Fundamental (PE, ROE, dll) tetap menggunakan data yang sudah ada karena tidak berubah harian.
-          </AlertDescription>
-        </Alert>
-      </CardContent>
-    </Card>
+    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${ok ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400" : "bg-red-500/10 border-red-500/25 text-red-400"}`}>
+      {ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+      {label}
+    </div>
   );
 }
 
 export default function AdminPanel() {
-  const [csvData, setCsvData] = useState("");
-  const [dataType, setDataType] = useState<CsvUploadInputDataType>("stocks");
-  const { toast } = useToast();
-
-  const uploadCsv = useUploadCsv();
-  const recalcScores = useRecalculateScores();
-
-  const handleUpload = () => {
-    if (!csvData.trim()) {
-      toast({ description: "Data CSV tidak boleh kosong", variant: "destructive" });
-      return;
-    }
-
-    uploadCsv.mutate({ data: { csvData, dataType } }, {
-      onSuccess: (res) => {
-        toast({ title: "Upload Berhasil", description: `${res.rowsProcessed} baris diproses.` });
-        setCsvData("");
-      },
-      onError: (err: any) => {
-        toast({ title: "Upload Gagal", description: err.message || "Terjadi kesalahan.", variant: "destructive" });
-      }
-    });
-  };
-
-  const handleRecalc = () => {
-    recalcScores.mutate({ data: {} }, {
-      onSuccess: (res) => {
-        toast({ title: "Rekalkulasi Selesai", description: `${res.processed} saham diperbarui.` });
-      },
-      onError: (err: any) => {
-        toast({ title: "Gagal", description: err.message || "Terjadi kesalahan.", variant: "destructive" });
-      }
-    });
-  };
+  const { data, isLoading, error, refetch, isFetching } = useQuery<SystemStatus>({
+    queryKey: ["admin-system"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/system");
+      if (!res.ok) throw new Error("Gagal memuat status sistem");
+      return res.json();
+    },
+    refetchInterval: 15_000,
+  });
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Admin Panel</h1>
-        <p className="text-muted-foreground mt-1">Manajemen data dan sinkronisasi pasar.</p>
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2.5">
+            <Cpu className="w-6 h-6 text-primary" />
+            System Status
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Status engine XAUUSD Brain dan konfigurasi sistem
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="gap-2 border-border/50 hover:border-primary/40 hover:text-primary"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
       </div>
 
-      {/* Sync Realtime - Most Important */}
-      <SyncPanel />
+      {isLoading && (
+        <div className="flex items-center justify-center py-24 text-muted-foreground gap-3">
+          <RefreshCw className="w-5 h-5 animate-spin text-primary" />
+          <span>Memuat status sistem...</span>
+        </div>
+      )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><RefreshCw className="w-5 h-5" /> Recalculate AI Scores</CardTitle>
-          <CardDescription>Hitung ulang skor AI dari data harga yang sudah ada di database.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button onClick={handleRecalc} disabled={recalcScores.isPending} variant="secondary" className="w-full">
-            {recalcScores.isPending ? "Memproses..." : "Jalankan Algoritma Scoring"}
-          </Button>
-          
-          {recalcScores.data && (
-            <Alert className="mt-4 bg-muted/50">
-              <CheckCircle2 className="h-4 w-4 text-positive" />
-              <AlertTitle>Selesai</AlertTitle>
-              <AlertDescription className="text-xs">
-                {recalcScores.data.processed} saham berhasil diskor ulang.
-              </AlertDescription>
-            </Alert>
+      {error && (
+        <Card className="border-red-500/25 bg-red-500/5">
+          <CardContent className="pt-6">
+            <p className="text-red-400 text-sm">⚠ Gagal memuat status: {String(error)}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {data && (
+        <div className="space-y-4">
+          {/* Live Price */}
+          {data.livePrice && data.livePrice.price !== null && (
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="pt-5 pb-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Zap className="w-5 h-5 text-primary" />
+                    <span className="text-sm font-medium text-foreground/80">XAUUSD Live Price</span>
+                    {data.livePrice.stale && (
+                      <span className="text-[10px] text-amber-400/80 border border-amber-400/30 rounded px-1.5 py-0.5">stale</span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-primary tabular-nums">
+                      ${data.livePrice.price.toFixed(2)}
+                    </p>
+                    {data.livePrice.changePct !== null && (
+                      <p className={`text-xs font-medium tabular-nums ${data.livePrice.changePct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {data.livePrice.changePct >= 0 ? "+" : ""}{data.livePrice.changePct.toFixed(2)}%
+                      </p>
+                    )}
+                    {data.livePrice.timestamp && (
+                      <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                        {new Date(data.livePrice.timestamp).toLocaleTimeString("id-ID")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Upload className="w-5 h-5" /> Import Data CSV</CardTitle>
-          <CardDescription>Format harus sesuai dengan template sistem. Pastikan header kolom benar.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium">Tipe Data</label>
-            <Select value={dataType} onValueChange={(val: any) => setDataType(val)}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Pilih tipe data" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="stocks">Data Stocks</SelectItem>
-                <SelectItem value="prices">Data Prices (OHLCV)</SelectItem>
-                <SelectItem value="fundamentals">Data Fundamentals</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium">Paste CSV Data</label>
-            <Textarea 
-              className="font-mono text-xs h-64 bg-black/50" 
-              placeholder="TICKER,NAME,SECTOR,CURRENT_PRICE..." 
-              value={csvData}
-              onChange={(e) => setCsvData(e.target.value)}
-            />
-          </div>
+          {/* Brain Engine */}
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Brain className="w-5 h-5 text-violet-400" />
+                Brain Engine
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Status</span>
+                <StatusBadge ok={data.engine.running} label={data.engine.running ? "Running" : "Stopped"} />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Total Siklus Belajar</span>
+                <span className="text-sm font-semibold text-foreground tabular-nums">{data.engine.cycleCount}</span>
+              </div>
+              {data.engine.lastCycleAt && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Siklus Terakhir</span>
+                  <span className="text-sm text-foreground/70">
+                    {new Date(data.engine.lastCycleAt).toLocaleString("id-ID")}
+                  </span>
+                </div>
+              )}
+              {data.engine.nextCycleIn != null && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Siklus Berikutnya</span>
+                  <span className="text-sm text-foreground/70 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5" />
+                    {Math.round(data.engine.nextCycleIn / 60)} menit lagi
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-          <Button onClick={handleUpload} disabled={uploadCsv.isPending} className="w-full">
-            {uploadCsv.isPending ? "Mengunggah..." : "Upload CSV"}
-          </Button>
+          {/* AI Config */}
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Key className="w-5 h-5 text-amber-400" />
+                Konfigurasi AI
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">DeepSeek API Key</span>
+                <StatusBadge ok={data.settings.hasDeepseekKey} label={data.settings.hasDeepseekKey ? `Tersedia (${data.settings.deepseekKeySource})` : "Belum diset"} />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Timeframe Prediksi</span>
+                <Badge variant="outline" className="border-border/50 text-foreground/70">
+                  {data.settings.predictionTimeframeMinutes} menit
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
 
-          {uploadCsv.data && (
-            <Alert className={uploadCsv.data.success ? "bg-positive/10 border-positive/30 text-positive" : "bg-destructive/10 border-destructive/30 text-destructive"}>
-              {uploadCsv.data.success ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-              <AlertTitle>{uploadCsv.data.success ? "Berhasil" : "Ada Kesalahan"}</AlertTitle>
-              <AlertDescription>
-                <ul className="text-xs list-disc pl-4 mt-2">
-                  <li>Baris diproses: {uploadCsv.data.rowsProcessed}</li>
-                  <li>Baris diinsert: {uploadCsv.data.rowsInserted}</li>
-                  <li>Baris diupdate: {uploadCsv.data.rowsUpdated}</li>
-                  {uploadCsv.data.errors.length > 0 && (
-                    <li className="mt-2 text-destructive font-mono whitespace-pre-wrap">{uploadCsv.data.errors.join('\n')}</li>
-                  )}
-                </ul>
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
+          {/* WhatsApp */}
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Phone className="w-5 h-5 text-green-400" />
+                Notifikasi WhatsApp
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Status</span>
+                <StatusBadge ok={data.settings.whatsapp.enabled} label={data.settings.whatsapp.enabled ? "Aktif" : "Nonaktif"} />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Nomor Tujuan</span>
+                <span className="text-sm text-foreground/70 font-mono">
+                  {data.settings.whatsapp.number || "—"}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* System Time */}
+          <Card className="border-border/50">
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Activity className="w-4 h-4" />
+                  Server Time
+                </div>
+                <span className="text-sm text-foreground/70 tabular-nums">
+                  {new Date(data.serverTime).toLocaleString("id-ID")}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <p className="text-xs text-muted-foreground/50 text-center pb-2">
+            Untuk mengubah pengaturan AI (API key, timeframe, WhatsApp), buka tab{" "}
+            <strong className="text-primary/70">Settings</strong> di halaman Gold AI.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

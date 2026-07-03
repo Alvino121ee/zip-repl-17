@@ -91,6 +91,10 @@ export async function setWhatsappNumber(number: string): Promise<void> {
   await setValue(KEY_WHATSAPP_NUMBER, number.trim());
 }
 
+export function isWhatsappConfigured(): boolean {
+  return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+}
+
 export async function isWhatsappEnabled(): Promise<boolean> {
   const fromDb = await getValue(KEY_WHATSAPP_ENABLED);
   return fromDb === "true";

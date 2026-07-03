@@ -69,53 +69,57 @@
 }
 
 :root {
-  --background: 222 47% 11%;
-  --foreground: 210 40% 98%;
-  --border: 217 33% 25%;
-  --input: 217 33% 25%;
-  --ring: 173 80% 40%;
+  /* ── Gold AI Dark Theme ── */
+  --background: 222 47% 8%;
+  --foreground: 210 40% 96%;
+  --border: 217 33% 18%;
+  --input: 217 33% 18%;
+  --ring: 38 92% 50%;
 
-  --card: 217 33% 17%;
-  --card-foreground: 210 40% 98%;
-  --card-border: 217 33% 25%;
+  --card: 220 40% 11%;
+  --card-foreground: 210 40% 96%;
+  --card-border: 217 33% 18%;
 
-  --popover: 222 47% 11%;
-  --popover-foreground: 210 40% 98%;
-  --popover-border: 217 33% 25%;
+  --popover: 222 47% 8%;
+  --popover-foreground: 210 40% 96%;
+  --popover-border: 217 33% 18%;
 
-  --primary: 173 80% 40%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 217 33% 25%;
-  --secondary-foreground: 210 40% 98%;
+  /* Gold primary #F59E0B */
+  --primary: 38 92% 50%;
+  --primary-foreground: 222 47% 8%;
+  --secondary: 217 33% 18%;
+  --secondary-foreground: 210 40% 96%;
 
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20% 65%;
+  --muted: 220 40% 13%;
+  --muted-foreground: 215 20% 55%;
 
-  --accent: 217 33% 25%;
-  --accent-foreground: 210 40% 98%;
+  /* Violet accent #8B5CF6 */
+  --accent: 263 70% 64%;
+  --accent-foreground: 0 0% 100%;
 
-  --destructive: 348 83% 47%;
+  --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
 
   --positive: 160 84% 39%;
-  --negative: 0 84% 60%;
+  --negative: 0 72% 51%;
 
-  --sidebar: 222 47% 9%;
-  --sidebar-foreground: 210 40% 98%;
-  --sidebar-border: 217 33% 25%;
-  --sidebar-primary: 173 80% 40%;
-  --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 217 33% 25%;
-  --sidebar-accent-foreground: 210 40% 98%;
-  --sidebar-ring: 173 80% 40%;
+  --sidebar: 222 47% 6%;
+  --sidebar-foreground: 210 40% 96%;
+  --sidebar-border: 217 33% 14%;
+  --sidebar-primary: 38 92% 50%;
+  --sidebar-primary-foreground: 222 47% 8%;
+  --sidebar-accent: 217 33% 18%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-ring: 38 92% 50%;
 
-  --chart-1: 173 80% 40%;
-  --chart-2: 348 83% 47%;
-  --chart-3: 45 93% 47%;
-  --chart-4: 217 91% 60%;
-  --chart-5: 280 65% 60%;
+  /* Chart palette */
+  --chart-1: 38 92% 50%;   /* gold */
+  --chart-2: 160 84% 39%;  /* emerald */
+  --chart-3: 0 72% 51%;    /* red */
+  --chart-4: 217 91% 60%;  /* blue */
+  --chart-5: 263 70% 64%;  /* violet */
 
-  --radius: 0.5rem;
+  --radius: 0.625rem;
 
   color-scheme: dark;
 }
