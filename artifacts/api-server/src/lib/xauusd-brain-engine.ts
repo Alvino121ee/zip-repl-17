@@ -1890,11 +1890,16 @@ export function startExtremeLearningMode(
   // Bangun hash cache dari DB, lalu jalankan loop
   (async () => {
     try {
+      // Hanya blokir pertanyaan yang ditanya dalam 7 hari terakhir —
+      // sama dengan filterNewQuestions() di siklus normal.
+      // Pertanyaan lebih lama dari 7 hari boleh ditanya lagi (kondisi pasar sudah berubah).
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000);
       const rows = await db
         .select({ hash: xauusdQuestionsLogTable.questionHash })
-        .from(xauusdQuestionsLogTable);
+        .from(xauusdQuestionsLogTable)
+        .where(sql`${xauusdQuestionsLogTable.askedAt} >= ${sevenDaysAgo.toISOString()}`);
       extremeHashCache = new Set(rows.map(r => r.hash));
-      console.log(`[Extreme Mode] 📚 Hash cache siap: ${extremeHashCache.size} pertanyaan sudah ada di DB`);
+      console.log(`[Extreme Mode] 📚 Hash cache siap: ${extremeHashCache.size} pertanyaan (7 hari terakhir) sudah ada di DB`);
     } catch (err) {
       console.error("[Extreme Mode] Gagal load hash cache:", err);
       extremeHashCache = new Set(); // lanjut dengan cache kosong
