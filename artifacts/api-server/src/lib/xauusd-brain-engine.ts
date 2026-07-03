@@ -731,6 +731,13 @@ async function makePrediction(indicators: XauusdIndicators): Promise<void> {
       }
     }
     winRateContext = `\n\n=== WIN RATE AI (${total} prediksi terakhir) ===\nOverall: ${winRate}% akurat (${correct}/${total})\nBUY: ${byDir.up.t > 0 ? ((byDir.up.c / byDir.up.t) * 100).toFixed(0) : "n/a"}% (${byDir.up.c}/${byDir.up.t}) | SELL: ${byDir.down.t > 0 ? ((byDir.down.c / byDir.down.t) * 100).toFixed(0) : "n/a"}% (${byDir.down.c}/${byDir.down.t}) | SIDEWAYS: ${byDir.sideways.t > 0 ? ((byDir.sideways.c / byDir.sideways.t) * 100).toFixed(0) : "n/a"}% (${byDir.sideways.c}/${byDir.sideways.t})\nGunakan data ini untuk kalibrasi confidence — jika win rate direction tertentu rendah, turunkan confidence.`;
+
+    // ── Deteksi streak kalah — jika 3+ dari 5 terakhir salah, tambah peringatan ──
+    const recentPreds = preds.slice(0, 5);
+    const recentWrongCount = recentPreds.filter(p => p.isCorrect === false).length;
+    if (recentWrongCount >= 3) {
+      winRateContext += `\n\n⚠️ STREAK KALAH TERDETEKSI: ${recentWrongCount}/${recentPreds.length} prediksi terakhir SALAH. Kondisi pasar sedang sulit. WAJIB: (1) turunkan confidence 15-20%, (2) preferensikan SIDEWAYS jika sinyal tidak sangat kuat, (3) perlebar entry zone.`;
+    }
   }
 
   let newsContext = "";
@@ -907,6 +914,13 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     // +8% semua setuju, +4% tiga setuju, -6% penuh split
     const agreementBonus = agreementCount === 4 ? 0.08 : agreementCount === 3 ? 0.04 : agreementCount === 1 ? -0.06 : 0;
     const confidence = Math.min(1, Math.max(0, baseAiConf + agreementBonus));
+
+    // ── Confidence Gate: abaikan prediksi dengan sinyal terlalu lemah ────────
+    const CONFIDENCE_GATE = 0.55;
+    if (confidence < CONFIDENCE_GATE) {
+      console.log(`[XAUUSD Brain] Prediksi tidak disimpan — confidence ${(confidence * 100).toFixed(0)}% di bawah threshold ${(CONFIDENCE_GATE * 100).toFixed(0)}%`);
+      return;
+    }
 
     // Feature 9: Price Distribution P10/P50/P90 berdasarkan ATR + confidence
     const distribution = computePriceDistribution(
@@ -1146,7 +1160,9 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
       }
 
       // ── Prioritas 2: Reinforcement positif — kuatkan brain entries yang relevan ──
-      // Prediksi BENAR → naikkan decayWeight entries dengan tag yang cocok (max 1.0)
+      // TP hit (target tercapai) → reward lebih besar (1.22×) vs resolusi lain (1.12×)
+      const tpHit = resolveReason.startsWith("TP");
+      const boostMultiplier = tpHit ? 1.22 : 1.12;
       try {
         const ind = (pred.indicatorsAtPrediction ?? {}) as Record<string, unknown>;
         const matchTags = [
@@ -1158,7 +1174,7 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
         for (const tag of matchTags) {
           await db.update(xauusdBrainTable)
             .set({
-              decayWeight: sql`LEAST(1.0, ${xauusdBrainTable.decayWeight} * 1.12)`,
+              decayWeight: sql`LEAST(1.0, ${xauusdBrainTable.decayWeight} * ${boostMultiplier})`,
               usageCount: sql`${xauusdBrainTable.usageCount} + 1`,
               updatedAt: new Date(),
             })
@@ -1475,8 +1491,19 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
     predictionsChecked = verifyResult.checked;
     wrongPredictions = verifyResult.wrong;
 
-    // 7. Make new prediction (every cycle)
-    await makePrediction(indicators);
+    // 7. Make new prediction — hanya jika tidak ada prediksi pending yang masih terbuka
+    // Dengan validasi SL/TP, satu prediksi per waktu jauh lebih bermakna dari 12/jam overlapping
+    const pendingRows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(xauusdPredictionsTable)
+      .where(eq(xauusdPredictionsTable.status, "pending"));
+    const pendingCount = pendingRows[0]?.count ?? 0;
+
+    if (pendingCount === 0) {
+      await makePrediction(indicators);
+    } else {
+      console.log(`[XAUUSD Brain] Prediksi dilewati — ${pendingCount} prediksi pending masih menunggu SL/TP`);
+    }
 
     // 8. Fetch & analyze news (every 3rd cycle to save API calls)
     if (totalCycles % 3 === 0) {
