@@ -16,6 +16,7 @@
 
 import crypto from "crypto";
 import { db } from "@workspace/db";
+import { syncToFile, autoRestoreIfEmpty } from "./brain-sqlite-backup.js";
 import {
   xauusdSnapshotsTable,
   xauusdBrainTable,
@@ -1431,6 +1432,11 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
     lastCycleAt = new Date();
     console.log(`[XAUUSD Brain] ${summary} (${durationMs}ms)`);
 
+    // Sync semua data ke file SQLite setiap siklus (non-blocking, tidak ganggu engine)
+    syncToFile().catch(err =>
+      console.error("[XAUUSD Brain] Brain backup sync error:", err)
+    );
+
     return { success: true, summary, questionsAsked, insightsSaved };
   } catch (err) {
     console.error("[XAUUSD Brain] Cycle error:", err);
@@ -1452,6 +1458,11 @@ export function startXauusdBrainEngine(): void {
   if (learningTimer) return; // already running
 
   console.log("[XAUUSD Brain] Engine started. Learning cycle every 5 minutes.");
+
+  // Auto-restore dari backup SQLite jika PostgreSQL kosong (non-blocking)
+  autoRestoreIfEmpty().catch(err =>
+    console.error("[XAUUSD Brain] Auto-restore error:", err)
+  );
 
   // Run first cycle immediately (non-blocking); runLearningCycle owns the lock
   runLearningCycle().catch((err) =>

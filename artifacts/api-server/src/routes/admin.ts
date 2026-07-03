@@ -10,6 +10,12 @@ import {
   clearMemberPassword,
 } from "../lib/xauusd-settings.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
+import {
+  getBackupStats,
+  syncToFile,
+  restoreFromFile,
+  BACKUP_PATH,
+} from "../lib/brain-sqlite-backup.js";
 
 const router = Router();
 
@@ -69,6 +75,53 @@ router.post("/member-password", requireAdmin, async (req, res) => {
     return res.json({ ok: true, cleared: false });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Brain Backup endpoints ────────────────────────────────────────────────────
+
+// GET /admin/brain-backup — status file backup
+router.get("/brain-backup", requireAdmin, async (_req, res) => {
+  try {
+    const stats = await getBackupStats();
+    res.json({ ok: true, ...stats });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// POST /admin/brain-backup/export — manual dump PostgreSQL → SQLite sekarang
+router.post("/brain-backup/export", requireAdmin, async (_req, res) => {
+  try {
+    const result = await syncToFile();
+    const stats = await getBackupStats();
+    res.json({ ok: result.ok, message: result.message, stats });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// POST /admin/brain-backup/import — restore SQLite → PostgreSQL
+router.post("/brain-backup/import", requireAdmin, async (_req, res) => {
+  try {
+    const result = await restoreFromFile();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// GET /admin/brain-backup/download — download file .sqlite langsung
+router.get("/brain-backup/download", requireAdmin, async (_req, res) => {
+  try {
+    const { existsSync } = await import("node:fs");
+    if (!existsSync(BACKUP_PATH)) {
+      res.status(404).json({ ok: false, error: "File backup belum ada. Jalankan export terlebih dahulu." });
+      return;
+    }
+    res.download(BACKUP_PATH, "goldradar-brain.sqlite");
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
   }
 });
 

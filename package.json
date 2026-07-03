@@ -12,5 +12,15 @@
   "devDependencies": {
     "prettier": "^3.8.4",
     "typescript": "~5.9.3"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "sql.js",
+        "better-sqlite3",
+        "@libsql/client",
+        "bun:sqlite"
+      ]
+    }
   }
 }
