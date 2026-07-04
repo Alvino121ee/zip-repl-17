@@ -130,6 +130,140 @@ export async function fetchBtcusdLivePrice(): Promise<BtcusdLivePrice> {
   }
 }
 
+// ─── Multi-Timeframe Analysis ─────────────────────────────────────────────────
+export interface BtcTimeframeResult {
+  timeframe: string;
+  label: string;
+  indicators: BtcusdIndicators | null;
+  error: string | null;
+}
+
+export async function getMultiBtcTimeframeAnalysis(): Promise<BtcTimeframeResult[]> {
+  const timeframes: Array<{ tf: "1h" | "4h" | "1d"; label: string; timeframe: string }> = [
+    { tf: "1h", label: "1 Jam", timeframe: "1H" },
+    { tf: "4h", label: "4 Jam", timeframe: "4H" },
+    { tf: "1d", label: "Harian", timeframe: "1D" },
+  ];
+
+  const results = await Promise.allSettled(
+    timeframes.map(({ tf }) => fetchBtcusdIndicators(tf))
+  );
+
+  return timeframes.map(({ tf: _tf, label, timeframe }, i) => ({
+    timeframe,
+    label,
+    indicators: results[i].status === "fulfilled" ? results[i].value : null,
+    error: results[i].status === "rejected" ? String((results[i] as PromiseRejectedResult).reason) : null,
+  }));
+}
+
+export interface BtcConfluence {
+  agreement: string;
+  bullishCount: number;
+  bearishCount: number;
+  sidewaysCount: number;
+  total: number;
+}
+
+export function summarizeBtcTimeframeConfluence(analyses: BtcTimeframeResult[]): BtcConfluence {
+  const valid = analyses.filter(a => a.indicators !== null);
+  const bullishCount = valid.filter(a => a.indicators!.trend === "bullish").length;
+  const bearishCount = valid.filter(a => a.indicators!.trend === "bearish").length;
+  const sidewaysCount = valid.filter(a => a.indicators!.trend === "sideways").length;
+  const total = valid.length;
+
+  let agreement = "Sideways / Mixed";
+  if (bullishCount === total && total > 0) agreement = "Strong Bullish — semua timeframe bullish";
+  else if (bearishCount === total && total > 0) agreement = "Strong Bearish — semua timeframe bearish";
+  else if (bullishCount > bearishCount && bullishCount >= 2) agreement = "Bullish Dominan";
+  else if (bearishCount > bullishCount && bearishCount >= 2) agreement = "Bearish Dominan";
+
+  return { agreement, bullishCount, bearishCount, sidewaysCount, total };
+}
+
+// ─── BTC Correlation Analysis (DXY / Nasdaq / ETH) ───────────────────────────
+export interface BtcCorrelationFactor {
+  key: string;
+  name: string;
+  price: number | null;
+  changePct: number | null;
+  interpretation: string;
+}
+
+export interface BtcCorrelationResponse {
+  btcPrice: number;
+  factors: BtcCorrelationFactor[];
+  computedAt: string;
+}
+
+const CORR_TV_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+  Accept: "application/json",
+  "Accept-Language": "en-US,en;q=0.9",
+  Origin: "https://www.tradingview.com",
+  Referer: "https://www.tradingview.com/",
+  "Content-Type": "application/json",
+};
+
+const CORRELATION_FACTORS = [
+  {
+    key: "dxy",
+    symbol: "TVC:DXY",
+    name: "DXY (USD Index)",
+    interpretation: "BTC biasanya bergerak BERLAWANAN dengan DXY. DXY naik → BTC cenderung turun (USD menguat). DXY turun → BTC cenderung naik karena aset berisiko lebih menarik.",
+  },
+  {
+    key: "nasdaq",
+    symbol: "NASDAQ:QQQ",
+    name: "QQQ (Nasdaq ETF)",
+    interpretation: "BTC berkorelasi POSITIF dengan Nasdaq/QQQ (risk-on asset). Nasdaq rally → sentimen risk-on mendukung BTC. Nasdaq jatuh → BTC ikut tertekan sebagai aset berisiko.",
+  },
+  {
+    key: "eth",
+    symbol: "BINANCE:ETHUSDT",
+    name: "ETH/USD",
+    interpretation: "ETH dan BTC bergerak SEARAH (faktor crypto ekosistem dominan). ETH outperform BTC bisa menandakan altcoin season. BTC dominance naik saat risiko global meningkat.",
+  },
+];
+
+export async function getBtcCorrelationAnalysis(): Promise<BtcCorrelationResponse> {
+  // Fetch BTC price first
+  const btcData = await fetchBtcusdLivePrice().catch(() => null);
+
+  const results = await Promise.allSettled(
+    CORRELATION_FACTORS.map(async ({ symbol }) => {
+      const body = {
+        symbols: { tickers: [symbol], query: { types: [] } },
+        columns: ["close", "change"],
+      };
+      const res = await fetch("https://scanner.tradingview.com/global/scan", {
+        method: "POST",
+        headers: CORR_TV_HEADERS,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) throw new Error(`TV Scanner HTTP ${res.status}`);
+      const json = (await res.json()) as { data: Array<{ d: (number | null)[] }> };
+      const [close, change] = json.data[0]?.d ?? [null, null];
+      return { price: close, changePct: change };
+    })
+  );
+
+  const factors: BtcCorrelationFactor[] = CORRELATION_FACTORS.map(({ key, name, interpretation }, i) => ({
+    key,
+    name,
+    interpretation,
+    price: results[i].status === "fulfilled" ? (results[i] as PromiseFulfilledResult<{ price: number | null; changePct: number | null }>).value.price : null,
+    changePct: results[i].status === "fulfilled" ? (results[i] as PromiseFulfilledResult<{ price: number | null; changePct: number | null }>).value.changePct : null,
+  }));
+
+  return {
+    btcPrice: btcData?.price ?? 0,
+    factors,
+    computedAt: new Date().toISOString(),
+  };
+}
+
 export async function fetchBtcusdIndicators(timeframe: "1h" | "4h" | "1d" = "1h"): Promise<BtcusdIndicators> {
   const intervalMap: Record<string, string> = { "1h": "60", "4h": "240", "1d": "1D" };
   const d = await queryTvScanner(intervalMap[timeframe] ?? "60");

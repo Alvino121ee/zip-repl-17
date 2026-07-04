@@ -1,3 +1,9 @@
+/**
+ * BTCUSD AI routes — realtime data, brain, learning log, predictions, chat
+ * Feature parity dengan XAUUSD: multi-timeframe, correlation, confidence-calibration,
+ * feature-importance, snapshots, backtest, engine start/stop
+ */
+
 import { Router } from "express";
 import { db } from "@workspace/db";
 import {
@@ -5,10 +11,17 @@ import {
   btcusdPredictionsTable, btcusdLearningLogTable,
 } from "@workspace/db/schema";
 import { desc, eq, sql, and } from "drizzle-orm";
-import { fetchBtcusdLivePrice } from "../lib/btcusd-data.js";
+import {
+  fetchBtcusdLivePrice,
+  fetchBtcusdIndicators,
+  getMultiBtcTimeframeAnalysis,
+  summarizeBtcTimeframeConfluence,
+  getBtcCorrelationAnalysis,
+} from "../lib/btcusd-data.js";
 import {
   getBtcEngineStatus, runBtcLearningCycle,
   startBtcExtremeLearningMode, stopBtcExtremeLearningMode,
+  startBtcBrainEngine, stopBtcBrainEngine,
 } from "../lib/btcusd-brain-engine.js";
 
 type Req = import("express").Request;
@@ -48,58 +61,212 @@ btcusdRouter.get("/live-price", async (_req, res) => {
   }
 });
 
-// ─── Latest snapshot ──────────────────────────────────────────────────────────
+// ─── Latest snapshot (current indicators) ────────────────────────────────────
 btcusdRouter.get("/snapshot", async (_req, res) => {
   try {
+    // Try live data first, fall back to DB
+    try {
+      const live = await fetchBtcusdIndicators("1h");
+      const [last] = await db.select().from(btcusdSnapshotsTable)
+        .orderBy(desc(btcusdSnapshotsTable.snapshotAt)).limit(1);
+      return res.json({ ...live, lastSnapshotAt: last?.snapshotAt ?? null, lastSavedPrice: last?.price ?? null });
+    } catch { /**/ }
     const [snap] = await db.select().from(btcusdSnapshotsTable)
       .orderBy(desc(btcusdSnapshotsTable.snapshotAt)).limit(1);
     if (!snap) return res.status(404).json({ error: "No snapshot yet" });
-    res.json(snap);
+    return res.json(snap);
   } catch (err) {
-    res.status(500).json({ error: String(err) });
+    return res.status(500).json({ error: String(err) });
   }
 });
 
-// ─── Brain entries ────────────────────────────────────────────────────────────
-btcusdRouter.get("/brain", async (_req, res) => {
+// ─── Snapshots history ────────────────────────────────────────────────────────
+btcusdRouter.get("/snapshots", async (req, res) => {
+  const limit = Math.min(200, parseInt(String(req.query.limit ?? "50"), 10));
+  const spikesOnly = req.query.spikesOnly === "true";
   try {
-    const rows = await db.select().from(btcusdBrainTable)
-      .where(eq(btcusdBrainTable.isActive, true))
-      .orderBy(desc(btcusdBrainTable.confidence))
-      .limit(50);
+    const rows = await db.select().from(btcusdSnapshotsTable)
+      .where(spikesOnly ? eq(btcusdSnapshotsTable.isSpike, true) : undefined)
+      .orderBy(desc(btcusdSnapshotsTable.snapshotAt))
+      .limit(limit);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
+// ─── Multi-timeframe analysis ─────────────────────────────────────────────────
+btcusdRouter.get("/multi-timeframe", async (_req, res) => {
+  try {
+    const analyses = await getMultiBtcTimeframeAnalysis();
+    const confluence = summarizeBtcTimeframeConfluence(analyses);
+    res.json({ timeframes: analyses, confluence });
+  } catch (err) {
+    console.error("[BTCUSD] /multi-timeframe error:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Correlation analysis (DXY / Nasdaq / ETH) ───────────────────────────────
+btcusdRouter.get("/correlation", async (_req, res) => {
+  try {
+    const data = await getBtcCorrelationAnalysis();
+    res.json(data);
+  } catch (err) {
+    console.error("[BTCUSD] /correlation error:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Confidence calibration ───────────────────────────────────────────────────
+btcusdRouter.get("/confidence-calibration", async (_req, res) => {
+  try {
+    const preds = await db
+      .select({ confidence: btcusdPredictionsTable.confidence, isCorrect: btcusdPredictionsTable.isCorrect })
+      .from(btcusdPredictionsTable)
+      .where(eq(btcusdPredictionsTable.status, "verified"));
+
+    const bucketEdges = [0.45, 0.55, 0.65, 0.75, 0.85, 1.01];
+    const calibration = bucketEdges.slice(0, -1).map((min, i) => {
+      const max = bucketEdges[i + 1];
+      const inBucket = preds.filter(p => p.confidence >= min && p.confidence < max);
+      const wins = inBucket.filter(p => p.isCorrect === true).length;
+      return {
+        label: `${Math.round(min * 100)}-${Math.round(Math.min(max, 1) * 100)}%`,
+        min, max: Math.min(max, 1),
+        sampleCount: inBucket.length,
+        actualWinRate: inBucket.length >= 3 ? parseFloat((wins / inBucket.length * 100).toFixed(1)) : null,
+      };
+    });
+
+    res.json({ calibration, totalVerified: preds.length });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Feature importance ───────────────────────────────────────────────────────
+btcusdRouter.get("/feature-importance", async (_req, res) => {
+  try {
+    const preds = await db
+      .select({ indicatorsAtPrediction: btcusdPredictionsTable.indicatorsAtPrediction, isCorrect: btcusdPredictionsTable.isCorrect })
+      .from(btcusdPredictionsTable)
+      .where(eq(btcusdPredictionsTable.status, "verified"))
+      .orderBy(desc(btcusdPredictionsTable.predictedAt))
+      .limit(500);
+
+    if (preds.length < 15) {
+      return res.json({ features: [], sampleCount: preds.length, minRequired: 15, overallWinRate: null });
+    }
+
+    const totalWins = preds.filter(p => p.isCorrect === true).length;
+    const overallWinRate = totalWins / preds.length;
+
+    const indicatorKeys = ["rsiSignal", "emaAlignment", "macdSignalType", "trend"];
+    const buckets = new Map<string, { wins: number; total: number }>();
+
+    for (const pred of preds) {
+      const ind = (pred.indicatorsAtPrediction ?? {}) as Record<string, unknown>;
+      for (const key of indicatorKeys) {
+        const val = String(ind[key] ?? "unknown");
+        const k = `${key}::${val}`;
+        if (!buckets.has(k)) buckets.set(k, { wins: 0, total: 0 });
+        const b = buckets.get(k)!;
+        b.total++;
+        if (pred.isCorrect === true) b.wins++;
+      }
+    }
+
+    const features = Array.from(buckets.entries())
+      .filter(([, b]) => b.total >= 5)
+      .map(([key, b]) => {
+        const [indicator, value] = key.split("::");
+        const winRate = b.wins / b.total;
+        return {
+          indicator: indicator ?? key,
+          value: value ?? "?",
+          sampleCount: b.total,
+          winRate: parseFloat((winRate * 100).toFixed(1)),
+          lift: parseFloat(((winRate / overallWinRate - 1) * 100).toFixed(1)),
+        };
+      })
+      .sort((a, b) => Math.abs(b.lift) - Math.abs(a.lift))
+      .slice(0, 16);
+
+    return res.json({ features, sampleCount: preds.length, overallWinRate: parseFloat((overallWinRate * 100).toFixed(1)), minRequired: 15 });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Brain entries ────────────────────────────────────────────────────────────
+btcusdRouter.get("/brain", async (req, res) => {
+  try {
+    const limit = Math.min(100, parseInt(String(req.query.limit ?? "50"), 10));
+    const category = req.query.category as string | undefined;
+    const rows = await db.select().from(btcusdBrainTable)
+      .where(category
+        ? and(eq(btcusdBrainTable.isActive, true), eq(btcusdBrainTable.category, category))
+        : eq(btcusdBrainTable.isActive, true))
+      .orderBy(desc(btcusdBrainTable.confidence), desc(btcusdBrainTable.createdAt))
+      .limit(limit);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Brain stats ──────────────────────────────────────────────────────────────
 btcusdRouter.get("/brain/stats", async (_req, res) => {
   try {
-    const [total] = await db.select({ count: sql<number>`count(*)` }).from(btcusdBrainTable);
-    const [active] = await db.select({ count: sql<number>`count(*)` }).from(btcusdBrainTable).where(eq(btcusdBrainTable.isActive, true));
+    const all = await db
+      .select({ category: btcusdBrainTable.category })
+      .from(btcusdBrainTable)
+      .where(eq(btcusdBrainTable.isActive, true));
+
+    const byCategory: Record<string, number> = {};
+    for (const row of all) {
+      byCategory[row.category] = (byCategory[row.category] ?? 0) + 1;
+    }
+
     const [qTotal] = await db.select({ count: sql<number>`count(*)` }).from(btcusdQuestionsLogTable);
     const [predTotal] = await db.select({ count: sql<number>`count(*)` }).from(btcusdPredictionsTable);
     const [correctPreds] = await db.select({ count: sql<number>`count(*)` }).from(btcusdPredictionsTable)
       .where(and(eq(btcusdPredictionsTable.isCorrect, true), eq(btcusdPredictionsTable.status, "verified")));
     const [verifiedPreds] = await db.select({ count: sql<number>`count(*)` }).from(btcusdPredictionsTable)
       .where(eq(btcusdPredictionsTable.status, "verified"));
+
+    const verified = Number(verifiedPreds?.count ?? 0);
+    const correct = Number(correctPreds?.count ?? 0);
+
     res.json({
-      totalBrainEntries: Number(total?.count ?? 0),
-      activeBrainEntries: Number(active?.count ?? 0),
+      totalInsights: all.length,
+      byCategory,
+      totalBrainEntries: all.length,
+      activeBrainEntries: all.length,
       totalQuestionsAsked: Number(qTotal?.count ?? 0),
       totalPredictions: Number(predTotal?.count ?? 0),
-      correctPredictions: Number(correctPreds?.count ?? 0),
-      verifiedPredictions: Number(verifiedPreds?.count ?? 0),
+      correctPredictions: correct,
+      verifiedPredictions: verified,
+      predictionAccuracy: verified > 0 ? Math.round(correct / verified * 100) : null,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
+// ─── Delete brain entry (admin) ───────────────────────────────────────────────
+btcusdRouter.delete("/brain/:id", requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id as string, 10);
+  if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+  await db.update(btcusdBrainTable).set({ isActive: false }).where(eq(btcusdBrainTable.id, id));
+  return res.json({ ok: true });
+});
+
 // ─── Questions log ────────────────────────────────────────────────────────────
 btcusdRouter.get("/questions", async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query["limit"] as string ?? "30"), 100);
+    const limit = Math.min(parseInt(String(req.query.limit ?? "30"), 10), 100);
     const rows = await db.select().from(btcusdQuestionsLogTable)
       .orderBy(desc(btcusdQuestionsLogTable.askedAt)).limit(limit);
     res.json(rows);
@@ -111,7 +278,7 @@ btcusdRouter.get("/questions", async (req, res) => {
 // ─── Predictions ──────────────────────────────────────────────────────────────
 btcusdRouter.get("/predictions", async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query["limit"] as string ?? "20"), 50);
+    const limit = Math.min(parseInt(String(req.query.limit ?? "20"), 10), 200);
     const rows = await db.select().from(btcusdPredictionsTable)
       .orderBy(desc(btcusdPredictionsTable.predictedAt)).limit(limit);
     res.json(rows);
@@ -121,10 +288,11 @@ btcusdRouter.get("/predictions", async (req, res) => {
 });
 
 // ─── Learning log ─────────────────────────────────────────────────────────────
-btcusdRouter.get("/learning-log", async (_req, res) => {
+btcusdRouter.get("/learning-log", async (req, res) => {
   try {
+    const limit = Math.min(parseInt(String(req.query.limit ?? "30"), 10), 100);
     const rows = await db.select().from(btcusdLearningLogTable)
-      .orderBy(desc(btcusdLearningLogTable.cycleAt)).limit(20);
+      .orderBy(desc(btcusdLearningLogTable.cycleAt)).limit(limit);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -136,23 +304,175 @@ btcusdRouter.get("/engine-status", (_req, res) => {
   res.json(getBtcEngineStatus());
 });
 
-// ─── Trigger manual learning cycle (admin) ────────────────────────────────────
-btcusdRouter.post("/learn-now", requireAdmin, (_req, res) => {
-  runBtcLearningCycle().catch(console.error);
-  res.json({ ok: true, message: "BTC learning cycle triggered." });
+// ─── Engine start / stop (admin) ─────────────────────────────────────────────
+btcusdRouter.post("/engine/start", requireAdmin, (_req, res) => {
+  startBtcBrainEngine();
+  res.json({ ok: true, status: getBtcEngineStatus() });
+});
+
+btcusdRouter.post("/engine/stop", requireAdmin, (_req, res) => {
+  stopBtcBrainEngine();
+  res.json({ ok: true, status: getBtcEngineStatus() });
+});
+
+// ─── Trigger manual learning cycle (admin) — sync ────────────────────────────
+btcusdRouter.post("/learn-now", requireAdmin, async (_req, res) => {
+  try {
+    await runBtcLearningCycle();
+    res.json({ ok: true, message: "BTC learning cycle selesai." });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 // ─── Extreme mode (admin) ────────────────────────────────────────────────────
 btcusdRouter.post("/engine/extreme/start", requireAdmin, (req, res) => {
-  const target = Math.max(10, Math.min(parseInt(req.body?.target ?? "100"), 10_000));
-  const qpc = Math.max(3, Math.min(parseInt(req.body?.questionsPerCycle ?? "10"), 20));
+  const { target, questionsPerCycle } = req.body as { target?: number; questionsPerCycle?: number };
+  if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > 10_000) {
+    return res.status(400).json({ error: "target harus bilangan bulat antara 1 hingga 10.000" });
+  }
+  if (questionsPerCycle !== undefined && (typeof questionsPerCycle !== "number" || !Number.isInteger(questionsPerCycle) || questionsPerCycle < 3 || questionsPerCycle > 20)) {
+    return res.status(400).json({ error: "questionsPerCycle harus bilangan bulat antara 3 hingga 20" });
+  }
+  const qpc = questionsPerCycle ?? 10;
   const result = startBtcExtremeLearningMode(target, qpc);
-  res.json(result);
+  return res.json({ ...result, status: getBtcEngineStatus() });
 });
 
 btcusdRouter.post("/engine/extreme/stop", requireAdmin, (_req, res) => {
   const result = stopBtcExtremeLearningMode();
-  res.json(result);
+  res.json({ ...result, status: getBtcEngineStatus() });
+});
+
+// ─── Backtest — RSI + EMA rule backtest against historical BTC snapshots ──────
+btcusdRouter.post("/backtest", async (req, res) => {
+  const {
+    rsiBuy = 35,
+    rsiSell = 65,
+    requireEmaBullish = false,
+    direction = "long",
+    maxHoldPeriods = 10,
+  } = (req.body ?? {}) as {
+    rsiBuy?: number; rsiSell?: number; requireEmaBullish?: boolean;
+    direction?: "long" | "short" | "both"; maxHoldPeriods?: number;
+  };
+
+  try {
+    const snaps = await db
+      .select({
+        snapshotAt: btcusdSnapshotsTable.snapshotAt,
+        price: btcusdSnapshotsTable.price,
+        rsi14: btcusdSnapshotsTable.rsi14,
+        emaAlignment: btcusdSnapshotsTable.emaAlignment,
+      })
+      .from(btcusdSnapshotsTable)
+      .orderBy(btcusdSnapshotsTable.snapshotAt)
+      .limit(2000);
+
+    if (snaps.length < 10) {
+      return res.json({ error: "Tidak cukup data snapshot BTC (minimal 10).", totalTrades: 0, equity: [], trades: [], dataPoints: snaps.length });
+    }
+
+    interface Trade {
+      entryPrice: number; exitPrice: number; direction: string;
+      pnlPct: number; win: boolean; holdPeriods: number; entryAt: string;
+    }
+
+    const trades: Trade[] = [];
+    let inTrade = false;
+    let entryIdx = -1;
+    let entryDir: "long" | "short" = "long";
+
+    for (let i = 0; i < snaps.length; i++) {
+      const s = snaps[i];
+      if (!s.rsi14) continue;
+      if (!inTrade) {
+        let doLong = (direction === "long" || direction === "both") && s.rsi14 < rsiBuy;
+        let doShort = (direction === "short" || direction === "both") && s.rsi14 > rsiSell;
+        if (requireEmaBullish) {
+          if (doLong) doLong = s.emaAlignment === "bullish_stack";
+          if (doShort) doShort = s.emaAlignment === "bearish_stack";
+        }
+        if (doLong || doShort) { inTrade = true; entryIdx = i; entryDir = doLong ? "long" : "short"; }
+      } else {
+        const entry = snaps[entryIdx];
+        const holdPeriods = i - entryIdx;
+        const exitOnRsi = entryDir === "long" ? s.rsi14 > rsiSell : s.rsi14 < rsiBuy;
+        if (exitOnRsi || holdPeriods >= maxHoldPeriods) {
+          const pnlPct = entryDir === "long"
+            ? (s.price - entry.price) / entry.price * 100
+            : (entry.price - s.price) / entry.price * 100;
+          trades.push({
+            entryPrice: entry.price, exitPrice: s.price, direction: entryDir,
+            pnlPct: parseFloat(pnlPct.toFixed(3)), win: pnlPct > 0,
+            holdPeriods, entryAt: entry.snapshotAt.toISOString(),
+          });
+          inTrade = false;
+        }
+      }
+    }
+
+    const wins = trades.filter(t => t.win).length;
+    const losses = trades.length - wins;
+    const winRate = trades.length > 0 ? Math.round(wins / trades.length * 100) : 0;
+
+    const INITIAL = 10000;
+    let capital = INITIAL; let peak = INITIAL; let maxDrawdown = 0;
+    const equity: number[] = [INITIAL];
+    for (const t of trades) {
+      const risk = capital * 0.02;
+      const pnl = t.win ? risk * Math.max(0.5, Math.abs(t.pnlPct)) : -risk;
+      capital += pnl;
+      if (capital > peak) peak = capital;
+      const dd = (peak - capital) / peak * 100;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+      equity.push(parseFloat(capital.toFixed(2)));
+    }
+
+    const grossWin = trades.filter(t => t.win).reduce((s, t) => s + t.pnlPct, 0);
+    const grossLoss = trades.filter(t => !t.win).reduce((s, t) => s + Math.abs(t.pnlPct), 0);
+
+    return res.json({
+      rules: { rsiBuy, rsiSell, requireEmaBullish, direction, maxHoldPeriods },
+      totalTrades: trades.length, wins, losses, winRate,
+      profitFactor: grossLoss > 0 ? parseFloat((grossWin / grossLoss).toFixed(2)) : grossWin > 0 ? 99 : 0,
+      maxDrawdown: parseFloat(maxDrawdown.toFixed(2)),
+      avgWin: wins > 0 ? parseFloat((grossWin / wins).toFixed(3)) : 0,
+      avgLoss: losses > 0 ? parseFloat((grossLoss / losses).toFixed(3)) : 0,
+      totalReturn: parseFloat(((capital - INITIAL) / INITIAL * 100).toFixed(2)),
+      finalCapital: parseFloat(capital.toFixed(2)),
+      equity, trades: trades.slice(-20), dataPoints: snaps.length,
+    });
+  } catch (err) {
+    console.error("[BTCUSD] /backtest error:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Settings — shared dengan XAUUSD (DeepSeek key, dll) ─────────────────────
+btcusdRouter.get("/settings", async (_req, res) => {
+  try {
+    const { getSettingsSummary, VALID_TIMEFRAMES } = await import("../lib/xauusd-settings.js");
+    const summary = await getSettingsSummary();
+    res.json({ ...summary, validTimeframes: VALID_TIMEFRAMES });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+btcusdRouter.post("/settings/deepseek-key", requireAdmin, async (req, res) => {
+  const { apiKey } = req.body as { apiKey?: string };
+  try {
+    const { setDeepseekApiKey, clearDeepseekApiKey } = await import("../lib/xauusd-settings.js");
+    if (!apiKey || apiKey.trim().length === 0) {
+      await clearDeepseekApiKey();
+      return res.json({ ok: true, cleared: true });
+    }
+    await setDeepseekApiKey(apiKey);
+    return res.json({ ok: true, cleared: false });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
 });
 
 // ─── Chat (member) ────────────────────────────────────────────────────────────
@@ -161,14 +481,35 @@ btcusdRouter.post("/chat", requireMember, async (req, res) => {
     const { message } = req.body as { message: string };
     if (!message?.trim()) return res.status(400).json({ error: "Message required" });
 
-    const brainRows = await db.select({ content: btcusdBrainTable.content, category: btcusdBrainTable.category })
-      .from(btcusdBrainTable).where(eq(btcusdBrainTable.isActive, true))
-      .orderBy(desc(btcusdBrainTable.confidence)).limit(10);
-    const brainCtx = brainRows.map(r => `[${r.category}] ${r.content.slice(0, 300)}`).join("\n---\n");
+    // Gather context in parallel
+    const [brainRows, recentPreds, liveData] = await Promise.allSettled([
+      db.select({ content: btcusdBrainTable.content, category: btcusdBrainTable.category, title: btcusdBrainTable.title })
+        .from(btcusdBrainTable).where(eq(btcusdBrainTable.isActive, true))
+        .orderBy(desc(btcusdBrainTable.confidence)).limit(8),
+      db.select({
+        direction: btcusdPredictionsTable.direction,
+        confidence: btcusdPredictionsTable.confidence,
+        targetPrice: btcusdPredictionsTable.targetPrice,
+        stopLoss: btcusdPredictionsTable.stopLoss,
+        reasoning: btcusdPredictionsTable.reasoning,
+        predictedAt: btcusdPredictionsTable.predictedAt,
+      }).from(btcusdPredictionsTable).orderBy(desc(btcusdPredictionsTable.predictedAt)).limit(3),
+      fetchBtcusdLivePrice(),
+    ]);
+
+    const brain = brainRows.status === "fulfilled" ? brainRows.value : [];
+    const preds = recentPreds.status === "fulfilled" ? recentPreds.value : [];
+    const live = liveData.status === "fulfilled" ? liveData.value : null;
+
+    const brainCtx = brain.map(r => `[${r.category}] ${r.title}: ${r.content.slice(0, 250)}`).join("\n---\n");
+    const predCtx = preds.map(p => `${p.direction.toUpperCase()} (conf ${Math.round(p.confidence * 100)}%) target $${p.targetPrice ?? "?"} — ${p.reasoning?.slice(0, 100)}`).join("\n");
+    const priceCtx = live ? `Harga BTC saat ini: $${live.price.toLocaleString()} (${live.changePct != null ? (live.changePct >= 0 ? "+" : "") + live.changePct.toFixed(2) + "%" : "n/a"} hari ini)` : "";
+
+    const systemPrompt = `Kamu adalah expert trader Bitcoin dengan pengalaman 10 tahun dan deep knowledge on-chain analytics, halving cycles, crypto makro.\n\n${priceCtx}\n\nOtak AI BTC:\n${brainCtx || "(masih kosong)"}\n\nPrediksi terbaru:\n${predCtx || "(belum ada prediksi)"}\n\nJawab pertanyaan user berdasarkan data di atas. Bahasa Indonesia. Berikan analisis konkret, bukan generik.`;
 
     const { getDeepseekApiKey } = await import("../lib/xauusd-settings.js");
     const apiKey = await getDeepseekApiKey();
-    if (!apiKey) return res.status(503).json({ error: "DeepSeek API key belum diset." });
+    if (!apiKey) return res.status(503).json({ error: "DeepSeek API key belum diset. Atur di halaman Pengaturan." });
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 120_000);
@@ -179,20 +520,20 @@ btcusdRouter.post("/chat", requireMember, async (req, res) => {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           model: "deepseek-reasoner",
-          max_tokens: 1000,
+          max_tokens: 1200,
           messages: [
-            { role: "system", content: `Kamu adalah expert trader Bitcoin dengan pengalaman 10 tahun. Otak AI kamu berisi pengetahuan ini:\n${brainCtx}\n\nJawab pertanyaan user berdasarkan kondisi pasar terkini dan pengetahuan di atas. Bahasa Indonesia.` },
+            { role: "system", content: systemPrompt },
             { role: "user", content: message },
           ],
         }),
       });
       if (!response.ok) throw new Error(`DeepSeek HTTP ${response.status}`);
       const json = (await response.json()) as { choices: Array<{ message: { content: string } }> };
-      res.json({ reply: json.choices[0]?.message?.content?.trim() ?? "" });
+      return res.json({ reply: json.choices[0]?.message?.content?.trim() ?? "" });
     } finally {
       clearTimeout(timer);
     }
   } catch (err) {
-    res.status(500).json({ error: String(err) });
+    return res.status(500).json({ error: String(err) });
   }
 });
