@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startXauusdBrainEngine } from "./lib/xauusd-brain-engine.js";
+import { startBtcBrainEngine } from "./lib/btcusd-brain-engine.js";
 import { startXauusdLivePriceTicker } from "./lib/xauusd-live-price.js";
 import { ensureAgentsExist } from "./lib/agent-engine.js";
 
@@ -28,6 +29,9 @@ app.listen(port, async (err) => {
 
   // Start XAUUSD autonomous learning engine
   startXauusdBrainEngine();
+
+  // Start BTCUSD autonomous learning engine (BTC is 24/7)
+  startBtcBrainEngine();
 
   // Start realtime (1s) live price ticker
   startXauusdLivePriceTicker();

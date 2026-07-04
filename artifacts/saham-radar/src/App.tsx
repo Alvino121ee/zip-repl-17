@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/Layout";
 import XauusdAi from "@/pages/xauusd-ai";
+import BtcusdAi from "@/pages/btcusd-ai";
 import AdminPanel from "@/pages/admin";
 import LoginPage from "@/pages/login";
 import MemberPage from "@/pages/member";
@@ -48,6 +49,9 @@ function Router() {
           <Switch>
             <Route path="/admin">
               <AdminRoute component={XauusdAi} />
+            </Route>
+            <Route path="/admin/btc">
+              <AdminRoute component={BtcusdAi} />
             </Route>
             <Route path="/admin/settings">
               <AdminRoute component={AdminPanel} />
