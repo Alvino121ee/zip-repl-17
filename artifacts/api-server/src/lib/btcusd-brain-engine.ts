@@ -258,7 +258,7 @@ interface RuleBasedPrediction {
   reasoning: string;
 }
 
-function computeRuleBasedPrediction(indicators: BtcusdIndicators): RuleBasedPrediction {
+function computeRuleBasedPrediction(indicators: BtcusdIndicators, forceDirection?: "up" | "down" | "sideways"): RuleBasedPrediction {
   const price = indicators.price;
   const atr = indicators.atr14 ?? price * 0.02;
 
@@ -276,6 +276,8 @@ function computeRuleBasedPrediction(indicators: BtcusdIndicators): RuleBasedPred
   }
   if (score >= 1.5) direction = "up";
   else if (score <= -1.5) direction = "down";
+
+  if (forceDirection) direction = forceDirection;
 
   const confidence = Math.min(0.85, 0.45 + Math.abs(score) * 0.12);
   const pullback = atr * 0.3;
@@ -843,6 +845,12 @@ Buat prediksi BTC untuk 4 jam ke depan berdasarkan metodologi di atas. Jawab JSO
     const finalDirection: "up" | "down" | "sideways" =
       rawFinal === "up" || rawFinal === "down" || rawFinal === "sideways" ? rawFinal : ruleBased.direction;
 
+    // Jika finalDirection berbeda dari direction awal, recalculate entry/target/SL
+    // agar nilai trade selalu konsisten dengan arah yang telah diputuskan ensemble
+    const recalcForFinal = finalDirection !== direction
+      ? computeRuleBasedPrediction(indicators, finalDirection)
+      : null;
+
     const allDirs = [techVote.direction, macroVote.direction, sentimentVote.direction, aiVote.direction];
     const agreementCount = Math.max(
       allDirs.filter((d) => d === "up").length,
@@ -881,12 +889,12 @@ Buat prediksi BTC untuk 4 jam ke depan berdasarkan metodologi di atas. Jawab JSO
       timeframe: "4H",
       predictionType: "training",
       direction: finalDirection,
-      targetPrice, // TP1
-      tp2,
-      tp3,
-      entryLow,
-      entryHigh,
-      stopLoss,
+      targetPrice: recalcForFinal ? recalcForFinal.targetPrice : targetPrice, // TP1
+      tp2: recalcForFinal ? recalcForFinal.tp2 : tp2,
+      tp3: recalcForFinal ? recalcForFinal.tp3 : tp3,
+      entryLow: recalcForFinal ? recalcForFinal.entryLow : entryLow,
+      entryHigh: recalcForFinal ? recalcForFinal.entryHigh : entryHigh,
+      stopLoss: recalcForFinal ? recalcForFinal.stopLoss : stopLoss,
       confidence,
       reasoning,
       priceAtPrediction: indicators.price,
