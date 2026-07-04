@@ -248,10 +248,12 @@ export function computeBtcClusterLabel(indicators: BtcusdIndicators, avgVolume?:
 // ─── Feature: Rule-based Prediction Fallback ───────────────────────────────────
 interface RuleBasedPrediction {
   direction: "up" | "down" | "sideways";
-  targetPrice: number;
+  targetPrice: number; // TP1 — target terdekat (S/R pertama)
+  tp2: number;         // TP2 — target lanjutan jika momentum + funding sehat
+  tp3: number;         // TP3 — target jauh jika trend kuat + volume mendukung
   entryLow: number;
   entryHigh: number;
-  stopLoss: number;
+  stopLoss: number;    // titik invalidasi thesis (swing low/high struktural)
   confidence: number;
   reasoning: string;
 }
@@ -280,26 +282,70 @@ function computeRuleBasedPrediction(indicators: BtcusdIndicators): RuleBasedPred
   const support = indicators.supportLevel ?? price - atr * 2;
   const resistance = indicators.resistanceLevel ?? price + atr * 2;
 
+  // ── SL: di titik struktural invalidasi thesis (swing low/high), bukan ATR acak ──
+  // Long  → SL di bawah support (swing low) — jika kena, thesis long sudah salah
+  // Short → SL di atas resistance (swing high) — jika kena, thesis short sudah salah
+
+  // ── TP: multi-level berdasarkan area S/R (termasuk konfirmasi funding/OI untuk crypto)
+  // TP1 = S/R pertama (target terdekat, konservatif)
+  // TP2 = S/R berikutnya jika momentum + funding sehat
+  // TP3 = ekstensi jauh jika trend kuat + volume mendukung
   let entryLow: number, entryHigh: number, stopLoss: number, targetPrice: number;
+  let tp2: number, tp3: number;
+
   if (direction === "up") {
-    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryLow  = parseFloat((price - pullback).toFixed(2));
     entryHigh = parseFloat((price + pullback * 0.3).toFixed(2));
-    stopLoss = parseFloat(Math.min(support - atr * 0.3, price - atr * 1.5).toFixed(2));
-    targetPrice = parseFloat((price + atr * 2.5).toFixed(2));
+    // SL: jika support tersedia DAN di bawah harga (valid struktural); fallback ATR
+    const slCandidate = indicators.supportLevel != null
+      ? parseFloat((indicators.supportLevel - atr * 0.1).toFixed(2))
+      : null;
+    stopLoss = (slCandidate != null && slCandidate < price)
+      ? slCandidate
+      : parseFloat((price - atr * 1.5).toFixed(2));
+    // TP1: resistance terdekat DI ATAS harga; fallback ATR
+    const tp1Candidate = indicators.resistanceLevel != null
+      ? parseFloat(indicators.resistanceLevel.toFixed(2))
+      : null;
+    targetPrice = (tp1Candidate != null && tp1Candidate > price)
+      ? tp1Candidate
+      : parseFloat((price + atr * 1.5).toFixed(2));
+    tp2 = parseFloat((targetPrice + atr * 1.5).toFixed(2));
+    tp3 = parseFloat((targetPrice + atr * 3.5).toFixed(2));
   } else if (direction === "down") {
-    entryLow = parseFloat((price - pullback * 0.3).toFixed(2));
+    entryLow  = parseFloat((price - pullback * 0.3).toFixed(2));
     entryHigh = parseFloat((price + pullback).toFixed(2));
-    stopLoss = parseFloat(Math.max(resistance + atr * 0.3, price + atr * 1.5).toFixed(2));
-    targetPrice = parseFloat((price - atr * 2.5).toFixed(2));
+    // SL: jika resistance tersedia DAN di atas harga (valid struktural); fallback ATR
+    const slCandidate = indicators.resistanceLevel != null
+      ? parseFloat((indicators.resistanceLevel + atr * 0.1).toFixed(2))
+      : null;
+    stopLoss = (slCandidate != null && slCandidate > price)
+      ? slCandidate
+      : parseFloat((price + atr * 1.5).toFixed(2));
+    // TP1: support terdekat DI BAWAH harga; fallback ATR
+    const tp1Candidate = indicators.supportLevel != null
+      ? parseFloat(indicators.supportLevel.toFixed(2))
+      : null;
+    targetPrice = (tp1Candidate != null && tp1Candidate < price)
+      ? tp1Candidate
+      : parseFloat((price - atr * 1.5).toFixed(2));
+    tp2 = parseFloat((targetPrice - atr * 1.5).toFixed(2));
+    tp3 = parseFloat((targetPrice - atr * 3.5).toFixed(2));
   } else {
-    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryLow  = parseFloat((price - pullback).toFixed(2));
     entryHigh = parseFloat((price + pullback).toFixed(2));
-    stopLoss = parseFloat((price - atr * 1.5).toFixed(2));
+    stopLoss  = parseFloat((price - atr * 1.5).toFixed(2));
     targetPrice = parseFloat(price.toFixed(2));
+    tp2 = targetPrice;
+    tp3 = targetPrice;
   }
 
-  const reasoning = `Rule-based: trend=${indicators.trend}, EMA=${indicators.emaAlignment}, RSI=${indicators.rsi14?.toFixed(1) ?? "-"} (${indicators.rsiSignal}), MACD=${indicators.macdSignalType}. ATR14=$${atr.toFixed(0)} dipakai untuk SL/TP. Support $${support.toFixed(0)} / Resistance $${resistance.toFixed(0)}.`;
-  return { direction, targetPrice, entryLow, entryHigh, stopLoss, confidence, reasoning };
+  const rr = Math.abs(price - stopLoss) > 0
+    ? parseFloat((Math.abs(targetPrice - price) / Math.abs(price - stopLoss)).toFixed(2))
+    : 0;
+  const slLabel = direction === "up" ? "swing low/support" : "swing high/resistance";
+  const reasoning = `Rule-based: trend=${indicators.trend}, EMA=${indicators.emaAlignment}, RSI=${indicators.rsi14?.toFixed(1) ?? "-"} (${indicators.rsiSignal}), MACD=${indicators.macdSignalType}. SL=${stopLoss.toFixed(0)} di ${slLabel} (invalidasi thesis). TP1=${targetPrice.toFixed(0)} / TP2=${tp2.toFixed(0)} / TP3=${tp3.toFixed(0)} dari area S/R. RR ≈ ${rr}.`;
+  return { direction, targetPrice, tp2, tp3, entryLow, entryHigh, stopLoss, confidence, reasoning };
 }
 
 // ─── Feature: Macro Vote + Funding Rate ────────────────────────────────────────
@@ -687,19 +733,48 @@ async function makePrediction(
 
   const ruleBased = computeRuleBasedPrediction(indicators);
 
-  const systemPrompt = `Kamu adalah AI predictor BTC/USD. Berikan prediksi dalam format JSON yang valid.`;
-  const userMsg = `Harga BTC $${indicators.price.toLocaleString()} | RSI ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal}) | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}${mtfContext}${correlationContext}${fgContext}${fundingContext}${halvingContext}${bbSqueezeContext}${winRateContext}${segmentWinRateContext}${sessionRegimeContext}${brainContext}
+  const systemPrompt = `Kamu adalah AI trading system BTC/USD dengan metodologi analisis terstruktur.
 
-Buat prediksi BTC untuk 4 jam ke depan. Pertimbangkan Fear & Greed, Funding Rate, dan fase halving dalam reasoning. Respons HANYA JSON:
+URUTAN ANALISIS (wajib diikuti):
+1. TREND — struktur market: higher high/lower low? EMA alignment? Apakah timeframe lebih besar konfirmasi?
+2. MOMENTUM — RSI, MACD, histogram. Apakah momentum mendukung atau divergen? Cek juga funding rate (overleveraged?)
+3. LEVEL — identifikasi support/resistance STRUKTURAL yang valid (swing high/low nyata, bukan ATR acak)
+4. KONFIRMASI — MTF confluens, DXY/Nasdaq korelasi, Fear & Greed contrarian, funding rate, halving phase, open interest jika relevan
+5. RISIKO — hitung RR, tentukan SL/TP berdasarkan struktur + konfirmasi
+
+ATURAN SL (stop loss = batas salahnya thesis):
+- Long: SL di BAWAH swing low / support struktural — jika kena, thesis long sudah invalid
+- Short: SL di ATAS swing high / resistance struktural — jika kena, thesis short sudah invalid
+- SL bukan angka ATR random; harus ada alasan struktural
+
+ATURAN TP (area yang secara teknis wajar jadi tempat reaksi):
+- TP1: target TERDEKAT — S/R pertama yang valid
+- TP2: S/R berikutnya jika momentum + funding masih sehat
+- TP3: ekstensi jauh jika trend kuat, funding normal, volume mendukung
+- Setup lemah → TP konservatif. Market kuat → TP bisa lebih luas tapi tetap di S/R
+
+ATURAN CONFIDENCE:
+- >0.75: ≥4 faktor align (teknikal + makro + funding + MTF)
+- 0.55–0.75: 3 faktor align
+- <0.55: sinyal mixed
+- Win rate segmen <50% → turunkan confidence 10–15%
+- Pertimbangkan memori AI dan fase halving
+
+Respons HANYA JSON (tanpa teks lain):
 {
-  "direction": "up/down/sideways",
-  "targetPrice": <harga target>,
-  "entryLow": <batas bawah entry>,
-  "entryHigh": <batas atas entry>,
-  "stopLoss": <harga stop loss>,
+  "direction": "up" | "down" | "sideways",
+  "targetPrice": <TP1 — S/R pertama dalam arah prediksi, USD>,
+  "tp2": <TP2 — S/R lanjutan jika momentum sehat, USD>,
+  "tp3": <TP3 — ekstensi jauh jika trend kuat, USD>,
+  "entryLow": <batas bawah entry USD>,
+  "entryHigh": <batas atas entry USD>,
+  "stopLoss": <SL di level struktural invalidasi thesis, USD>,
   "confidence": <0.0-1.0>,
-  "reasoning": "<3-4 kalimat — sebutkan F&G, funding rate, halving phase, MTF, dan win rate>"
+  "reasoning": "<3-4 kalimat — sebutkan: trend struktur, momentum+funding, level S/R yang dipakai sebagai SL/TP, dan konfirmasi F&G/halving/MTF>"
 }`;
+  const userMsg = `Harga BTC ${indicators.price.toLocaleString()} | RSI ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal}) | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}${mtfContext}${correlationContext}${fgContext}${fundingContext}${halvingContext}${bbSqueezeContext}${winRateContext}${segmentWinRateContext}${sessionRegimeContext}${brainContext}
+
+Buat prediksi BTC untuk 4 jam ke depan berdasarkan metodologi di atas. Jawab JSON saja.`;
 
   let pred: RuleBasedPrediction = ruleBased;
   let aiPowered = false;
@@ -712,6 +787,8 @@ Buat prediksi BTC untuk 4 jam ke depan. Pertimbangkan Fear & Greed, Funding Rate
       const parsed = JSON.parse(jsonMatch[0]) as {
         direction: string;
         targetPrice: number;
+        tp2?: number;
+        tp3?: number;
         entryLow?: number;
         entryHigh?: number;
         stopLoss?: number;
@@ -739,7 +816,9 @@ Buat prediksi BTC untuk 4 jam ke depan. Pertimbangkan Fear & Greed, Funding Rate
   try {
     const verifyAt = new Date(Date.now() + 4 * 60 * 60 * 1000);
     const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
-    const targetPrice = pred.targetPrice ?? ruleBased.targetPrice;
+    const targetPrice = pred.targetPrice ?? ruleBased.targetPrice; // TP1
+    const tp2 = pred.tp2 ?? ruleBased.tp2;
+    const tp3 = pred.tp3 ?? ruleBased.tp3;
     const entryLow = pred.entryLow ?? ruleBased.entryLow;
     const entryHigh = pred.entryHigh ?? ruleBased.entryHigh;
     const stopLoss = pred.stopLoss ?? ruleBased.stopLoss;
@@ -802,7 +881,9 @@ Buat prediksi BTC untuk 4 jam ke depan. Pertimbangkan Fear & Greed, Funding Rate
       timeframe: "4H",
       predictionType: "training",
       direction: finalDirection,
-      targetPrice,
+      targetPrice, // TP1
+      tp2,
+      tp3,
       entryLow,
       entryHigh,
       stopLoss,

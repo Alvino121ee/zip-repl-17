@@ -591,10 +591,12 @@ function extractMarketTags(indicators: XauusdIndicators): string {
 
 interface RuleBasedPrediction {
   direction: "up" | "down" | "sideways";
-  targetPrice: number;
+  targetPrice: number; // TP1 — target terdekat (S/R pertama)
+  tp2: number;         // TP2 — target lanjutan jika momentum sehat
+  tp3: number;         // TP3 — target jauh jika trend kuat + volume mendukung
   entryLow: number;
   entryHigh: number;
-  stopLoss: number;
+  stopLoss: number;    // titik invalidasi thesis (swing low/high struktural)
   confidence: number;
   reasoning: string;
 }
@@ -631,30 +633,75 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
   const support = indicators.supportLevel ?? price - atr * 2;
   const resistance = indicators.resistanceLevel ?? price + atr * 2;
 
+  // ── SL: di titik struktural invalidasi thesis, bukan angka ATR acak ──────────
+  // Long  → SL di bawah support (swing low) — jika kena, thesis long sudah salah
+  // Short → SL di atas resistance (swing high) — jika kena, thesis short sudah salah
+  // Fallback ke 1.5×ATR hanya jika level S/R tidak tersedia
+
+  // ── TP: multi-level berdasarkan area S/R yang secara teknis wajar jadi reaksi
+  // TP1 = target terdekat (S/R pertama)          — konservatif, selalu ada exit
+  // TP2 = target lanjutan jika momentum sehat    — S/R berikutnya atau +1.5×ATR dari TP1
+  // TP3 = target jauh jika trend kuat + volume   — ekstensi TP1 + 3.5×ATR
+
+  let tp2: number;
+  let tp3: number;
+
   if (direction === "up") {
-    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryLow  = parseFloat((price - pullback).toFixed(2));
     entryHigh = parseFloat((price + pullback * 0.3).toFixed(2));
-    stopLoss = parseFloat(
-      Math.min(support - atr * 0.3, price - atr * 1.5).toFixed(2)
-    );
-    targetPrice = parseFloat((price + atr * 2.5).toFixed(2));
+    // SL: jika support tersedia DAN di bawah harga (valid struktural), letakkan di bawahnya; fallback ATR
+    const slCandidate = indicators.supportLevel != null
+      ? parseFloat((indicators.supportLevel - atr * 0.1).toFixed(2))
+      : null;
+    stopLoss = (slCandidate != null && slCandidate < price)
+      ? slCandidate
+      : parseFloat((price - atr * 1.5).toFixed(2));
+    // TP1: resistance terdekat di ATAS harga (area reaksi pertama); fallback ATR
+    const tp1Candidate = indicators.resistanceLevel != null
+      ? parseFloat(indicators.resistanceLevel.toFixed(2))
+      : null;
+    targetPrice = (tp1Candidate != null && tp1Candidate > price)
+      ? tp1Candidate
+      : parseFloat((price + atr * 1.5).toFixed(2));
+    // TP2/TP3: ektensi ATR dari TP1 (selalu valid karena relatif terhadap TP1)
+    tp2 = parseFloat((targetPrice + atr * 1.5).toFixed(2));
+    tp3 = parseFloat((targetPrice + atr * 3.5).toFixed(2));
   } else if (direction === "down") {
-    entryLow = parseFloat((price - pullback * 0.3).toFixed(2));
+    entryLow  = parseFloat((price - pullback * 0.3).toFixed(2));
     entryHigh = parseFloat((price + pullback).toFixed(2));
-    stopLoss = parseFloat(
-      Math.max(resistance + atr * 0.3, price + atr * 1.5).toFixed(2)
-    );
-    targetPrice = parseFloat((price - atr * 2.5).toFixed(2));
+    // SL: jika resistance tersedia DAN di atas harga (valid struktural), letakkan di atasnya; fallback ATR
+    const slCandidate = indicators.resistanceLevel != null
+      ? parseFloat((indicators.resistanceLevel + atr * 0.1).toFixed(2))
+      : null;
+    stopLoss = (slCandidate != null && slCandidate > price)
+      ? slCandidate
+      : parseFloat((price + atr * 1.5).toFixed(2));
+    // TP1: support terdekat di BAWAH harga (area reaksi pertama); fallback ATR
+    const tp1Candidate = indicators.supportLevel != null
+      ? parseFloat(indicators.supportLevel.toFixed(2))
+      : null;
+    targetPrice = (tp1Candidate != null && tp1Candidate < price)
+      ? tp1Candidate
+      : parseFloat((price - atr * 1.5).toFixed(2));
+    // TP2/TP3: ekstensi ATR dari TP1
+    tp2 = parseFloat((targetPrice - atr * 1.5).toFixed(2));
+    tp3 = parseFloat((targetPrice - atr * 3.5).toFixed(2));
   } else {
-    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryLow  = parseFloat((price - pullback).toFixed(2));
     entryHigh = parseFloat((price + pullback).toFixed(2));
-    stopLoss = parseFloat((price - atr * 1.5).toFixed(2));
+    stopLoss  = parseFloat((price - atr * 1.5).toFixed(2));
     targetPrice = parseFloat(price.toFixed(2));
+    tp2 = targetPrice;
+    tp3 = targetPrice;
   }
 
-  const reasoning = `Analisis rule-based: trend=${indicators.trend}, EMA alignment=${indicators.emaAlignment}, RSI=${indicators.rsi14?.toFixed(1) ?? "-"} (${indicators.rsiSignal}), MACD=${indicators.macdSignalType}. ATR14=${atr.toFixed(2)} dipakai untuk menentukan rentang entry dan stop loss di sekitar support $${indicators.supportLevel} / resistance $${indicators.resistanceLevel}.`;
+  const rr = Math.abs(price - stopLoss) > 0
+    ? parseFloat((Math.abs(targetPrice - price) / Math.abs(price - stopLoss)).toFixed(2))
+    : 0;
+  const slLabel = direction === "up" ? "swing low/support" : "swing high/resistance";
+  const reasoning = `Analisis rule-based: trend=${indicators.trend}, EMA alignment=${indicators.emaAlignment}, RSI=${indicators.rsi14?.toFixed(1) ?? "-"} (${indicators.rsiSignal}), MACD=${indicators.macdSignalType}. SL=${stopLoss.toFixed(2)} di ${slLabel} (invalidasi thesis). TP1=${targetPrice.toFixed(2)} / TP2=${tp2.toFixed(2)} / TP3=${tp3.toFixed(2)} dari area S/R. RR ≈ ${rr}.`;
 
-  return { direction, targetPrice, entryLow, entryHigh, stopLoss, confidence, reasoning };
+  return { direction, targetPrice, tp2, tp3, entryLow, entryHigh, stopLoss, confidence, reasoning };
 }
 
 // ─── Macro vote helper ─────────────────────────────────────────────────────────
@@ -1073,33 +1120,44 @@ async function makePrediction(
 
   const sessionRegimeContext = `\n\n=== KONTEKS PASAR ===\nSesi Trading: ${tradingSession.toUpperCase()} | Market Regime: ${marketRegime.toUpperCase()} | Cluster: ${clusterLabel}\nSentimen Berita: ${sentimentVote.direction.toUpperCase()} (${(sentimentVote.confidence * 100).toFixed(0)}% confident)`;
 
-  const systemPrompt = `Kamu adalah AI trading system untuk XAUUSD dengan kemampuan prediksi multi-faktor.
-Buat prediksi arah harga berikutnya (validasi saat TP atau SL tercapai) berdasarkan:
-1. Indikator teknikal 1H (RSI, EMA, MACD, BB, ATR)
-2. Konfluens multi-timeframe (1H/4H/Harian)
-3. Faktor makro (DXY, US 10Y Yield, VIX fear index, Silver korelasi)
-4. Sentimen berita terbaru
-5. Win rate historis (overall dan per segmen kondisi pasar)
-6. Memori AI dari pembelajaran sebelumnya — WAJIB dipertimbangkan sebelum memutuskan
+  const systemPrompt = `Kamu adalah AI trading system XAUUSD dengan metodologi analisis terstruktur.
 
-Aturan prediksi:
-- Confidence >0.75 hanya jika minimal 4 faktor dari 6 align searah
-- Confidence 0.55-0.75 jika 3 faktor align
-- Confidence <0.55 jika sinyal mixed atau sideways
-- Jika win rate segmen saat ini <50%, WAJIB turunkan confidence 10-15%
-- Entry zone HARUS berdasarkan ATR (entryLow/entryHigh maks ±0.4×ATR dari harga sekarang)
-- Stop Loss HARUS 1.5×ATR dari entry
-- PERHATIKAN memori AI: jika ada pola mirip kondisi saat ini yang sebelumnya terbukti salah, sesuaikan prediksi
+URUTAN ANALISIS (wajib diikuti):
+1. TREND — cek struktur market: apakah higher high/lower low? EMA alignment? Timeframe mana yang dominan?
+2. MOMENTUM — RSI, MACD, histogram. Apakah momentum mendukung atau divergen dari harga?
+3. LEVEL — identifikasi support/resistance STRUKTURAL yang valid (swing high/low nyata, bukan angka acak)
+4. KONFIRMASI — MTF confluens, DXY/US10Y korelasi, sentimen berita, win rate segmen
+5. RISIKO — hitung RR, tentukan SL/TP berdasarkan struktur
+
+ATURAN SL (stop loss = batas salahnya thesis, bukan angka aman acak):
+- Long: SL di BAWAH swing low / support struktural — jika kena, berarti thesis long sudah salah
+- Short: SL di ATAS swing high / resistance struktural — jika kena, berarti thesis short sudah salah
+- SL BUKAN hasil perkalian ATR random; harus ada alasan struktural kenapa harga di level itu invalidasi setup
+
+ATURAN TP (target dari area yang secara teknis wajar jadi tempat reaksi):
+- TP1: target TERDEKAT — resistance/support pertama yang valid → selalu ada exit awal
+- TP2: target LANJUTAN — S/R berikutnya jika momentum masih sehat
+- TP3: target JAUH — ekstensi jika trend kuat dan volume mendukung; konservatif jika setup lemah
+- Jika setup lemah (confluence rendah), TP konservatif. Jika market kuat (EMA stack + MACD + volume), TP lebih luas
+
+ATURAN CONFIDENCE:
+- >0.75: ≥4 faktor align searah
+- 0.55–0.75: 3 faktor align
+- <0.55: sinyal mixed → tidak perlu prediksi
+- Jika win rate segmen <50%, TURUNKAN confidence 10–15%
+- Pertimbangkan memori AI: jika pola ini sebelumnya terbukti salah, sesuaikan
 
 Jawab HANYA dalam format JSON:
 {
   "direction": "up" | "down" | "sideways",
-  "targetPrice": <harga target USD — setidaknya 2×ATR dari entry>,
-  "entryLow": <batas bawah entry USD>,
+  "targetPrice": <TP1 — S/R pertama dalam arah prediksi, USD>,
+  "tp2": <TP2 — S/R lanjutan jika momentum sehat, USD>,
+  "tp3": <TP3 — S/R jauh jika trend kuat, USD>,
+  "entryLow": <batas bawah entry USD, maks ±0.4×ATR dari harga>,
   "entryHigh": <batas atas entry USD>,
-  "stopLoss": <harga stop loss USD>,
-  "confidence": <0.0-1.0 berdasarkan jumlah faktor yang align>,
-  "reasoning": "<3-4 kalimat — sebutkan MTF, DXY/VIX/Silver, news, win rate segmen, dan insight dari memori AI>"
+  "stopLoss": <SL di level struktural invalidasi thesis, USD>,
+  "confidence": <0.0-1.0>,
+  "reasoning": "<3-4 kalimat — sebutkan: trend struktur, momentum, level S/R yang dipakai sebagai SL/TP, dan konfirmasi MTF/makro/memori AI>"
 }`;
 
   const userMsg = `=== INDIKATOR 1H XAUUSD ===
@@ -1125,6 +1183,8 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
   let pred: {
     direction: string;
     targetPrice: number;
+    tp2?: number;
+    tp3?: number;
     entryLow?: number;
     entryHigh?: number;
     stopLoss?: number;
@@ -1140,6 +1200,8 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
       const parsed = JSON.parse(jsonMatch[0]) as {
         direction: string;
         targetPrice: number;
+        tp2?: number;
+        tp3?: number;
         entryLow?: number;
         entryHigh?: number;
         stopLoss?: number;
@@ -1168,7 +1230,9 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     const verifyAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
-    const targetPrice = pred.targetPrice ?? ruleBased.targetPrice;
+    const targetPrice = pred.targetPrice ?? ruleBased.targetPrice; // TP1
+    const tp2 = pred.tp2 ?? ruleBased.tp2;
+    const tp3 = pred.tp3 ?? ruleBased.tp3;
     const entryLow = pred.entryLow ?? ruleBased.entryLow;
     const entryHigh = pred.entryHigh ?? ruleBased.entryHigh;
     const stopLoss = pred.stopLoss ?? ruleBased.stopLoss;
@@ -1238,7 +1302,9 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
       timeframe: timeframeLabel,
       predictionType: predType,
       direction: finalDirection,
-      targetPrice,
+      targetPrice, // TP1
+      tp2,
+      tp3,
       entryLow,
       entryHigh,
       stopLoss,

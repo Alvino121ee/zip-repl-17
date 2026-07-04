@@ -704,6 +704,7 @@ interface FeatureImportanceResult { features: FeatureItem[]; sampleCount: number
 
 interface Prediction {
   id: number; direction: string; targetPrice: number | null; confidence: number;
+  tp2: number | null; tp3: number | null;
   reasoning: string; priceAtPrediction: number; predictedAt: string;
   actualPrice: number | null; actualDirection: string | null; isCorrect: boolean | null;
   status: string; revisionNote: string | null; timeframe: string;
@@ -1270,7 +1271,13 @@ function PredictionList({ preds }: { preds: Prediction[] }) {
                     <span className="text-[11px] text-red-400">SL: ${p.stopLoss.toFixed(2)}</span>
                   )}
                   {p.targetPrice != null && (
-                    <span className="text-[11px] text-emerald-400">TP: ${p.targetPrice.toFixed(2)}</span>
+                    <span className="text-[11px] text-emerald-400">TP1: ${p.targetPrice.toFixed(2)}</span>
+                  )}
+                  {p.tp2 != null && p.tp2 !== p.targetPrice && (
+                    <span className="text-[11px] text-emerald-300/70">TP2: ${p.tp2.toFixed(2)}</span>
+                  )}
+                  {p.tp3 != null && p.tp3 !== p.targetPrice && (
+                    <span className="text-[11px] text-emerald-300/50">TP3: ${p.tp3.toFixed(2)}</span>
                   )}
                 </div>
               )}
@@ -1282,19 +1289,37 @@ function PredictionList({ preds }: { preds: Prediction[] }) {
           {expanded === p.id && (
             <div className="px-3 pb-3 space-y-2">
               {(p.entryLow != null || p.stopLoss != null) && (
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-blue-500/10 border border-blue-500/20 rounded p-2 text-center">
-                    <p className="text-[10px] text-blue-400 uppercase tracking-wide mb-0.5">Rentang Entry</p>
-                    <p className="text-sm font-semibold">{p.entryLow != null && p.entryHigh != null ? `$${p.entryLow.toFixed(2)} – $${p.entryHigh.toFixed(2)}` : "-"}</p>
+                <div className="space-y-1.5">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded p-2 text-center">
+                      <p className="text-[10px] text-blue-400 uppercase tracking-wide mb-0.5">Rentang Entry</p>
+                      <p className="text-sm font-semibold">{p.entryLow != null && p.entryHigh != null ? `${p.entryLow.toFixed(2)} – ${p.entryHigh.toFixed(2)}` : "-"}</p>
+                    </div>
+                    <div className="bg-red-500/10 border border-red-500/20 rounded p-2 text-center">
+                      <p className="text-[10px] text-red-400 uppercase tracking-wide mb-0.5">Stop Loss</p>
+                      <p className="text-xs font-semibold text-red-400">{p.stopLoss != null ? `${p.stopLoss.toFixed(2)}` : "-"}</p>
+                      <p className="text-[9px] text-red-400/60 mt-0.5">invalidasi thesis</p>
+                    </div>
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded p-2 text-center">
+                      <p className="text-[10px] text-emerald-400 uppercase tracking-wide mb-0.5">TP1</p>
+                      <p className="text-xs font-semibold text-emerald-400">{p.targetPrice != null ? `${p.targetPrice.toFixed(2)}` : "-"}</p>
+                      <p className="text-[9px] text-emerald-400/60 mt-0.5">S/R terdekat</p>
+                    </div>
                   </div>
-                  <div className="bg-red-500/10 border border-red-500/20 rounded p-2 text-center">
-                    <p className="text-[10px] text-red-400 uppercase tracking-wide mb-0.5">Stop Loss</p>
-                    <p className="text-sm font-semibold">{p.stopLoss != null ? `$${p.stopLoss.toFixed(2)}` : "-"}</p>
-                  </div>
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded p-2 text-center">
-                    <p className="text-[10px] text-emerald-400 uppercase tracking-wide mb-0.5">Target</p>
-                    <p className="text-sm font-semibold">{p.targetPrice != null ? `$${p.targetPrice.toFixed(2)}` : "-"}</p>
-                  </div>
+                  {(p.tp2 != null || p.tp3 != null) && p.tp2 !== p.targetPrice && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-emerald-500/8 border border-emerald-500/15 rounded p-2 text-center">
+                        <p className="text-[10px] text-emerald-300/70 uppercase tracking-wide mb-0.5">TP2 — lanjutan</p>
+                        <p className="text-xs font-semibold text-emerald-300/80">{p.tp2 != null ? `${p.tp2.toFixed(2)}` : "-"}</p>
+                        <p className="text-[9px] text-muted-foreground/40 mt-0.5">jika momentum sehat</p>
+                      </div>
+                      <div className="bg-emerald-500/5 border border-emerald-500/10 rounded p-2 text-center">
+                        <p className="text-[10px] text-emerald-300/50 uppercase tracking-wide mb-0.5">TP3 — jauh</p>
+                        <p className="text-xs font-semibold text-emerald-300/60">{p.tp3 != null ? `${p.tp3.toFixed(2)}` : "-"}</p>
+                        <p className="text-[9px] text-muted-foreground/40 mt-0.5">trend kuat + volume</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <div className="bg-background/50 rounded p-2">
@@ -1750,23 +1775,39 @@ function PredictionPanel({ mainPreds, trainingPreds }: { mainPreds: Prediction[]
           </div>
 
           {/* Key levels */}
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            {p.entryLow && p.entryHigh && (
-              <div className="text-center rounded-lg bg-muted/40 py-1.5 px-2">
-                <p className="text-[10px] text-muted-foreground">Entry</p>
-                <p className="text-xs font-semibold text-blue-400">${p.entryLow.toFixed(0)}–{p.entryHigh.toFixed(0)}</p>
-              </div>
-            )}
-            {p.targetPrice && (
-              <div className="text-center rounded-lg bg-muted/40 py-1.5 px-2">
-                <p className="text-[10px] text-muted-foreground">Target</p>
-                <p className="text-xs font-semibold text-emerald-400">${p.targetPrice.toFixed(2)}</p>
-              </div>
-            )}
-            {p.stopLoss && (
-              <div className="text-center rounded-lg bg-muted/40 py-1.5 px-2">
-                <p className="text-[10px] text-muted-foreground">Stop Loss</p>
-                <p className="text-xs font-semibold text-red-400">${p.stopLoss.toFixed(2)}</p>
+          <div className="mt-3 space-y-1.5">
+            <div className="grid grid-cols-3 gap-2">
+              {p.entryLow && p.entryHigh && (
+                <div className="text-center rounded-lg bg-muted/40 py-1.5 px-2">
+                  <p className="text-[10px] text-muted-foreground">Entry</p>
+                  <p className="text-xs font-semibold text-blue-400">${p.entryLow.toFixed(0)}–{p.entryHigh.toFixed(0)}</p>
+                </div>
+              )}
+              {p.stopLoss && (
+                <div className="text-center rounded-lg bg-red-500/10 py-1.5 px-2">
+                  <p className="text-[10px] text-red-400/70">SL</p>
+                  <p className="text-xs font-semibold text-red-400">${p.stopLoss.toFixed(2)}</p>
+                </div>
+              )}
+              {p.targetPrice && (
+                <div className="text-center rounded-lg bg-emerald-500/10 py-1.5 px-2">
+                  <p className="text-[10px] text-emerald-400/70">TP1</p>
+                  <p className="text-xs font-semibold text-emerald-400">${p.targetPrice.toFixed(2)}</p>
+                </div>
+              )}
+            </div>
+            {p.tp2 != null && p.tp2 !== p.targetPrice && (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="text-center rounded-lg bg-muted/20 py-1 px-2">
+                  <p className="text-[9px] text-muted-foreground/60">TP2</p>
+                  <p className="text-[11px] font-semibold text-emerald-300/70">${p.tp2.toFixed(2)}</p>
+                </div>
+                {p.tp3 != null && p.tp3 !== p.targetPrice && (
+                  <div className="text-center rounded-lg bg-muted/10 py-1 px-2">
+                    <p className="text-[9px] text-muted-foreground/50">TP3</p>
+                    <p className="text-[11px] font-semibold text-emerald-300/50">${p.tp3.toFixed(2)}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2194,6 +2235,9 @@ export default function XauusdAi() {
                           <span className="text-blue-400">Entry: ${mp.entryLow.toFixed(2)} – ${mp.entryHigh.toFixed(2)}</span>
                         )}
                         {mp.stopLoss != null && <span className="text-red-400">SL: ${mp.stopLoss.toFixed(2)}</span>}
+                        {mp.targetPrice != null && <span className="text-emerald-400">TP1: ${mp.targetPrice.toFixed(2)}</span>}
+                        {mp.tp2 != null && mp.tp2 !== mp.targetPrice && <span className="text-emerald-300/70">TP2: ${mp.tp2.toFixed(2)}</span>}
+                        {mp.tp3 != null && mp.tp3 !== mp.targetPrice && <span className="text-emerald-300/50">TP3: ${mp.tp3.toFixed(2)}</span>}
                       </p>
                     )}
                     <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{mp.reasoning}</p>

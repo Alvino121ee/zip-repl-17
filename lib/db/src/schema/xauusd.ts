@@ -78,10 +78,12 @@ export const xauusdPredictionsTable = pgTable("xauusd_predictions", {
   predictedAt: timestamp("predicted_at").notNull().defaultNow(),
   timeframe: text("timeframe").notNull(), // '15m'|'30m'|'1h'|'4h'|'24h'
   direction: text("direction").notNull(), // 'up'|'down'|'sideways'
-  targetPrice: real("target_price"),
+  targetPrice: real("target_price"), // TP1 — target terdekat (struktur S/R pertama)
+  tp2: real("tp2"),                 // TP2 — target lanjutan jika momentum sehat
+  tp3: real("tp3"),                 // TP3 — target jauh jika trend kuat + volume mendukung
   entryLow: real("entry_low"), // bottom of suggested entry range
   entryHigh: real("entry_high"), // top of suggested entry range
-  stopLoss: real("stop_loss"),
+  stopLoss: real("stop_loss"),  // di bawah swing low (long) / di atas swing high (short) = invalidasi thesis
   confidence: real("confidence").notNull(),
   reasoning: text("reasoning").notNull(),
   priceAtPrediction: real("price_at_prediction").notNull(),

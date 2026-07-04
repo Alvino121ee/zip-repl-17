@@ -687,6 +687,8 @@ xauusdRouter.post("/chat", requireMember, async (req, res) => {
           direction: xauusdPredictionsTable.direction,
           confidence: xauusdPredictionsTable.confidence,
           targetPrice: xauusdPredictionsTable.targetPrice,
+          tp2: xauusdPredictionsTable.tp2,
+          tp3: xauusdPredictionsTable.tp3,
           entryLow: xauusdPredictionsTable.entryLow,
           entryHigh: xauusdPredictionsTable.entryHigh,
           stopLoss: xauusdPredictionsTable.stopLoss,
@@ -730,7 +732,8 @@ ATR14: ${ind.atr14} | Trend: ${ind.trend}
 Support: ${ind.supportLevel} | Resistance: ${ind.resistanceLevel}
 ${lastPred ? `\n=== PREDIKSI AKTIF AI ===
 Arah: ${lastPred.direction.toUpperCase()} | Confidence: ${((lastPred.confidence ?? 0) * 100).toFixed(0)}% | Status: ${lastPred.status}
-Entry: ${lastPred.entryLow}–${lastPred.entryHigh} | Target: ${lastPred.targetPrice} | SL: ${lastPred.stopLoss}
+Entry: ${lastPred.entryLow}–${lastPred.entryHigh} | SL: ${lastPred.stopLoss} (invalidasi thesis)
+TP1: ${lastPred.targetPrice} | TP2: ${lastPred.tp2 ?? "-"} | TP3: ${lastPred.tp3 ?? "-"}
 Alasan: ${lastPred.reasoning?.slice(0, 200) ?? "-"}
 Win Rate 3 pred terakhir: ${winRateStr}` : ""}
 ${recentNews.length > 0 ? `\n=== SENTIMEN BERITA TERBARU ===

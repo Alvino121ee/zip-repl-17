@@ -73,10 +73,12 @@ export const btcusdPredictionsTable = pgTable("btcusd_predictions", {
   predictedAt: timestamp("predicted_at").notNull().defaultNow(),
   timeframe: text("timeframe").notNull(),
   direction: text("direction").notNull(),
-  targetPrice: real("target_price"),
+  targetPrice: real("target_price"), // TP1 — target terdekat (struktur S/R pertama)
+  tp2: real("tp2"),                 // TP2 — target lanjutan jika momentum sehat
+  tp3: real("tp3"),                 // TP3 — target jauh jika trend kuat + volume mendukung
   entryLow: real("entry_low"),
   entryHigh: real("entry_high"),
-  stopLoss: real("stop_loss"),
+  stopLoss: real("stop_loss"),  // di bawah swing low (long) / di atas swing high (short) = invalidasi thesis
   confidence: real("confidence").notNull(),
   reasoning: text("reasoning").notNull(),
   priceAtPrediction: real("price_at_prediction").notNull(),
