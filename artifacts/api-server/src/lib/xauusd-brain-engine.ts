@@ -95,7 +95,7 @@ async function queryDeepSeek(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "deepseek-reasoner",
+        model: "deepseek-chat",
         max_tokens: maxTokens,
         messages: [
           { role: "system", content: systemPrompt },

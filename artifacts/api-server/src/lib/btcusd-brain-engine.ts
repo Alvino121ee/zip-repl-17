@@ -98,7 +98,7 @@ async function queryDeepSeek(
       signal: controller.signal,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: "deepseek-reasoner",
+        model: "deepseek-chat",
         max_tokens: maxTokens,
         messages: [
           { role: "system", content: systemPrompt },
