@@ -1,26 +1,32 @@
 ---
-name: Extreme Learning Mode
-description: Design decisions and constraints for the extreme learning mode feature in xauusd-brain-engine.ts
+name: Extreme Learning Mode design
+description: Architecture, dedup rules, question generation, data source switching for the extreme learning mode in xauusd-brain-engine.ts
 ---
 
-## Rule
-Extreme mode runs as a fire-and-forget async IIFE; `startExtremeLearningMode()` returns immediately after setting flags.
+## Core Design
+- Non-blocking background loop in `runExtremeLearningLoop()`, started via `startExtremeLearningMode()`
+- In-memory `extremeHashCache` (Set<string>) tracks questions asked **within the current session only** (not loaded from DB — many templates are static and would be permanently blocked)
+- Circuit breaker: 5 consecutive errors → 5-min backoff → max 3 retries → hard stop
+- `safeQpc` clamped 3–20 questions per cycle
+- Blocks normal learning cycle via `isExtremeRunning` flag
 
-**Why:** The HTTP route handler must return within ms; the loop runs for potentially hours.
+## Question Generation (DeepSeek-first)
+- Step 1: call `generateQuestionsWithDeepSeek()` — sends current market indicators to DeepSeek, parses numbered list response
+- Dedup: `batchSeen` Set prevents duplicates within one DeepSeek response; `sessionCache` prevents same question twice in the session
+- Step 2: template fallback (`getMarketAwareQuestions()`) if DeepSeek returns too few questions
+- 37 static templates exist — they always produce same hash, so loading DB history would permanently block all of them
 
-**How to apply:** Always start with `(async () => { ... })().catch(...)` pattern inside the sync export. Never `await` the loop at the call site.
+## Cross-session Dedup (DB layer)
+- Insert uses `.onConflictDoNothing()` — if same hash exists from a previous session, silently skip (not counted as error)
+- `inserted.length === 0` → `continue` (skip question, no error, no circuit breaker increment)
 
-## Key constraints
+## Data Source: Live-first, Historical fallback
+- ALWAYS tries `fetchXauusdIndicators("1h")` first — TradingView Scanner is accessible on weekends too
+- Falls back to `getHistoricalIndicators()` only if live fetch throws/returns null
+- Historical: only snapshots from **last 7 days** (not 90 days) — old snapshots have ~$2000 prices, which mislead DeepSeek
+- `extremeDataMode: "live" | "historical"` exposed in `getEngineStatus()` and shown as badge in admin panel
 
-- `safeQpc = Math.max(3, Math.min(20, Math.round(questionsPerCycle)))` — clamp before use; never let `count = 0` enter the loop.
-- Circuit breaker: `MAX_CONSECUTIVE_ERRORS = 5` — if DeepSeek fails 5 times in a row, `extremeAbort = true` and loop exits.
-- `isLearning` check: refuse to start extreme mode if a normal cycle is in-flight (race window prevention).
-- `isExtremeRunning` check in `runLearningCycle()`: normal interval/learn-now skips cycle when extreme is active.
-- Hash cache built from DB once at start; updated in-memory per question; removed from cache on error (allows retry).
-- Quality threshold: `0.65` (vs `0.6` for normal cycles).
-- Pause: random `15_000–30_000 ms` **after answer received**, before next question. No pause between cycles.
-
-## Frontend (admin.tsx)
-- `refetchInterval` callback: `(q) => q.state.data?.engine?.extremeMode?.active ? 5_000 : 20_000`
-- SystemStatus.engine.totalCycles (not cycleCount — old field was wrong).
-- Routes: `POST /api/xauusd/engine/extreme/start` and `/api/xauusd/engine/extreme/stop`.
+## Why these constraints
+- 7-day historical window: gold went from ~$2000 to ~$4175; older snapshots make DeepSeek answer with stale price context
+- No DB loading into session hash cache: 49 of 37 template slots are static (no market data), permanently blocked once asked
+- `onConflictDoNothing` on insert: hash collision across sessions should be a silent skip, not a circuit-breaker trigger

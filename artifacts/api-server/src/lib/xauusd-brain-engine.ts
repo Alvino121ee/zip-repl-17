@@ -1620,11 +1620,13 @@ async function analyzeAndSaveNews(): Promise<void> {
  * Digunakan saat market tutup agar mesin bisa terus belajar dari skenario pasar masa lalu.
  */
 async function getHistoricalIndicators(): Promise<XauusdIndicators | null> {
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1_000);
+  // Hanya ambil snapshot 7 hari terakhir agar harga tetap relevan dengan kondisi pasar saat ini.
+  // Snapshot lebih tua (harga 2000-an) membuat DeepSeek menjawab dengan konteks yang sudah usang.
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000);
   const rows = await db
     .select()
     .from(xauusdSnapshotsTable)
-    .where(sql`${xauusdSnapshotsTable.snapshotAt} >= ${ninetyDaysAgo.toISOString()}`)
+    .where(sql`${xauusdSnapshotsTable.snapshotAt} >= ${sevenDaysAgo.toISOString()}`)
     .orderBy(sql`RANDOM()`)
     .limit(1);
   if (rows.length === 0) return null;
@@ -1701,13 +1703,17 @@ async function generateQuestionsWithDeepSeek(
   // Parse: ambil baris yang diawali angka
   const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
   const questions: Array<{ question: string; hash: string }> = [];
+  // batchSeen mencegah duplikat dalam satu response DeepSeek (beda dari sessionCache antar siklus)
+  const batchSeen = new Set<string>();
   for (const line of lines) {
     const m = line.match(/^\d+[\.\)]\s*(.+)/);
     if (!m) continue;
     const q = m[1].trim();
-    if (q.length < 20) continue; // terlalu pendek, skip
+    if (q.length < 20) continue;
     const h = generateQuestionHash(q);
     if (sessionCache.has(h)) continue; // sudah tanya di sesi ini
+    if (batchSeen.has(h)) continue;    // duplikat dalam batch ini
+    batchSeen.add(h);
     questions.push({ question: q, hash: h });
     if (questions.length >= count) break;
   }
@@ -1765,31 +1771,28 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
       continue;
     }
 
-    // 1. Ambil data pasar — live jika market buka, historis jika market tutup
+    // 1. Ambil data pasar — selalu coba live dulu (TradingView bisa diakses tiap saat,
+    //    termasuk weekend). Historis hanya fallback jika live benar-benar gagal.
     let indicators: XauusdIndicators | null = null;
     const marketStatus = isXauusdMarketOpen();
 
-    if (marketStatus.open) {
-      // Market buka → coba data live
-      try {
-        indicators = await fetchXauusdIndicators("1h");
-        if (indicators) {
-          extremeDataMode = "live";
-          console.log(`[Extreme Mode] 📡 Live — harga ${indicators.price} (${marketStatus.reason})`);
-        }
-      } catch (err) {
-        console.error("[Extreme Mode] Gagal fetch live indicators:", err);
+    try {
+      indicators = await fetchXauusdIndicators("1h");
+      if (indicators) {
+        extremeDataMode = "live";
+        console.log(`[Extreme Mode] 📡 Live — harga ${indicators.price} (${marketStatus.reason})`);
       }
+    } catch (err) {
+      console.error("[Extreme Mode] Gagal fetch live indicators:", err);
     }
 
     if (!indicators) {
-      // Market tutup ATAU live gagal → pakai snapshot historis dari DB
+      // Live gagal → pakai snapshot historis 7 hari terakhir dari DB (harga tetap relevan)
       try {
         indicators = await getHistoricalIndicators();
         if (indicators) {
           extremeDataMode = "historical";
-          const reason = marketStatus.open ? "fallback: TradingView tidak merespons" : marketStatus.reason;
-          console.log(`[Extreme Mode] 📚 Historis — harga ${indicators.price} (${reason})`);
+          console.log(`[Extreme Mode] 📚 Historis — harga ${indicators.price} (fallback: TradingView tidak merespons)`);
         }
       } catch (err) {
         console.error("[Extreme Mode] Gagal ambil data historis:", err);
@@ -1890,18 +1893,25 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
       if (extremeAbort || extremeProgress >= target) break;
 
       try {
-        // Insert placeholder & tandai hash di in-memory cache sebelum query
-        // (agar tidak duplikat walau ada error di tengah)
-        const [inserted] = await db
+        // Tandai hash di in-memory cache segera (sebelum insert) agar siklus berikutnya tidak minta pertanyaan sama
+        extremeHashCache!.add(hash);
+
+        // Insert placeholder — onConflictDoNothing agar hash duplikat tidak dihitung sebagai error
+        const inserted = await db
           .insert(xauusdQuestionsLogTable)
           .values({
             question,
             questionHash: hash,
             marketContext: indicators as unknown as Record<string, unknown>,
           })
+          .onConflictDoNothing()
           .returning({ id: xauusdQuestionsLogTable.id });
 
-        extremeHashCache!.add(hash); // update in-memory segera
+        if (inserted.length === 0) {
+          // Hash sudah ada di DB (cross-session duplicate) — skip tanpa error
+          console.log(`[Extreme Mode] ⏭ Skip pertanyaan duplikat (hash sudah di DB)`);
+          continue;
+        }
 
         // Tanya DeepSeek — tunggu jawaban penuh
         const answer = await queryDeepSeek(SYS_PR, question, 1_000);
@@ -1910,7 +1920,7 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik. Berikan minimal 3 poin action
         await db
           .update(xauusdQuestionsLogTable)
           .set({ answer, quality, answeredAt: new Date(), savedToBrain: quality >= EXTREME_QUALITY_THRESHOLD })
-          .where(eq(xauusdQuestionsLogTable.id, inserted.id));
+          .where(eq(xauusdQuestionsLogTable.id, inserted[0].id));
 
         // Simpan ke brain jika kualitas ≥ 0.65
         if (quality >= EXTREME_QUALITY_THRESHOLD && answer.length > 100) {
