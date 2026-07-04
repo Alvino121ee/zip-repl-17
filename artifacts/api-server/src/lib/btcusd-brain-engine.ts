@@ -1,8 +1,21 @@
 /**
  * BTCUSD Autonomous Learning Brain Engine
  * BTC is 24/7 — engine runs continuously without market-hour checks.
- * When XAUUSD market is open → both engines run.
- * When XAUUSD market is closed → only this BTC engine runs.
+ *
+ * Features (setara XAUUSD brain):
+ *  1. Ensemble Voting (4 agents: technical + macro + sentiment + AI)
+ *  2. Market Regime Detector (trending_up / trending_down / ranging / volatile)
+ *  3. Trading Session Detector (asia / london / new_york / overlap)
+ *  4. Forget Curve — Exponential Decay (LAMBDA = 0.023/hari, half-life ≈ 30 hari)
+ *  5. Self-correction + Negative Reinforcement (pelajaran dari prediksi salah)
+ *  6. Rule-based Prediction Fallback (selalu ada SL/TP dari analisis teknikal)
+ *  7. Confidence Gate (abaikan prediksi < 0.55)
+ *  8. Price Distribution P10/P50/P90 (berbasis ATR + confidence)
+ *  9. Relevant Brain Retrieval (tag-based scoring × decayWeight × confidence)
+ * 10. Multi-timeframe Context (1H / 4H / 1D confluence)
+ * 11. Win Rate Context (akurasi historis per sesi × regime)
+ * 12. Macro Correlation Vote (DXY + Nasdaq)
+ * 13. Extreme Learning Mode (masif, circuit breaker, in-memory dedup)
  */
 
 import crypto from "crypto";
@@ -14,15 +27,23 @@ import {
   btcusdPredictionsTable,
   btcusdLearningLogTable,
 } from "@workspace/db/schema";
-import { eq, desc, sql, lt } from "drizzle-orm";
-import { fetchBtcusdIndicators, fetchBtcusdLivePrice, type BtcusdIndicators } from "./btcusd-data.js";
+import { and, eq, desc, sql, lt } from "drizzle-orm";
+import {
+  fetchBtcusdIndicators,
+  type BtcusdIndicators,
+  getMultiBtcTimeframeAnalysis,
+  summarizeBtcTimeframeConfluence,
+  getBtcCorrelationAnalysis,
+  type BtcCorrelationResponse,
+} from "./btcusd-data.js";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 const DEEPSEEK_TIMEOUT_MS = 120_000;
-const LEARN_INTERVAL_MS = 5 * 60 * 1000; // 5 min
-const SPIKE_THRESHOLD = 0.01; // 1% — BTC is more volatile than gold
+const LEARN_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
+const SPIKE_THRESHOLD = 0.01;            // BTC lebih volatil dari emas (1%)
 const QUALITY_THRESHOLD = 0.65;
+const CONFIDENCE_GATE = 0.55;            // Prediksi di bawah ini tidak disimpan
 
 // ─── Engine state ──────────────────────────────────────────────────────────────
 let learningTimer: ReturnType<typeof setInterval> | null = null;
@@ -46,7 +67,11 @@ let extremeLastProgressAt: number | null = null;
 let extremeDataMode: "live" | "historical" = "live";
 
 // ─── DeepSeek ──────────────────────────────────────────────────────────────────
-async function queryDeepSeek(systemPrompt: string, userMessage: string, maxTokens = 800): Promise<string> {
+async function queryDeepSeek(
+  systemPrompt: string,
+  userMessage: string,
+  maxTokens = 800
+): Promise<string> {
   const apiKey = await getDeepseekApiKey();
   if (!apiKey) return "[AI tidak aktif — API key belum diset.]";
   const controller = new AbortController();
@@ -66,7 +91,7 @@ async function queryDeepSeek(systemPrompt: string, userMessage: string, maxToken
       }),
     });
     if (!res.ok) throw new Error(`DeepSeek HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
-    const json = (await res.json()) as { choices: Array<{ message: { content: string; reasoning_content?: string } }> };
+    const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
     return json.choices[0]?.message?.content?.trim() ?? "";
   } finally {
     clearTimeout(timer);
@@ -85,15 +110,21 @@ function scoreAnswer(question: string, answer: string): number {
   if (answer.length > 600) score += 0.1;
   const hasNumbers = /\d+\.?\d*%?/.test(answer);
   if (hasNumbers) score += 0.1;
-  const actionWords = ["entry", "stop", "target", "support", "resistance", "buy", "sell", "beli", "jual", "level", "harga", "strategi", "risiko"];
-  const hits = actionWords.filter(w => answer.toLowerCase().includes(w)).length;
+  const actionWords = [
+    "entry", "stop", "target", "support", "resistance",
+    "buy", "sell", "beli", "jual", "level", "harga",
+    "strategi", "risiko", "konfirmasi", "breakout",
+  ];
+  const hits = actionWords.filter((w) => answer.toLowerCase().includes(w)).length;
   score += Math.min(hits * 0.02, 0.1);
   if (answer.includes("?") && answer.split("?").length > 2) score -= 0.05;
   if (answer.length < 100) score = Math.min(score, 0.4);
+  const vague = ["itu tergantung", "sangat bervariasi", "tidak bisa dipastikan"];
+  if (vague.some((v) => answer.toLowerCase().includes(v))) score -= 0.1;
   return Math.min(Math.max(score, 0), 1);
 }
 
-// ─── Extract brain category ────────────────────────────────────────────────────
+// ─── Brain category ────────────────────────────────────────────────────────────
 function extractCategory(question: string): string {
   const q = question.toLowerCase();
   if (q.includes("rsi") || q.includes("macd") || q.includes("ema") || q.includes("bollinger")) return "teknikal";
@@ -102,7 +133,11 @@ function extractCategory(question: string): string {
   if (q.includes("psikologi") || q.includes("fear") || q.includes("greed") || q.includes("sentiment")) return "psikologi";
   if (q.includes("stoploss") || q.includes("risk") || q.includes("position") || q.includes("lot")) return "manajemen_risiko";
   if (q.includes("defi") || q.includes("altcoin") || q.includes("eth") || q.includes("dominance")) return "crypto_ekosistem";
-  return "umum";
+  if (q.includes("news") || q.includes("fed") || q.includes("berita")) return "news_impact";
+  if (q.includes("pola") || q.includes("pattern") || q.includes("breakout")) return "pattern";
+  if (q.includes("strategi") || q.includes("entry") || q.includes("exit") || q.includes("stop")) return "trading_rule";
+  if (q.includes("psikologi") || q.includes("kesalahan") || q.includes("manajemen")) return "lesson";
+  return "insight";
 }
 
 function extractTitle(question: string, answer: string): string {
@@ -112,15 +147,267 @@ function extractTitle(question: string, answer: string): string {
     : question.slice(0, 100);
 }
 
-function extractTags(i: BtcusdIndicators): string {
+function extractMarketTags(i: BtcusdIndicators): string {
   const tags: string[] = [];
   if (i.rsiSignal === "overbought") tags.push("rsi_overbought");
   if (i.rsiSignal === "oversold") tags.push("rsi_oversold");
-  if (i.trend === "bullish") tags.push("trend_bullish");
-  if (i.trend === "bearish") tags.push("trend_bearish");
+  if (i.emaAlignment === "bullish_stack") tags.push("ema_bullish");
+  if (i.emaAlignment === "bearish_stack") tags.push("ema_bearish");
   if (i.macdSignalType !== "neutral") tags.push(`macd_${i.macdSignalType}`);
-  if (i.emaAlignment !== "mixed") tags.push(`ema_${i.emaAlignment}`);
+  tags.push(`trend_${i.trend}`);
   return tags.join(",");
+}
+
+// ─── Feature 2: Market Regime Detector ────────────────────────────────────────
+// BTC lebih volatil — threshold ATR > 2% untuk dianggap volatile
+export function detectBtcMarketRegime(
+  indicators: BtcusdIndicators
+): "trending_up" | "trending_down" | "ranging" | "volatile" {
+  const atr = indicators.atr14 ?? 0;
+  const price = indicators.price;
+  const atrPct = price > 0 ? (atr / price) * 100 : 0;
+
+  if (atrPct > 2.0) return "volatile";
+
+  if (indicators.emaAlignment === "bullish_stack" && indicators.trend === "bullish")
+    return "trending_up";
+  if (indicators.emaAlignment === "bearish_stack" && indicators.trend === "bearish")
+    return "trending_down";
+
+  return "ranging";
+}
+
+// ─── Feature 3: Trading Session Detector ──────────────────────────────────────
+export function detectTradingSession(): "asia" | "london" | "new_york" | "overlap_london_ny" {
+  const now = new Date();
+  const h = now.getUTCHours() + now.getUTCMinutes() / 60;
+  if (h >= 13 && h < 16) return "overlap_london_ny";
+  if (h >= 13 && h < 22) return "new_york";
+  if (h >= 7 && h < 16) return "london";
+  return "asia";
+}
+
+// ─── Feature 7: Cluster Label ─────────────────────────────────────────────────
+export function computeBtcClusterLabel(indicators: BtcusdIndicators): string {
+  const rsi = indicators.rsi14 ?? 50;
+  const rsiZone = rsi < 35 ? "RSI_OS" : rsi > 65 ? "RSI_OB" : "RSI_N";
+  const emaZone = indicators.emaAlignment === "bullish_stack" ? "EMA_Bull"
+    : indicators.emaAlignment === "bearish_stack" ? "EMA_Bear"
+    : "EMA_Mix";
+  const trendZone = indicators.trend === "bullish" ? "T_Up"
+    : indicators.trend === "bearish" ? "T_Dn"
+    : "T_Sd";
+  const macdZone = indicators.macdSignalType === "bullish_cross" ? "MACD_B"
+    : indicators.macdSignalType === "bearish_cross" ? "MACD_S"
+    : "MACD_N";
+  return `${rsiZone}+${emaZone}+${trendZone}+${macdZone}`;
+}
+
+// ─── Feature 6: Rule-based Prediction Fallback ─────────────────────────────────
+interface RuleBasedPrediction {
+  direction: "up" | "down" | "sideways";
+  targetPrice: number;
+  entryLow: number;
+  entryHigh: number;
+  stopLoss: number;
+  confidence: number;
+  reasoning: string;
+}
+
+function computeRuleBasedPrediction(indicators: BtcusdIndicators): RuleBasedPrediction {
+  const price = indicators.price;
+  const atr = indicators.atr14 ?? price * 0.02; // BTC fallback ~2% ATR
+
+  let direction: "up" | "down" | "sideways" = "sideways";
+  let score = 0;
+  if (indicators.emaAlignment === "bullish_stack") score += 2;
+  else if (indicators.emaAlignment === "bearish_stack") score -= 2;
+  if (indicators.rsiSignal === "oversold") score += 1;
+  else if (indicators.rsiSignal === "overbought") score -= 1;
+  if (indicators.macdSignalType === "bullish_cross") score += 1;
+  else if (indicators.macdSignalType === "bearish_cross") score -= 1;
+  if (indicators.macdHistogram != null) {
+    if (indicators.macdHistogram > 0) score += 0.5;
+    else if (indicators.macdHistogram < 0) score -= 0.5;
+  }
+  if (score >= 1.5) direction = "up";
+  else if (score <= -1.5) direction = "down";
+
+  const confidence = Math.min(0.85, 0.45 + Math.abs(score) * 0.12);
+  const pullback = atr * 0.3;
+  const support = indicators.supportLevel ?? price - atr * 2;
+  const resistance = indicators.resistanceLevel ?? price + atr * 2;
+
+  let entryLow: number, entryHigh: number, stopLoss: number, targetPrice: number;
+
+  if (direction === "up") {
+    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryHigh = parseFloat((price + pullback * 0.3).toFixed(2));
+    stopLoss = parseFloat(Math.min(support - atr * 0.3, price - atr * 1.5).toFixed(2));
+    targetPrice = parseFloat((price + atr * 2.5).toFixed(2));
+  } else if (direction === "down") {
+    entryLow = parseFloat((price - pullback * 0.3).toFixed(2));
+    entryHigh = parseFloat((price + pullback).toFixed(2));
+    stopLoss = parseFloat(Math.max(resistance + atr * 0.3, price + atr * 1.5).toFixed(2));
+    targetPrice = parseFloat((price - atr * 2.5).toFixed(2));
+  } else {
+    entryLow = parseFloat((price - pullback).toFixed(2));
+    entryHigh = parseFloat((price + pullback).toFixed(2));
+    stopLoss = parseFloat((price - atr * 1.5).toFixed(2));
+    targetPrice = parseFloat(price.toFixed(2));
+  }
+
+  const reasoning = `Rule-based: trend=${indicators.trend}, EMA=${indicators.emaAlignment}, RSI=${indicators.rsi14?.toFixed(1) ?? "-"} (${indicators.rsiSignal}), MACD=${indicators.macdSignalType}. ATR14=$${atr.toFixed(0)} dipakai untuk SL/TP. Support $${support.toFixed(0)} / Resistance $${resistance.toFixed(0)}.`;
+  return { direction, targetPrice, entryLow, entryHigh, stopLoss, confidence, reasoning };
+}
+
+// ─── Feature 1: Macro Vote (DXY + Nasdaq) ─────────────────────────────────────
+// BTC: DXY naik → bearish BTC (USD menguat, aset berisiko turun)
+//      Nasdaq naik → bullish BTC (risk-on sentiment)
+function computeBtcMacroVote(
+  corr: BtcCorrelationResponse | null
+): { direction: "up" | "down" | "sideways"; confidence: number; label: string } {
+  if (!corr) return { direction: "sideways", confidence: 0.40, label: "macro" };
+
+  const dxy = corr.factors.find((f) => f.key === "dxy");
+  const nasdaq = corr.factors.find((f) => f.key === "nasdaq");
+
+  const dxyChange = dxy?.changePct ?? 0;
+  const nasdaqChange = nasdaq?.changePct ?? 0;
+
+  let score = 0;
+  // DXY naik → bearish BTC
+  if (dxyChange < -0.1) score += 1;
+  else if (dxyChange > 0.1) score -= 1;
+  // Nasdaq naik → bullish BTC
+  if (nasdaqChange > 0.3) score += 1;
+  else if (nasdaqChange < -0.3) score -= 1;
+
+  const direction: "up" | "down" | "sideways" =
+    score >= 1 ? "up" : score <= -1 ? "down" : "sideways";
+  const confidence = Math.min(0.72, 0.38 + Math.abs(score) * 0.22);
+  return { direction, confidence, label: "macro" };
+}
+
+// ─── Feature 1 (extended): Sentiment Vote ─────────────────────────────────────
+// BTC belum punya news table — gunakan placeholder neutral
+// (dapat diperluas dengan Fear & Greed Index di masa depan)
+function computeBtcSentimentVote(): { direction: "up" | "down" | "sideways"; confidence: number; label: string } {
+  return { direction: "sideways", confidence: 0.42, label: "sentiment" };
+}
+
+// ─── Feature 4: Forget Curve — Exponential Decay ─────────────────────────────
+// Half-life ≈ 30 hari (lambda ≈ 0.023/hari), sama persis dengan XAUUSD
+async function applyForgetCurve(): Promise<void> {
+  const LAMBDA = 0.023;
+  const now = Date.now();
+
+  const entries = await db
+    .select({
+      id: btcusdBrainTable.id,
+      createdAt: btcusdBrainTable.createdAt,
+      decayWeight: btcusdBrainTable.decayWeight,
+    })
+    .from(btcusdBrainTable)
+    .where(eq(btcusdBrainTable.isActive, true));
+
+  for (const entry of entries) {
+    const ageDays = (now - new Date(entry.createdAt).getTime()) / 86_400_000;
+    const newWeight = parseFloat(Math.exp(-LAMBDA * ageDays).toFixed(4));
+    const currentWeight = entry.decayWeight ?? 1.0;
+    if (Math.abs(newWeight - currentWeight) > 0.01) {
+      await db
+        .update(btcusdBrainTable)
+        .set({ decayWeight: newWeight, updatedAt: new Date() })
+        .where(eq(btcusdBrainTable.id, entry.id));
+    }
+  }
+  console.log(`[BTC Brain] Forget curve applied to ${entries.length} brain entries.`);
+}
+
+// ─── Feature 9: Price Distribution P10/P50/P90 ────────────────────────────────
+function computePriceDistribution(
+  price: number,
+  direction: "up" | "down" | "sideways",
+  confidence: number,
+  atr: number
+): { p10: number; p50: number; p90: number } {
+  const a = atr > 0 ? atr : price * 0.02;
+  const mult = 0.5 + confidence;
+
+  if (direction === "up") {
+    return {
+      p10: parseFloat((price + a * 0.2).toFixed(2)),
+      p50: parseFloat((price + a * 1.2 * mult).toFixed(2)),
+      p90: parseFloat((price + a * 2.5 * mult).toFixed(2)),
+    };
+  } else if (direction === "down") {
+    return {
+      p10: parseFloat((price - a * 2.5 * mult).toFixed(2)),
+      p50: parseFloat((price - a * 1.2 * mult).toFixed(2)),
+      p90: parseFloat((price - a * 0.2).toFixed(2)),
+    };
+  } else {
+    return {
+      p10: parseFloat((price - a * 0.6).toFixed(2)),
+      p50: parseFloat(price.toFixed(2)),
+      p90: parseFloat((price + a * 0.6).toFixed(2)),
+    };
+  }
+}
+
+// ─── Feature 9: Relevant Brain Retrieval ──────────────────────────────────────
+async function retrieveRelevantBrainEntries(
+  currentTags: string,
+  session: string,
+  regime: string,
+  limit = 7
+): Promise<string> {
+  try {
+    const entries = await db
+      .select({
+        category: btcusdBrainTable.category,
+        title: btcusdBrainTable.title,
+        content: btcusdBrainTable.content,
+        confidence: btcusdBrainTable.confidence,
+        decayWeight: btcusdBrainTable.decayWeight,
+        marketConditionTags: btcusdBrainTable.marketConditionTags,
+      })
+      .from(btcusdBrainTable)
+      .where(eq(btcusdBrainTable.isActive, true))
+      .orderBy(desc(sql`${btcusdBrainTable.decayWeight} * ${btcusdBrainTable.confidence}`))
+      .limit(50);
+
+    if (entries.length === 0) return "";
+
+    const tagSet = new Set(currentTags.split(",").filter(Boolean));
+    const sessionTag = `session_${session}`;
+    const regimeTag = `regime_${regime}`;
+
+    const scored = entries.map((e) => {
+      const entryTags = new Set((e.marketConditionTags ?? "").split(",").filter(Boolean));
+      let overlap = 0;
+      for (const t of tagSet) if (entryTags.has(t)) overlap++;
+      if (entryTags.has(sessionTag)) overlap += 2;
+      if (entryTags.has(regimeTag)) overlap += 2;
+      const score = (e.decayWeight ?? 1) * (e.confidence ?? 0.5) * (1 + overlap * 0.35);
+      return { ...e, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit);
+    if (top.length === 0) return "";
+
+    return `\n\n=== MEMORI AI BTC (${top.length} insights relevan dari ${entries.length} yang dipelajari) ===\n` +
+      top.map((e, i) => {
+        const snippet = (e.content ?? "").slice(0, 220);
+        const ellipsis = (e.content ?? "").length > 220 ? "..." : "";
+        return `[${i + 1}] [${(e.category ?? "insight").toUpperCase()}] ${e.title}\n    ${snippet}${ellipsis}`;
+      }).join("\n");
+  } catch (err) {
+    console.error("[BTC Brain] Brain retrieval error:", err);
+    return "";
+  }
 }
 
 // ─── Generate questions via DeepSeek ──────────────────────────────────────────
@@ -144,7 +431,8 @@ async function generateQuestionsWithDeepSeek(
     spikeDetected ? "⚡ SPIKE TERDETEKSI: BTC bergerak cepat >1%" : null,
   ].filter(Boolean).join("\n");
 
-  const prompt = `Kondisi pasar BTC/USD saat ini:\n${ctx}\n\n` +
+  const prompt =
+    `Kondisi pasar BTC/USD saat ini:\n${ctx}\n\n` +
     `Buat ${count} pertanyaan studi trading BITCOIN yang SPESIFIK, UNIK, dan BERVARIASI topiknya. ` +
     `Topik harus mencakup: analisis teknikal, halving cycle, on-chain metrics, korelasi DXY/Nasdaq/emas, ` +
     `manajemen risiko crypto, psikologi trading, DeFi & altcoin dominance, institutional adoption, dll. ` +
@@ -157,7 +445,7 @@ async function generateQuestionsWithDeepSeek(
     600
   );
 
-  const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
   const questions: Array<{ question: string; hash: string }> = [];
   const batchSeen = new Set<string>();
   for (const line of lines) {
@@ -199,8 +487,351 @@ async function getHistoricalIndicators(): Promise<BtcusdIndicators | null> {
     rsiSignal: (r.rsiSignal as BtcusdIndicators["rsiSignal"]) ?? "neutral",
     macdSignalType: (r.macdSignalType as BtcusdIndicators["macdSignalType"]) ?? "neutral",
     emaAlignment: (r.emaAlignment as BtcusdIndicators["emaAlignment"]) ?? "mixed",
-    supportLevel: r.supportLevel ?? null, resistanceLevel: r.resistanceLevel ?? null,
+    supportLevel: r.supportLevel ?? null,
+    resistanceLevel: r.resistanceLevel ?? null,
   };
+}
+
+// ─── Prediction maker (Feature 1: Ensemble Voting) ─────────────────────────────
+async function makePrediction(
+  indicators: BtcusdIndicators,
+  corrResult: PromiseSettledResult<BtcCorrelationResponse>
+): Promise<void> {
+  const tradingSession = detectTradingSession();
+  const marketRegime = detectBtcMarketRegime(indicators);
+  const clusterLabel = computeBtcClusterLabel(indicators);
+  const currentTags = extractMarketTags(indicators);
+
+  // Fetch konteks paralel
+  const [mtfResult, winRateResult, brainResult, segWinRateResult] = await Promise.allSettled([
+    getMultiBtcTimeframeAnalysis(),
+    db.select({
+      direction: btcusdPredictionsTable.direction,
+      isCorrect: btcusdPredictionsTable.isCorrect,
+    })
+      .from(btcusdPredictionsTable)
+      .where(eq(btcusdPredictionsTable.status, "verified"))
+      .orderBy(desc(btcusdPredictionsTable.predictedAt))
+      .limit(50),
+    retrieveRelevantBrainEntries(currentTags, tradingSession, marketRegime),
+    db.select({
+      direction: btcusdPredictionsTable.direction,
+      isCorrect: btcusdPredictionsTable.isCorrect,
+      tradingSession: btcusdPredictionsTable.tradingSession,
+      marketRegime: btcusdPredictionsTable.marketRegime,
+    })
+      .from(btcusdPredictionsTable)
+      .where(eq(btcusdPredictionsTable.status, "verified"))
+      .orderBy(desc(btcusdPredictionsTable.predictedAt))
+      .limit(200),
+  ]);
+
+  // Multi-timeframe context
+  let mtfContext = "";
+  if (mtfResult.status === "fulfilled") {
+    try {
+      const mtf = mtfResult.value;
+      const confluence = summarizeBtcTimeframeConfluence(mtf);
+      mtfContext = `\n\n=== ANALISIS MULTI-TIMEFRAME ===\n${mtf
+        .map((t) => `${t.label}: trend=${t.indicators?.trend ?? "n/a"}, RSI=${t.indicators?.rsi14?.toFixed(1) ?? "n/a"}, EMA=${t.indicators?.emaAlignment ?? "n/a"}`)
+        .join("\n")}\nKonfluensi: ${confluence.agreement} (${confluence.bullishCount} TF bullish, ${confluence.bearishCount} TF bearish)`;
+    } catch { /* non-fatal */ }
+  }
+
+  // Win rate context (overall)
+  let winRateContext = "";
+  if (winRateResult.status === "fulfilled" && winRateResult.value.length > 0) {
+    const all = winRateResult.value;
+    const correct = all.filter((p) => p.isCorrect === true).length;
+    const wr = ((correct / all.length) * 100).toFixed(1);
+    winRateContext = `\n\n=== WIN RATE HISTORIS ===\nAkurasi keseluruhan: ${wr}% dari ${all.length} prediksi terverifikasi`;
+  }
+
+  // Segment win rate
+  let segmentWinRateContext = "";
+  if (segWinRateResult.status === "fulfilled" && segWinRateResult.value.length > 0) {
+    const calcWR = (preds: typeof segWinRateResult.value) => {
+      if (!preds.length) return null;
+      const c = preds.filter((p) => p.isCorrect === true).length;
+      return { wr: ((c / preds.length) * 100).toFixed(1), n: preds.length };
+    };
+    const all = segWinRateResult.value;
+    const sameBoth = all.filter((p) => p.tradingSession === tradingSession && p.marketRegime === marketRegime);
+    const sameRegime = all.filter((p) => p.marketRegime === marketRegime);
+    const parts: string[] = [];
+    const wrBoth = calcWR(sameBoth);
+    const wrRegime = calcWR(sameRegime);
+    if (wrBoth) parts.push(`Sesi ${tradingSession} + regime ${marketRegime}: ${wrBoth.wr}% akurat (${wrBoth.n} prediksi)`);
+    else if (wrRegime) parts.push(`Regime ${marketRegime}: ${wrRegime.wr}% akurat (${wrRegime.n} prediksi)`);
+    if (parts.length) segmentWinRateContext = `\n=== WIN RATE SEGMEN ===\n${parts.join("\n")}`;
+  }
+
+  // Correlation context
+  let correlationContext = "";
+  if (corrResult.status === "fulfilled") {
+    const c = corrResult.value;
+    const fmtF = (v: number | null) => v != null ? `${v > 0 ? "+" : ""}${v.toFixed(2)}%` : "n/a";
+    correlationContext = `\n\n=== KORELASI MAKRO BTC ===\n` +
+      c.factors.map((f) => `${f.name}: ${fmtF(f.changePct)} — ${f.interpretation.slice(0, 80)}`).join("\n");
+  }
+
+  const brainContext = brainResult.status === "fulfilled" ? brainResult.value : "";
+  const sessionRegimeContext = `\n\n=== KONTEKS PASAR ===\nSesi: ${tradingSession.toUpperCase()} | Regime: ${marketRegime.toUpperCase()} | Cluster: ${clusterLabel}`;
+
+  // Rule-based fallback
+  const ruleBased = computeRuleBasedPrediction(indicators);
+
+  const systemPrompt = `Kamu adalah AI predictor BTC/USD. Berikan prediksi dalam format JSON yang valid.`;
+  const userMsg = `Harga BTC $${indicators.price.toLocaleString()} | RSI ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal}) | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}${mtfContext}${correlationContext}${winRateContext}${segmentWinRateContext}${sessionRegimeContext}${brainContext}
+
+Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
+{
+  "direction": "up/down/sideways",
+  "targetPrice": <harga target>,
+  "entryLow": <batas bawah entry>,
+  "entryHigh": <batas atas entry>,
+  "stopLoss": <harga stop loss>,
+  "confidence": <0.0-1.0>,
+  "reasoning": "<3-4 kalimat — sebutkan MTF, korelasi makro, win rate, dan insight dari memori AI>"
+}`;
+
+  let pred: RuleBasedPrediction = ruleBased;
+  let aiPowered = false;
+
+  const VALID_DIRECTIONS = new Set(["up", "down", "sideways"]);
+  try {
+    const raw = await queryDeepSeek(systemPrompt, userMsg, 500);
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        direction: string;
+        targetPrice: number;
+        entryLow?: number;
+        entryHigh?: number;
+        stopLoss?: number;
+        confidence: number;
+        reasoning: string;
+      };
+      const dirValid = typeof parsed.direction === "string" && VALID_DIRECTIONS.has(parsed.direction.toLowerCase());
+      if (
+        dirValid &&
+        typeof parsed.entryLow === "number" &&
+        typeof parsed.entryHigh === "number" &&
+        typeof parsed.stopLoss === "number" &&
+        typeof parsed.targetPrice === "number" &&
+        parsed.targetPrice > 0 &&
+        parsed.stopLoss > 0
+      ) {
+        pred = { ...parsed, direction: parsed.direction.toLowerCase() as "up" | "down" | "sideways" } as RuleBasedPrediction;
+        aiPowered = true;
+      }
+    }
+  } catch (err) {
+    console.error("[BTC Brain] AI prediction parse error, using rule-based:", err);
+  }
+
+  try {
+    const verifyAt = new Date(Date.now() + 4 * 60 * 60 * 1000);
+
+    const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
+    const targetPrice = pred.targetPrice ?? ruleBased.targetPrice;
+    const entryLow = pred.entryLow ?? ruleBased.entryLow;
+    const entryHigh = pred.entryHigh ?? ruleBased.entryHigh;
+    const stopLoss = pred.stopLoss ?? ruleBased.stopLoss;
+    const reasoning = aiPowered
+      ? (pred.reasoning ?? ruleBased.reasoning)
+      : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`;
+
+    // ── Feature 1: Ensemble Voting (4 agents) ──────────────────────────────────
+    const techVote = { direction: ruleBased.direction, confidence: ruleBased.confidence, label: "technical" };
+    const macroVote = computeBtcMacroVote(corrResult.status === "fulfilled" ? corrResult.value : null);
+    const sentimentVote = computeBtcSentimentVote();
+    const baseAiConf = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
+    const aiVote = { direction, confidence: baseAiConf, label: aiPowered ? "ai" : "rule" };
+
+    // Majority vote dari 3 core agents (tech + macro + sentiment)
+    const coreVotes = [techVote.direction, macroVote.direction, sentimentVote.direction];
+    const upVotes = coreVotes.filter((d) => d === "up").length;
+    const downVotes = coreVotes.filter((d) => d === "down").length;
+    const sideVotes = coreVotes.filter((d) => d === "sideways").length;
+    const majorityDir = upVotes >= 2 ? "up" : downVotes >= 2 ? "down" : sideVotes >= 2 ? "sideways" : null;
+    // Hard guard: finalDirection must always be a canonical value
+    const rawFinal = majorityDir ?? direction;
+    const finalDirection: "up" | "down" | "sideways" =
+      rawFinal === "up" || rawFinal === "down" || rawFinal === "sideways"
+        ? rawFinal
+        : ruleBased.direction;
+
+    const allDirs = [techVote.direction, macroVote.direction, sentimentVote.direction, aiVote.direction];
+    const agreementCount = Math.max(
+      allDirs.filter((d) => d === "up").length,
+      allDirs.filter((d) => d === "down").length,
+      allDirs.filter((d) => d === "sideways").length
+    );
+    const agreementBonus = agreementCount === 4 ? 0.08 : agreementCount === 3 ? 0.04 : agreementCount === 1 ? -0.06 : 0;
+    const confidence = Math.min(1, Math.max(0, baseAiConf + agreementBonus));
+
+    // ── Feature 7: Confidence Gate ─────────────────────────────────────────────
+    if (confidence < CONFIDENCE_GATE) {
+      console.log(`[BTC Brain] Prediksi tidak disimpan — confidence ${(confidence * 100).toFixed(0)}% di bawah gate ${(CONFIDENCE_GATE * 100).toFixed(0)}%`);
+      return;
+    }
+
+    // ── Feature 8: Price Distribution ──────────────────────────────────────────
+    const atr = indicators.atr14 ?? indicators.price * 0.02;
+    const distribution = computePriceDistribution(indicators.price, finalDirection, confidence, atr);
+
+    const ensembleVotes = {
+      technical: techVote,
+      macro: macroVote,
+      sentiment: sentimentVote,
+      ai: aiVote,
+      agreementCount,
+      agreementBonus: parseFloat(agreementBonus.toFixed(3)),
+      finalDirection,
+      session: tradingSession,
+      regime: marketRegime,
+      cluster: clusterLabel,
+    };
+
+    await db.insert(btcusdPredictionsTable).values({
+      timeframe: "4H",
+      predictionType: "training",
+      direction: finalDirection,
+      targetPrice,
+      entryLow,
+      entryHigh,
+      stopLoss,
+      confidence,
+      reasoning,
+      priceAtPrediction: indicators.price,
+      indicatorsAtPrediction: { ...(indicators as unknown as Record<string, unknown>), ensembleVotes },
+      tradingSession,
+      marketRegime,
+      clusterLabel,
+      priceP10: distribution.p10,
+      priceP50: distribution.p50,
+      priceP90: distribution.p90,
+      verifyAt,
+      status: "pending",
+    });
+  } catch (err) {
+    console.error("[BTC Brain] Prediction save error:", err);
+  }
+}
+
+// ─── Feature 5: Self-correction + Negative Reinforcement ─────────────────────
+async function verifyOldPredictions(currentPrice: number): Promise<{ checked: number; wrong: number }> {
+  const now = new Date();
+
+  const pending = await db
+    .select()
+    .from(btcusdPredictionsTable)
+    .where(eq(btcusdPredictionsTable.status, "pending"))
+    .limit(30);
+
+  if (pending.length === 0) return { checked: 0, wrong: 0 };
+
+  let wrongCount = 0;
+  let checkedCount = 0;
+
+  for (const pred of pending) {
+    const sl = pred.stopLoss;
+    const tp = pred.targetPrice;
+    const priceDiff = currentPrice - pred.priceAtPrediction;
+    const pricePct = priceDiff / pred.priceAtPrediction;
+
+    let resolved = false;
+    let isCorrect: boolean | null = null;
+    let resolveReason = "";
+
+    if (pred.direction === "up") {
+      if (tp != null && currentPrice >= tp) { resolved = true; isCorrect = true; resolveReason = `TP tercapai ($${currentPrice.toFixed(2)} ≥ $${tp.toFixed(2)})`; }
+      else if (sl != null && currentPrice <= sl) { resolved = true; isCorrect = false; resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≤ $${sl.toFixed(2)})`; }
+    } else if (pred.direction === "down") {
+      if (tp != null && currentPrice <= tp) { resolved = true; isCorrect = true; resolveReason = `TP tercapai ($${currentPrice.toFixed(2)} ≤ $${tp.toFixed(2)})`; }
+      else if (sl != null && currentPrice >= sl) { resolved = true; isCorrect = false; resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≥ $${sl.toFixed(2)})`; }
+    } else {
+      if (Math.abs(pricePct) > 0.01) {
+        resolved = true; isCorrect = false;
+        resolveReason = `Harga bergerak terlalu jauh dari sideways (${(pricePct * 100).toFixed(2)}%)`;
+      }
+    }
+
+    if (!resolved && pred.verifyAt && now > new Date(pred.verifyAt)) {
+      resolved = true;
+      resolveReason = "Kadaluarsa 4 jam tanpa hit SL/TP";
+    }
+
+    if (!resolved) continue;
+
+    const actualDirection = pricePct > 0.003 ? "up" : pricePct < -0.003 ? "down" : "sideways";
+    if (isCorrect === null) isCorrect = actualDirection === pred.direction;
+
+    checkedCount++;
+    if (!isCorrect) wrongCount++;
+
+    console.log(`[BTC Brain] Prediksi #${pred.id} ${pred.direction.toUpperCase()} → ${isCorrect ? "✅ BENAR" : "❌ SALAH"} | ${resolveReason}`);
+
+    if (!isCorrect) {
+      // Self-critique: tanya DeepSeek kenapa salah → simpan sebagai lesson
+      try {
+        const sysPr = `Kamu adalah AI trading coach untuk BTC/USD. Analisis mengapa prediksi salah dan berikan pelajaran spesifik.`;
+        const msg = `Prediksi saya ${pred.direction} dari $${pred.priceAtPrediction.toLocaleString()} dengan alasan: "${pred.reasoning}"
+Kenyataannya: harga bergerak ${actualDirection} ke $${currentPrice.toFixed(2)} (${pricePct > 0 ? "+" : ""}${(pricePct * 100).toFixed(3)}%).
+Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesalahan prediksi serupa di masa depan.`;
+
+        const critique = await queryDeepSeek(sysPr, msg, 300);
+        if (critique && critique.length > 50) {
+          await db.insert(btcusdBrainTable).values({
+            category: "lesson",
+            title: `Revisi: Prediksi ${pred.direction} salah pada $${pred.priceAtPrediction.toFixed(0)}`,
+            content: critique,
+            confidence: 0.8,
+            sourceQuestion: `Why was ${pred.direction} prediction from $${pred.priceAtPrediction} wrong?`,
+            marketConditionTags: [
+              `dir_${pred.direction}`,
+              pred.tradingSession ? `session_${pred.tradingSession}` : null,
+              pred.marketRegime ? `regime_${pred.marketRegime}` : null,
+            ].filter(Boolean).join(","),
+          });
+        }
+      } catch (err) {
+        console.error("[BTC Brain] Self-critique error:", err);
+      }
+
+      // Negative reinforcement: lemahkan entries dengan arah yang salah
+      try {
+        const wrongDirTag = `dir_${pred.direction}`;
+        await db.update(btcusdBrainTable)
+          .set({
+            decayWeight: sql`GREATEST(0.1, ${btcusdBrainTable.decayWeight} * 0.88)`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(btcusdBrainTable.isActive, true),
+              sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + wrongDirTag + "%"}`
+            )
+          );
+      } catch (err) {
+        console.error("[BTC Brain] Negative reinforcement error:", err);
+      }
+    }
+
+    // Selalu tandai prediksi sebagai resolved — jangan biarkan stuck di pending
+    await db.update(btcusdPredictionsTable)
+      .set({
+        actualPrice: currentPrice,
+        actualDirection,
+        isCorrect,
+        priceDiff,
+        status: "verified",
+      })
+      .where(eq(btcusdPredictionsTable.id, pred.id));
+  }
+
+  return { checked: checkedCount, wrong: wrongCount };
 }
 
 // ─── Core learning cycle ───────────────────────────────────────────────────────
@@ -214,7 +845,7 @@ export async function runBtcLearningCycle(): Promise<void> {
   let indicators: BtcusdIndicators | null = null;
 
   try {
-    // 1. Fetch live indicators
+    // 1. Fetch live indicators (with historical fallback)
     try { indicators = await fetchBtcusdIndicators("1h"); } catch { /* try fallback */ }
     if (!indicators) {
       try { indicators = await getHistoricalIndicators(); } catch { /* skip */ }
@@ -223,8 +854,11 @@ export async function runBtcLearningCycle(): Promise<void> {
 
     // 2. Spike detection
     try {
-      const [last] = await db.select({ price: btcusdSnapshotsTable.price })
-        .from(btcusdSnapshotsTable).orderBy(desc(btcusdSnapshotsTable.snapshotAt)).limit(1);
+      const [last] = await db
+        .select({ price: btcusdSnapshotsTable.price })
+        .from(btcusdSnapshotsTable)
+        .orderBy(desc(btcusdSnapshotsTable.snapshotAt))
+        .limit(1);
       if (last) spikeDetected = Math.abs((indicators.price - last.price) / last.price) >= SPIKE_THRESHOLD;
     } catch { /* non-fatal */ }
 
@@ -244,17 +878,19 @@ export async function runBtcLearningCycle(): Promise<void> {
       emaAlignment: indicators.emaAlignment,
     }).catch(() => {});
 
-    // 4. Generate & ask questions (3 per normal cycle)
-    const SYS = `Kamu adalah expert trader Bitcoin dengan pengalaman 10 tahun. Berikan jawaban SANGAT SPESIFIK dengan angka konkret, strategi actionable. Bahasa Indonesia.`;
+    // 4. Generate & jawab pertanyaan (3 per siklus normal)
+    const SYS = `Kamu adalah expert trader Bitcoin dengan pengalaman 10 tahun. Berikan jawaban SANGAT SPESIFIK dengan angka konkret, strategi actionable. Bahasa Indonesia. Minimal 3 poin actionable per jawaban.`;
     const sessionCache = new Set<string>();
     const questions = await generateQuestionsWithDeepSeek(indicators, 5, spikeDetected, sessionCache).catch(() => []);
 
     for (const { question, hash } of questions.slice(0, 3)) {
       try {
         sessionCache.add(hash);
-        const inserted = await db.insert(btcusdQuestionsLogTable).values({
-          question, questionHash: hash, marketContext: indicators as unknown as Record<string, unknown>,
-        }).onConflictDoNothing().returning({ id: btcusdQuestionsLogTable.id });
+        const inserted = await db
+          .insert(btcusdQuestionsLogTable)
+          .values({ question, questionHash: hash, marketContext: indicators as unknown as Record<string, unknown> })
+          .onConflictDoNothing()
+          .returning({ id: btcusdQuestionsLogTable.id });
         if (!inserted.length) continue;
 
         const answer = await queryDeepSeek(SYS, question, 800);
@@ -266,72 +902,49 @@ export async function runBtcLearningCycle(): Promise<void> {
 
         if (quality >= QUALITY_THRESHOLD && answer.length > 100) {
           await db.insert(btcusdBrainTable).values({
-            category: extractCategory(question), title: extractTitle(question, answer),
-            content: answer, confidence: quality, sourceQuestion: question,
-            marketConditionTags: extractTags(indicators),
+            category: extractCategory(question),
+            title: extractTitle(question, answer),
+            content: answer,
+            confidence: quality,
+            sourceQuestion: question,
+            marketConditionTags: extractMarketTags(indicators),
           });
           insightsSaved++;
           totalInsights++;
         }
-      } catch { /* non-fatal, skip question */ }
+      } catch { /* non-fatal, lanjut pertanyaan berikutnya */ }
     }
 
-    // 5. Make prediction
+    // 5. Prediksi dengan Ensemble Voting (paralel dengan korelasi makro)
     try {
-      const brainRows = await db.select({ content: btcusdBrainTable.content })
-        .from(btcusdBrainTable)
-        .where(eq(btcusdBrainTable.isActive, true))
-        .orderBy(desc(btcusdBrainTable.confidence))
-        .limit(5);
-      const brainContext = brainRows.map(r => r.content.slice(0, 200)).join("\n---\n");
-      const predPrompt = `Harga BTC $${indicators.price} | RSI ${indicators.rsi14?.toFixed(1)} | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}\n\nKonteks otak AI:\n${brainContext}\n\nBuat prediksi BTC untuk 4 jam ke depan. Format:\nDIRECTION: up/down/sideways\nTARGET: harga target\nSTOP_LOSS: harga SL\nCONFIDENCE: 0.0-1.0\nREASONING: alasan singkat 2-3 kalimat`;
-      const predRaw = await queryDeepSeek("Kamu adalah AI predictor BTC/USD.", predPrompt, 400);
-      const dir = predRaw.match(/DIRECTION:\s*(up|down|sideways)/i)?.[1]?.toLowerCase() as "up" | "down" | "sideways" | undefined;
-      const target = parseFloat(predRaw.match(/TARGET:\s*\$?([\d,]+)/)?.[1]?.replace(",", "") ?? "0");
-      const sl = parseFloat(predRaw.match(/STOP_LOSS:\s*\$?([\d,]+)/)?.[1]?.replace(",", "") ?? "0");
-      const conf = parseFloat(predRaw.match(/CONFIDENCE:\s*([\d.]+)/)?.[1] ?? "0.5");
-      const reasoning = predRaw.match(/REASONING:\s*(.+)/s)?.[1]?.trim() ?? predRaw.slice(0, 200);
-      if (dir && target > 0) {
-        await db.insert(btcusdPredictionsTable).values({
-          timeframe: "4h", direction: dir, targetPrice: target, stopLoss: sl > 0 ? sl : null,
-          confidence: Math.min(Math.max(conf, 0), 1), reasoning, priceAtPrediction: indicators.price,
-          indicatorsAtPrediction: indicators as unknown as Record<string, unknown>,
-          verifyAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
-        });
-      }
-    } catch { /* prediction non-fatal */ }
+      const corrResult = await Promise.allSettled([getBtcCorrelationAnalysis()]);
+      await makePrediction(indicators, corrResult[0]);
+    } catch (err) {
+      console.error("[BTC Brain] Prediction error:", err);
+    }
 
-    // 6. Verify old predictions
+    // 6. Verifikasi prediksi lama + self-correction
+    let checked = 0; let wrong = 0;
     try {
-      const pending = await db.select().from(btcusdPredictionsTable)
-        .where(sql`${btcusdPredictionsTable.status} = 'pending' AND ${btcusdPredictionsTable.verifyAt} <= NOW()`)
-        .limit(3);
-      for (const pred of pending) {
-        const actualDir = indicators.price > pred.priceAtPrediction ? "up" : indicators.price < pred.priceAtPrediction ? "down" : "sideways";
-        const isCorrect = actualDir === pred.direction;
-        await db.update(btcusdPredictionsTable)
-          .set({ actualPrice: indicators.price, actualDirection: actualDir, isCorrect, priceDiff: indicators.price - pred.priceAtPrediction, status: "verified" })
-          .where(eq(btcusdPredictionsTable.id, pred.id));
-      }
+      const r = await verifyOldPredictions(indicators.price);
+      checked = r.checked; wrong = r.wrong;
     } catch { /* non-fatal */ }
 
-    // 7. Forget curve (decay old brain entries weekly)
-    if (totalCycles % 50 === 0) {
-      try {
-        await db.update(btcusdBrainTable).set({
-          decayWeight: sql`${btcusdBrainTable.decayWeight} * 0.95`,
-          isActive: sql`${btcusdBrainTable.decayWeight} * 0.95 > 0.1`,
-        }).where(lt(btcusdBrainTable.decayWeight, 0.5));
-      } catch { /* non-fatal */ }
-    }
+    // 7. Forget Curve — exponential decay (setiap siklus, bukan setiap 50 siklus)
+    try { await applyForgetCurve(); } catch { /* non-fatal */ }
 
     totalCycles++;
     lastCycleAt = new Date();
-    console.log(`[BTC Brain] Cycle #${totalCycles}: price=$${indicators.price}, q=${questionsAsked}, ins=${insightsSaved} (${Date.now() - cycleStart}ms)`);
+    console.log(`[BTC Brain] Cycle #${totalCycles}: price=$${indicators.price.toFixed(0)}, q=${questionsAsked}, ins=${insightsSaved}, checked=${checked}, wrong=${wrong} (${Date.now() - cycleStart}ms)`);
 
     await db.insert(btcusdLearningLogTable).values({
-      priceAtCycle: indicators.price, questionsAsked, insightsSaved,
-      spikeDetected, summary: `Siklus #${totalCycles}: +${insightsSaved} insights`,
+      priceAtCycle: indicators.price,
+      questionsAsked,
+      insightsSaved,
+      predictionsChecked: checked,
+      wrongPredictions: wrong,
+      spikeDetected,
+      summary: `Siklus #${totalCycles}: +${insightsSaved} insights, ${checked} prediksi diverifikasi (${wrong} salah)`,
       durationMs: Date.now() - cycleStart,
     }).catch(() => {});
 
@@ -341,7 +954,7 @@ export async function runBtcLearningCycle(): Promise<void> {
 }
 
 // ─── Extreme mode ──────────────────────────────────────────────────────────────
-function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 async function sleepOrAbort(ms: number): Promise<boolean> {
   const CHUNK = 1_000;
   let rem = ms;
@@ -375,13 +988,12 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
     }
     if (!indicators) { if (await sleepOrAbort(30_000)) break; continue; }
 
-    const spikeDetected = false;
     const remaining = target - extremeProgress;
     const count = Math.min(qpc, remaining);
     let toAsk: Array<{ question: string; hash: string }> = [];
 
     try {
-      toAsk = (await generateQuestionsWithDeepSeek(indicators, count + 3, spikeDetected, extremeHashCache!)).slice(0, count);
+      toAsk = (await generateQuestionsWithDeepSeek(indicators, count + 3, false, extremeHashCache!)).slice(0, count);
       if (toAsk.length) console.log(`[BTC Extreme] 🤖 DeepSeek generate ${toAsk.length} pertanyaan`);
     } catch (e) { console.warn("[BTC Extreme] Generate gagal:", String(e)); }
 
@@ -391,9 +1003,11 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
       if (extremeAbort || extremeProgress >= target) break;
       try {
         extremeHashCache!.add(hash);
-        const inserted = await db.insert(btcusdQuestionsLogTable)
+        const inserted = await db
+          .insert(btcusdQuestionsLogTable)
           .values({ question, questionHash: hash, marketContext: indicators as unknown as Record<string, unknown> })
-          .onConflictDoNothing().returning({ id: btcusdQuestionsLogTable.id });
+          .onConflictDoNothing()
+          .returning({ id: btcusdQuestionsLogTable.id });
         if (!inserted.length) { console.log("[BTC Extreme] ⏭ Skip duplikat"); continue; }
 
         const answer = await queryDeepSeek(SYS, question, 1_000);
@@ -404,9 +1018,12 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
 
         if (quality >= QUALITY_THRESHOLD && answer.length > 100) {
           await db.insert(btcusdBrainTable).values({
-            category: extractCategory(question), title: extractTitle(question, answer),
-            content: answer, confidence: quality, sourceQuestion: question,
-            marketConditionTags: extractTags(indicators),
+            category: extractCategory(question),
+            title: extractTitle(question, answer),
+            content: answer,
+            confidence: quality,
+            sourceQuestion: question,
+            marketConditionTags: extractMarketTags(indicators),
           });
           extremeInsightsTotal++;
         }
@@ -419,12 +1036,12 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
         if (extremeProgressHistory.length > 30) extremeProgressHistory.shift();
 
         if (extremeProgress % 10 === 0 || extremeProgress === target) {
-          console.log(`[BTC Extreme] 📊 ${extremeProgress}/${target} (${Math.round(extremeProgress/target*100)}%) — Insights: ${extremeInsightsTotal}`);
+          console.log(`[BTC Extreme] 📊 ${extremeProgress}/${target} (${Math.round((extremeProgress / target) * 100)}%) — Insights: ${extremeInsightsTotal}`);
         }
         if (extremeProgress >= target || extremeAbort) break;
 
         const pause = 15_000 + Math.random() * 15_000;
-        console.log(`[BTC Extreme] ⏱ Jeda ${(pause/1000).toFixed(0)}s → ke-${extremeProgress+1}/${target}`);
+        console.log(`[BTC Extreme] ⏱ Jeda ${(pause / 1000).toFixed(0)}s → ke-${extremeProgress + 1}/${target}`);
         if (await sleepOrAbort(pause)) break;
       } catch (err) {
         consecutiveErrors++;
@@ -493,8 +1110,7 @@ export function getBtcEngineStatus() {
     totalCycles,
     totalInsights,
     isLearning,
-    // BTC is always "open" (24/7)
-    marketOpen: true,
+    marketOpen: true, // BTC 24/7
     extremeMode: {
       active: isExtremeRunning,
       target: extremeTarget,
@@ -516,7 +1132,6 @@ export function startBtcBrainEngine(): void {
   if (learningTimer) return;
   console.log("[BTC Brain] Engine started. Learning cycle every 5 minutes.");
   learningTimer = setInterval(() => { runBtcLearningCycle().catch(console.error); }, LEARN_INTERVAL_MS);
-  // Run once immediately
   runBtcLearningCycle().catch(console.error);
 }
 

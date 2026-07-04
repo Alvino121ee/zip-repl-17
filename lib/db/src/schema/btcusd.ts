@@ -90,6 +90,9 @@ export const btcusdPredictionsTable = pgTable("btcusd_predictions", {
   actualDirection: text("actual_direction"),
   isCorrect: boolean("is_correct"),
   priceDiff: real("price_diff"),
+  priceP10: real("price_p10"),
+  priceP50: real("price_p50"),
+  priceP90: real("price_p90"),
   status: text("status").notNull().default("pending"),
 });
 

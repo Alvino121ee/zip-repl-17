@@ -1774,7 +1774,7 @@ function PredictionPanel({ mainPreds, trainingPreds }: { mainPreds: Prediction[]
           {/* Ensemble votes if available */}
           {p.indicatorsAtPrediction?.ensembleVotes && (
             <div className="mt-2 flex gap-2 flex-wrap">
-              {Object.entries(p.indicatorsAtPrediction.ensembleVotes as Record<string, { direction: string; confidence: number; label: string }>)
+              {Object.entries(p.indicatorsAtPrediction.ensembleVotes as unknown as Record<string, { direction: string; confidence: number; label: string }>)
                 .filter(([k]) => k !== "agreementCount" && k !== "agreementBonus")
                 .map(([agent, vote]) => (
                   <span key={agent} className={`text-[10px] px-1.5 py-0.5 rounded border ${
