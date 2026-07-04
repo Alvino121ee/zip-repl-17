@@ -41,7 +41,7 @@ import { notifyNewPrediction } from "./xauusd-whatsapp.js";
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 const LEARN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes — faster learning
 const SPIKE_THRESHOLD = 0.003; // 0.3% price change = spike
-const DEEPSEEK_TIMEOUT_MS = 45_000; // 45s timeout per DeepSeek call
+const DEEPSEEK_TIMEOUT_MS = 120_000; // 120s timeout — deepseek-reasoner (R1) butuh waktu lebih lama
 
 let learningTimer: ReturnType<typeof setInterval> | null = null;
 // Shared global lock — prevents concurrent execution from both interval and /learn-now
@@ -95,7 +95,7 @@ async function queryDeepSeek(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: "deepseek-reasoner",
         max_tokens: maxTokens,
         messages: [
           { role: "system", content: systemPrompt },
@@ -110,8 +110,9 @@ async function queryDeepSeek(
     }
 
     const json = (await res.json()) as {
-      choices: Array<{ message: { content: string } }>;
+      choices: Array<{ message: { content: string; reasoning_content?: string } }>;
     };
+    // R1 menyimpan jawaban final di content, proses berpikirnya di reasoning_content (diabaikan)
     return json.choices[0]?.message?.content?.trim() ?? "";
   } finally {
     clearTimeout(timer);
