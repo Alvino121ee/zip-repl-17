@@ -327,15 +327,16 @@ btcusdRouter.post("/learn-now", requireAdmin, async (_req, res) => {
 
 // ─── Extreme mode (admin) ────────────────────────────────────────────────────
 btcusdRouter.post("/engine/extreme/start", requireAdmin, (req, res) => {
-  const { target, questionsPerCycle } = req.body as { target?: number; questionsPerCycle?: number };
+  const { target, questionsPerCycle, selectedCategories } = req.body as { target?: number; questionsPerCycle?: number; selectedCategories?: string[] };
   if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > 10_000) {
     return res.status(400).json({ error: "target harus bilangan bulat antara 1 hingga 10.000" });
   }
   if (questionsPerCycle !== undefined && (typeof questionsPerCycle !== "number" || !Number.isInteger(questionsPerCycle) || questionsPerCycle < 3 || questionsPerCycle > 20)) {
     return res.status(400).json({ error: "questionsPerCycle harus bilangan bulat antara 3 hingga 20" });
   }
-  const qpc = questionsPerCycle ?? 10;
-  const result = startBtcExtremeLearningMode(target, qpc);
+  const qpc = questionsPerCycle ?? 15;
+  const cats = Array.isArray(selectedCategories) ? selectedCategories : [];
+  const result = startBtcExtremeLearningMode(target, qpc, cats);
   return res.json({ ...result, status: getBtcEngineStatus() });
 });
 

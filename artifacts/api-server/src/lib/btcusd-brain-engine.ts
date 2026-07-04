@@ -81,6 +81,22 @@ let extremeHashCache: Set<string> | null = null;
 let extremeProgressHistory: Array<{ ts: number; count: number }> = [];
 let extremeLastProgressAt: number | null = null;
 let extremeDataMode: "live" | "historical" = "live";
+let extremeCurrentStatus: "idle" | "fetching_data" | "generating" | "answering" = "idle";
+let extremeCurrentQuestion: string | null = null;
+let extremeSelectedCategories: string[] = [];
+
+// ─── Kategori pertanyaan yang tersedia ────────────────────────────────────────
+const CATEGORY_TOPICS: Record<string, string> = {
+  teknikal:       "analisis teknikal (RSI, MACD, EMA stack, Bollinger Band squeeze, ATR, candlestick pattern, divergence, support/resistance)",
+  psikologi:      "psikologi trading (FOMO, panic selling, greed, trader bias, emotional discipline, mental model, loss aversion, Fear & Greed contrarian)",
+  makro:          "analisis makro (DXY, Nasdaq, suku bunga Fed, inflasi, korelasi BTC vs aset tradisional, geopolitik, regulasi global)",
+  trading_rule:   "trading rule (manajemen risiko, position sizing, entry/exit timing, stop loss placement, risk-reward ratio, journal trading)",
+  derivatif:      "derivatif & futures (funding rate, open interest, liquidation cascade, options Greeks, perpetual swap, basis trading, leverage management)",
+  crypto_ekosistem: "crypto ekosistem (altcoin season, dominance BTC, DeFi TVL, Layer 2, stablecoin flows, NFT market, institutional adoption, ETF)",
+  onchain:        "on-chain metrics (whale movements, exchange inflow/outflow, MVRV, NUPL, hash rate, mining difficulty, HODLer behavior, realized cap)",
+  pattern:        "chart pattern & price action (head and shoulders, wedge, flag, pennant, double top/bottom, Wyckoff, Elliott Wave, order block, fair value gap)",
+  insight:        "insights & lessons (kesalahan umum trader, studi kasus historis BTC, siklus pasar, halving effect, makro lesson, wisdom trading jangka panjang)",
+};
 
 // ─── DeepSeek ──────────────────────────────────────────────────────────────────
 async function queryDeepSeek(
@@ -525,7 +541,8 @@ async function generateQuestionsWithDeepSeek(
   sessionCache: Set<string>,
   fg: FearGreedData | null,
   funding: FundingRateData | null,
-  halving: HalvingContext
+  halving: HalvingContext,
+  categories: string[] = []
 ): Promise<Array<{ question: string; hash: string }>> {
   const fgLine = fg
     ? `Fear & Greed Index: ${fg.value}/100 (${fg.classification})`
@@ -551,12 +568,19 @@ async function generateQuestionsWithDeepSeek(
     spikeDetected ? "⚡ SPIKE TERDETEKSI: BTC bergerak cepat >1%" : null,
   ].filter(Boolean).join("\n");
 
+  // Bangun instruksi topik berdasarkan kategori yang dipilih
+  const validCats = categories.filter(c => CATEGORY_TOPICS[c]);
+  const topicInstruction = validCats.length > 0
+    ? `Fokus KHUSUS pada topik-topik berikut (WAJIB campur semua kategori ini secara merata): ` +
+      validCats.map(c => CATEGORY_TOPICS[c]).join("; ") + "."
+    : `Topik mencakup: analisis teknikal (RSI/MACD/BB squeeze), halving cycle, funding rate, ` +
+      `Fear & Greed contrarian signals, korelasi DXY/Nasdaq, manajemen risiko, psikologi, ` +
+      `DeFi & dominance, on-chain metrics, institutional adoption.`;
+
   const prompt =
     `Kondisi pasar BTC/USD saat ini:\n${ctx}\n\n` +
     `Buat ${count} pertanyaan studi trading BITCOIN yang SPESIFIK, UNIK, dan BERVARIASI. ` +
-    `Topik mencakup: analisis teknikal (RSI/MACD/BB squeeze), halving cycle, funding rate, ` +
-    `Fear & Greed contrarian signals, korelasi DXY/Nasdaq, manajemen risiko, psikologi, ` +
-    `DeFi & dominance, on-chain metrics, institutional adoption. ` +
+    topicInstruction + ` ` +
     `Format: satu pertanyaan per baris, awali dengan nomor (1. 2. dst). ` +
     `Gunakan Bahasa Indonesia. Sertakan angka spesifik dari data di atas.`;
 
@@ -1238,7 +1262,7 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
   // Fungsi generate pertanyaan dan langsung filter duplikat
   async function prefetchBatch(ind: BtcusdIndicators, fg: FearGreedData | null, funding: FundingRateData | null, count: number): Promise<Array<{ question: string; hash: string }>> {
     try {
-      const questions = await generateQuestionsWithDeepSeek(ind, count + 5, false, extremeHashCache!, fg, funding, halving);
+      const questions = await generateQuestionsWithDeepSeek(ind, count + 5, false, extremeHashCache!, fg, funding, halving, extremeSelectedCategories);
       return questions.slice(0, count);
     } catch { return []; }
   }
@@ -1248,13 +1272,15 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
     if (consecutiveErrors >= MAX_ERR) {
       console.warn("[BTC Extreme] ⚡ Circuit breaker — jeda 5 menit...");
       consecutiveErrors = 0;
+      extremeCurrentStatus = "idle";
       if (await sleepOrAbort(5 * 60_000)) break;
       continue;
     }
 
     // Ambil data market
+    extremeCurrentStatus = "fetching_data";
     const indicators = currentIndicators ?? await fetchMarketData();
-    currentIndicators = null; // reset setelah dipakai
+    currentIndicators = null;
     if (!indicators) { if (await sleepOrAbort(30_000)) break; continue; }
 
     const [fgResult, fundingResult] = await Promise.allSettled([fetchFearGreedIndex(), fetchBtcFundingRate()]);
@@ -1267,6 +1293,8 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
     const count = Math.min(qpc, remaining);
 
     // Pakai batch yang sudah di-prefetch sebelumnya, atau generate sekarang
+    extremeCurrentStatus = "generating";
+    extremeCurrentQuestion = null;
     let toAsk: Array<{ question: string; hash: string }> = [];
     if (nextBatchPromise) {
       toAsk = await nextBatchPromise;
@@ -1279,21 +1307,23 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
 
     if (!toAsk.length) {
       console.warn("[BTC Extreme] ⚠️ Tidak ada pertanyaan baru — generate ulang 10s...");
+      extremeCurrentStatus = "idle";
       if (await sleepOrAbort(10_000)) break;
       extremeCycleCount++;
       continue;
     }
 
     // Jawab setiap pertanyaan TANPA JEDA — langsung lanjut ke berikutnya
+    extremeCurrentStatus = "answering";
     for (let i = 0; i < toAsk.length; i++) {
       if (extremeAbort || extremeProgress >= target) break;
       const { question, hash } = toAsk[i];
+      extremeCurrentQuestion = question;
 
       // Pipeline: mulai prefetch batch berikutnya saat menjawab pertanyaan terakhir di batch ini
       if (i === toAsk.length - 1 && !extremeAbort && extremeProgress + 1 < target) {
         const nextCount = Math.min(qpc, target - extremeProgress - 1);
         if (nextCount > 0) {
-          // Fetch data market baru untuk batch berikutnya secara paralel
           nextBatchPromise = (async () => {
             const [nextInd, nextFgR, nextFundR] = await Promise.all([
               fetchMarketData(),
@@ -1361,26 +1391,32 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
         const errStr = String(err);
         consecutiveErrors++;
         console.error(`[BTC Extreme] ❌ Error (${consecutiveErrors}/${MAX_ERR}):`, errStr);
-        extremeHashCache!.delete(hash); // hapus dari cache agar bisa dicoba di sesi lain
+        extremeHashCache!.delete(hash);
+        extremeCurrentQuestion = null;
 
         // Adaptive backoff: hanya jeda panjang jika kena rate limit
         const isRateLimit = errStr.includes("429") || errStr.toLowerCase().includes("rate limit");
         if (isRateLimit) {
           console.warn("[BTC Extreme] 🚦 Rate limit terdeteksi — jeda 60 detik...");
+          extremeCurrentStatus = "idle";
           if (await sleepOrAbort(60_000)) break;
+          extremeCurrentStatus = "answering";
         } else {
-          // Error biasa: jeda 2 detik saja, langsung lanjut
           if (await sleepOrAbort(2_000)) break;
         }
       }
     }
     extremeCycleCount++;
   }
+
+  extremeCurrentStatus = "idle";
+  extremeCurrentQuestion = null;
 }
 
-export function startBtcExtremeLearningMode(target: number, questionsPerCycle: number): { ok: boolean; message: string } {
+export function startBtcExtremeLearningMode(target: number, questionsPerCycle: number, selectedCategories: string[] = []): { ok: boolean; message: string } {
   if (isExtremeRunning) return { ok: false, message: "Mode ekstrem BTC sudah berjalan." };
   const safeQpc = Math.max(3, Math.min(questionsPerCycle, 20));
+  const validCats = selectedCategories.filter(c => CATEGORY_TOPICS[c]);
   isExtremeRunning = true;
   extremeTarget = target;
   extremeProgress = 0;
@@ -1392,8 +1428,12 @@ export function startBtcExtremeLearningMode(target: number, questionsPerCycle: n
   extremeProgressHistory = [];
   extremeLastProgressAt = null;
   extremeDataMode = "live";
+  extremeCurrentStatus = "fetching_data";
+  extremeCurrentQuestion = null;
+  extremeSelectedCategories = validCats;
   extremeHashCache = new Set();
-  console.log(`[BTC Extreme] 🚀 Mulai — target: ${target} pertanyaan, ${safeQpc}/siklus (tanpa jeda)`);
+  const catLabel = validCats.length > 0 ? ` | Kategori: ${validCats.join(", ")}` : " | Semua kategori";
+  console.log(`[BTC Extreme] 🚀 Mulai — target: ${target} pertanyaan, ${safeQpc}/siklus (tanpa jeda)${catLabel}`);
   (async () => {
     try {
       // Muat hash semua pertanyaan yang pernah ditanya dari DB ke memory cache
@@ -1457,6 +1497,9 @@ export function getBtcEngineStatus() {
       speedQph,
       etaMs,
       dataMode: extremeDataMode,
+      currentStatus: extremeCurrentStatus,
+      currentQuestion: extremeCurrentQuestion,
+      selectedCategories: extremeSelectedCategories,
     },
   };
 }

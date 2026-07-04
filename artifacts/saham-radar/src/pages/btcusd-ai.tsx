@@ -104,7 +104,7 @@ interface Prediction {
 }
 interface QuestionLog { id: number; question: string; answer: string | null; quality: number | null; askedAt: string; savedToBrain: boolean; }
 interface LearningLog { id: number; cycleAt: string; priceAtCycle: number | null; questionsAsked: number; insightsSaved: number; spikeDetected: boolean; summary: string | null; durationMs: number | null; }
-interface ExtremeMode { active: boolean; target: number; progress: number; insights: number; cycles: number; startedAt: string | null; percentDone: number; stopRequested: boolean; speedQph: number; etaMs: number | null; dataMode: "live" | "historical"; }
+interface ExtremeMode { active: boolean; target: number; progress: number; insights: number; cycles: number; startedAt: string | null; percentDone: number; stopRequested: boolean; speedQph: number; etaMs: number | null; dataMode: "live" | "historical"; currentStatus: "idle" | "fetching_data" | "generating" | "answering"; currentQuestion: string | null; selectedCategories: string[]; }
 interface EngineStatus { running: boolean; lastCycleAt: string | null; totalCycles: number; totalInsights: number; isLearning: boolean; marketOpen: boolean; extremeMode: ExtremeMode; }
 interface CalibrationBucket { label: string; min: number; max: number; sampleCount: number; actualWinRate: number | null; }
 interface CalibrationResult { calibration: CalibrationBucket[]; totalVerified: number; }
@@ -1112,12 +1112,37 @@ function SettingsTab({ settings, onSaveKey, savingKey, toast, qc }: {
 }
 
 // ─── Extreme Mode Tab ─────────────────────────────────────────────────────────
+const ALL_CATEGORIES = [
+  { id: "teknikal",         label: "Teknikal",        color: "blue" },
+  { id: "psikologi",        label: "Psikologi",       color: "purple" },
+  { id: "makro",            label: "Makro",           color: "yellow" },
+  { id: "trading_rule",     label: "Trading Rule",    color: "green" },
+  { id: "derivatif",        label: "Derivatif",       color: "red" },
+  { id: "crypto_ekosistem", label: "Crypto Ekosistem",color: "cyan" },
+  { id: "onchain",          label: "On-Chain",        color: "emerald" },
+  { id: "pattern",          label: "Pattern",         color: "orange" },
+  { id: "insight",          label: "Insight",         color: "pink" },
+] as const;
+
+const STATUS_CONFIG = {
+  idle:         { label: "Menunggu",          color: "text-muted-foreground", dot: "bg-muted-foreground", pulse: false },
+  fetching_data:{ label: "Ambil data market", color: "text-blue-400",         dot: "bg-blue-400",         pulse: true  },
+  generating:   { label: "Membuat pertanyaan",color: "text-amber-400",        dot: "bg-amber-400",        pulse: true  },
+  answering:    { label: "Menjawab",          color: "text-emerald-400",      dot: "bg-emerald-400",      pulse: true  },
+} as const;
+
 function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onRefresh: () => void; toast: ReturnType<typeof useToast>["toast"] }) {
   const [target, setTarget] = useState(100);
   const [qpc, setQpc] = useState(15);
+  const [selectedCats, setSelectedCats] = useState<string[]>([]);
+
+  const toggleCat = (id: string) =>
+    setSelectedCats(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]);
+  const selectAll = () => setSelectedCats(ALL_CATEGORIES.map(c => c.id));
+  const clearAll = () => setSelectedCats([]);
 
   const startM = useMutation({
-    mutationFn: () => apiPost("/engine/extreme/start", { target, questionsPerCycle: qpc }),
+    mutationFn: () => apiPost("/engine/extreme/start", { target, questionsPerCycle: qpc, selectedCategories: selectedCats }),
     onSuccess: () => { toast({ title: "🔥 Mode Ekstrem BTC dimulai!" }); onRefresh(); },
   });
   const stopM = useMutation({
@@ -1126,17 +1151,24 @@ function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onR
   });
 
   const isActive = em?.active ?? false;
+  const statusCfg = STATUS_CONFIG[em?.currentStatus ?? "idle"];
 
   return (
     <div className="space-y-4">
       <div className="bg-card border border-border/40 rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold flex items-center gap-2"><Flame className="w-4 h-4 text-orange-400" />Mode Belajar Ekstrem BTC</h3>
-          {isActive && <span className="flex items-center gap-1.5 text-xs text-orange-400 font-medium"><span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />BERJALAN</span>}
+          {isActive && (
+            <span className={`flex items-center gap-1.5 text-xs font-medium ${statusCfg.color}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${statusCfg.dot} ${statusCfg.pulse ? "animate-pulse" : ""}`} />
+              {statusCfg.label}
+            </span>
+          )}
         </div>
 
         {isActive && em ? (
           <div className="space-y-3">
+            {/* Progress bar */}
             <div>
               <div className="flex justify-between text-xs text-muted-foreground mb-1.5">
                 <span>{em.progress}/{em.target} pertanyaan ({em.percentDone}%)</span>
@@ -1146,6 +1178,29 @@ function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onR
                 <div className="h-full bg-orange-500 rounded-full transition-all duration-500" style={{ width: `${em.percentDone}%` }} />
               </div>
             </div>
+
+            {/* Status aktif saat ini */}
+            <div className={`rounded-xl p-3 border text-xs space-y-1.5 ${
+              em.currentStatus === "generating" ? "bg-amber-500/5 border-amber-500/20" :
+              em.currentStatus === "answering"   ? "bg-emerald-500/5 border-emerald-500/20" :
+              em.currentStatus === "fetching_data"? "bg-blue-500/5 border-blue-500/20" :
+              "bg-muted/10 border-border/20"
+            }`}>
+              <div className={`flex items-center gap-2 font-medium ${statusCfg.color}`}>
+                {em.currentStatus === "fetching_data" && <Activity className="w-3.5 h-3.5" />}
+                {em.currentStatus === "generating"    && <Brain className="w-3.5 h-3.5" />}
+                {em.currentStatus === "answering"     && <MessageSquare className="w-3.5 h-3.5" />}
+                {em.currentStatus === "idle"          && <Clock className="w-3.5 h-3.5" />}
+                {statusCfg.label}
+              </div>
+              {em.currentQuestion && em.currentStatus === "answering" && (
+                <p className="text-muted-foreground leading-relaxed line-clamp-2 pl-5">
+                  {em.currentQuestion}
+                </p>
+              )}
+            </div>
+
+            {/* Statistik */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
               {[
                 { label: "Pertanyaan", value: em.progress },
@@ -1159,13 +1214,28 @@ function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onR
                 </div>
               ))}
             </div>
+
+            {/* Kategori aktif */}
+            {em.selectedCategories?.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 text-xs">
+                <span className="text-muted-foreground">Kategori:</span>
+                {em.selectedCategories.map(c => (
+                  <span key={c} className="px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/25">
+                    {ALL_CATEGORIES.find(x => x.id === c)?.label ?? c}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Sumber data + ETA */}
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Sumber data:</span>
               {em.dataMode === "live"
                 ? <span className="flex items-center gap-1 text-emerald-400"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Live market</span>
                 : <span className="flex items-center gap-1 text-blue-400"><span className="w-1.5 h-1.5 rounded-full bg-blue-400" />Data historis</span>}
             </div>
-            {em.etaMs && <div className="text-xs text-muted-foreground">ETA: ~{Math.round(em.etaMs / 60000)} menit lagi</div>}
+            {em.etaMs != null && <div className="text-xs text-muted-foreground">ETA: ~{Math.round(em.etaMs / 60000)} menit lagi</div>}
+
             <Button onClick={() => stopM.mutate()} disabled={stopM.isPending || em.stopRequested} variant="destructive" size="sm" className="w-full gap-2">
               <StopCircle className="w-4 h-4" />{em.stopRequested ? "Menghentikan..." : "Hentikan Sesi"}
             </Button>
@@ -1175,6 +1245,41 @@ function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onR
             <p className="text-xs text-muted-foreground">
               Mode ekstrem menggunakan DeepSeek untuk menghasilkan dan menjawab ratusan pertanyaan trading Bitcoin <strong className="text-orange-400">tanpa jeda</strong> — setelah jawab langsung tanya lagi. BTC 24/7, bisa dijalankan kapan saja.
             </p>
+
+            {/* Pilihan kategori */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs text-muted-foreground">Kategori pertanyaan</label>
+                <div className="flex gap-2">
+                  <button onClick={selectAll} className="text-[10px] text-orange-400 hover:text-orange-300 transition-colors">Pilih semua</button>
+                  <span className="text-muted-foreground/40">·</span>
+                  <button onClick={clearAll} className="text-[10px] text-muted-foreground hover:text-foreground/70 transition-colors">Reset</button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {ALL_CATEGORIES.map(cat => {
+                  const active = selectedCats.includes(cat.id);
+                  return (
+                    <button
+                      key={cat.id}
+                      onClick={() => toggleCat(cat.id)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all border ${
+                        active
+                          ? "bg-orange-500/20 text-orange-400 border-orange-500/40"
+                          : "bg-muted/20 text-muted-foreground border-border/30 hover:bg-muted/40"
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1.5">
+                {selectedCats.length === 0 ? "Tidak ada yang dipilih = semua kategori dicampur otomatis" : `${selectedCats.length} kategori dipilih — pertanyaan akan difokuskan pada topik ini`}
+              </p>
+            </div>
+
+            {/* Target & QPC */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Target pertanyaan</label>
@@ -1186,10 +1291,11 @@ function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onR
                 <input type="number" value={target} onChange={e => setTarget(Math.max(10, parseInt(e.target.value) || 10))} min={10} max={10000} className="w-full bg-muted/30 border border-border/50 rounded-lg px-3 py-1.5 text-sm focus:outline-none" />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1.5 block">Pertanyaan/siklus (3–20)</label>
-                <input type="number" value={qpc} onChange={e => setQpc(Math.max(3, Math.min(20, parseInt(e.target.value) || 10)))} min={3} max={20} className="w-full bg-muted/30 border border-border/50 rounded-lg px-3 py-1.5 text-sm focus:outline-none" />
+                <label className="text-xs text-muted-foreground mb-1.5 block">Pertanyaan/batch (3–20)</label>
+                <input type="number" value={qpc} onChange={e => setQpc(Math.max(3, Math.min(20, parseInt(e.target.value) || 15)))} min={3} max={20} className="w-full bg-muted/30 border border-border/50 rounded-lg px-3 py-1.5 text-sm focus:outline-none" />
               </div>
             </div>
+
             <Button onClick={() => startM.mutate()} disabled={startM.isPending} className="w-full gap-2 bg-orange-500/80 hover:bg-orange-500 text-white">
               <Flame className="w-4 h-4" />Mulai Mode Ekstrem BTC
             </Button>
@@ -1199,11 +1305,12 @@ function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onR
 
       <div className="bg-card border border-border/40 rounded-2xl p-4 text-xs text-muted-foreground space-y-1.5">
         <p className="font-medium text-foreground/70">Tentang Mode Ekstrem BTC</p>
-        <p>• DeepSeek R1 <em>generate</em> pertanyaan crypto unik, lalu <em>menjawabnya</em> — pool tak terbatas</p>
-        <p>• Topik: halving, on-chain, DeFi, korelasi Nasdaq/DXY, psikologi crypto, institutional adoption</p>
-        <p>• BTC 24/7 — tidak ada downtime weekend seperti gold</p>
+        <p>• <strong className="text-foreground/60">Tanpa jeda</strong> — setelah menjawab, langsung generate pertanyaan berikutnya</p>
+        <p>• <strong className="text-foreground/60">Pipeline</strong> — batch berikutnya di-generate saat batch ini sedang dijawab</p>
+        <p>• <strong className="text-foreground/60">Dedup ketat</strong> — pertanyaan dari sesi sebelumnya tidak akan terulang</p>
         <p>• Jawaban berkualitas ≥65% otomatis disimpan ke otak AI</p>
         <p>• Circuit breaker: berhenti otomatis jika 5 error berturut-turut</p>
+        <p>• Rate limit: jeda 60 detik otomatis jika DeepSeek throttle</p>
       </div>
     </div>
   );
