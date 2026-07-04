@@ -41,6 +41,14 @@ export interface XauusdIndicators {
   emaAlignment: "bullish_stack" | "bearish_stack" | "mixed";
   supportLevel: number | null;
   resistanceLevel: number | null;
+  // Retail sentiment — TradingView aggregate recommendation (optional: live data only)
+  retailSentimentScore?: number | null;
+  retailSentiment?: "bullish" | "bearish" | "neutral";
+  // Smart Money Concepts — computed from live OHLC (optional: not in historical DB)
+  bullishOrderBlock?: { high: number; low: number } | null;
+  bearishOrderBlock?: { high: number; low: number } | null;
+  bullishFvg?: { high: number; low: number } | null;  // bullish Fair Value Gap
+  bearishFvg?: { high: number; low: number } | null;  // bearish Fair Value Gap
 }
 
 // ─── Common headers ────────────────────────────────────────────────────────────
@@ -199,6 +207,13 @@ const TV_INDICATOR_COLUMNS = [
   "ATR",                                        // 20 — ATR 14
   "Pivot.M.Classic.S1",                         // 21 — monthly support
   "Pivot.M.Classic.R1",                         // 22 — monthly resistance
+  "Recommend.All",                              // 23 — aggregate signal: -1 (strong sell) → +1 (strong buy)
+  "high[1]",                                    // 24 — previous bar high
+  "low[1]",                                     // 25 — previous bar low
+  "high[2]",                                    // 26 — 2 bars ago high
+  "low[2]",                                     // 27 — 2 bars ago low
+  "open[1]",                                    // 28 — previous bar open
+  "close[1]",                                   // 29 — previous bar close
 ] as const;
 
 /**
@@ -283,6 +298,62 @@ function buildIndicatorsFromScanner(d: (number | null)[]): XauusdIndicators | nu
   const supportLevel:    number | null = d[21] != null ? parseFloat(d[21].toFixed(2)) : null;
   const resistanceLevel: number | null = d[22] != null ? parseFloat(d[22].toFixed(2)) : null;
 
+  // ── Retail Sentiment (TradingView Recommend.All) ────────────────────────────
+  const recommendAll = d[23] ?? null;
+  const retailSentimentScore: number | null = recommendAll != null ? parseFloat(recommendAll.toFixed(3)) : null;
+  const retailSentiment: NonNullable<XauusdIndicators["retailSentiment"]> =
+    retailSentimentScore == null ? "neutral"
+    : retailSentimentScore >  0.1 ? "bullish"
+    : retailSentimentScore < -0.1 ? "bearish"
+    : "neutral";
+
+  // ── Previous-bar OHLC for FVG + Order Block detection ─────────────────────
+  const prevHigh  = d[24] ?? null;
+  const prevLow   = d[25] ?? null;
+  const prev2High = d[26] ?? null;
+  const prev2Low  = d[27] ?? null;
+  const prevOpen  = d[28] ?? null;
+  const prevClose = d[29] ?? null;
+
+  // Fair Value Gap (FVG) — price imbalance zones institutions often revisit
+  // Bullish FVG: gap between bar[-2].high and current bar low
+  let bullishFvg: XauusdIndicators["bullishFvg"] = null;
+  if (prev2High != null && low != null && prev2High < low) {
+    bullishFvg = { low: parseFloat(prev2High.toFixed(2)), high: parseFloat(low.toFixed(2)) };
+  }
+  // Bearish FVG: gap between bar[-2].low and current bar high
+  let bearishFvg: XauusdIndicators["bearishFvg"] = null;
+  if (prev2Low != null && high != null && prev2Low > high) {
+    bearishFvg = { low: parseFloat(high.toFixed(2)), high: parseFloat(prev2Low.toFixed(2)) };
+  }
+
+  // Order Block (OB) — last opposing candle before impulse move
+  let bullishOrderBlock: XauusdIndicators["bullishOrderBlock"] = null;
+  let bearishOrderBlock: XauusdIndicators["bearishOrderBlock"] = null;
+  if (prevOpen != null && prevClose != null) {
+    const isPrevBearish = prevClose < prevOpen;
+    const isPrevBullish = prevClose > prevOpen;
+    const isCurrentBullish = close != null && open != null && close > open;
+    const isCurrentBearish = close != null && open != null && close < open;
+    // Bullish OB: last bearish candle immediately before bullish impulse
+    if (isPrevBearish && isCurrentBullish) {
+      bullishOrderBlock = {
+        low:  parseFloat(Math.min(prevOpen, prevClose).toFixed(2)),
+        high: parseFloat(Math.max(prevOpen, prevClose).toFixed(2)),
+      };
+    }
+    // Bearish OB: last bullish candle immediately before bearish impulse
+    if (isPrevBullish && isCurrentBearish) {
+      bearishOrderBlock = {
+        low:  parseFloat(Math.min(prevOpen, prevClose).toFixed(2)),
+        high: parseFloat(Math.max(prevOpen, prevClose).toFixed(2)),
+      };
+    }
+  }
+
+  // ── Suppress unused-var warnings for prevHigh/prevLow (used indirectly) ───
+  void prevHigh; void prevLow;
+
   // Derived signals
   const rsiSignal: XauusdIndicators["rsiSignal"] =
     rsi14 == null ? "neutral" : rsi14 >= 70 ? "overbought" : rsi14 <= 30 ? "oversold" : "neutral";
@@ -314,6 +385,9 @@ function buildIndicatorsFromScanner(d: (number | null)[]): XauusdIndicators | nu
     bbUpper, bbMiddle, bbLower, bbWidth, atr14,
     trend, rsiSignal, macdSignalType, emaAlignment,
     supportLevel, resistanceLevel,
+    retailSentimentScore, retailSentiment,
+    bullishOrderBlock, bearishOrderBlock,
+    bullishFvg, bearishFvg,
   };
 }
 
