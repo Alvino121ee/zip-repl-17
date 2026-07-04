@@ -1,21 +1,29 @@
 /**
- * BTCUSD Autonomous Learning Brain Engine
- * BTC is 24/7 — engine runs continuously without market-hour checks.
+ * BTCUSD Autonomous Learning Brain Engine — Enhanced v2
+ * BTC adalah 24/7 — engine belajar terus-menerus tanpa henti.
  *
- * Features (setara XAUUSD brain):
- *  1. Ensemble Voting (4 agents: technical + macro + sentiment + AI)
- *  2. Market Regime Detector (trending_up / trending_down / ranging / volatile)
- *  3. Trading Session Detector (asia / london / new_york / overlap)
- *  4. Forget Curve — Exponential Decay (LAMBDA = 0.023/hari, half-life ≈ 30 hari)
- *  5. Self-correction + Negative Reinforcement (pelajaran dari prediksi salah)
- *  6. Rule-based Prediction Fallback (selalu ada SL/TP dari analisis teknikal)
- *  7. Confidence Gate (abaikan prediksi < 0.55)
- *  8. Price Distribution P10/P50/P90 (berbasis ATR + confidence)
- *  9. Relevant Brain Retrieval (tag-based scoring × decayWeight × confidence)
- * 10. Multi-timeframe Context (1H / 4H / 1D confluence)
- * 11. Win Rate Context (akurasi historis per sesi × regime)
- * 12. Macro Correlation Vote (DXY + Nasdaq)
- * 13. Extreme Learning Mode (masif, circuit breaker, in-memory dedup)
+ * Improvement v2:
+ *  1. Fear & Greed Index — Sentiment Agent nyata (bukan placeholder)
+ *  2. Funding Rate (Binance) — ditambahkan ke Macro Vote
+ *  3. Volume Spike — masuk ke Cluster Label + konteks
+ *  4. Bollinger Band Squeeze — masuk ke Cluster Label
+ *  5. Halving Cycle Awareness — konteks siklus 4 tahunan di setiap prompt
+ *  6. Reinforcement Diperkuat — negative decay 0.75 (dari 0.88), positive boost +5%
+ *  7. Pembelajaran Setiap 2 Menit + Mini-siklus Verifikasi 60 Detik
+ *
+ * Features lama yang tetap:
+ *  8. Ensemble Voting (5 agen: technical + macro + sentiment + AI + funding)
+ *  9. Market Regime Detector
+ * 10. Trading Session Detector
+ * 11. Forget Curve (Exponential Decay, half-life 30 hari)
+ * 12. Self-correction + Negative Reinforcement
+ * 13. Rule-based Prediction Fallback
+ * 14. Confidence Gate (0.55)
+ * 15. Price Distribution P10/P50/P90
+ * 16. Relevant Brain Retrieval (tag-based scoring × decayWeight × confidence)
+ * 17. Multi-timeframe Context (1H / 4H / 1D)
+ * 18. Win Rate Context (historis per sesi × regime)
+ * 19. Extreme Learning Mode
  */
 
 import crypto from "crypto";
@@ -27,7 +35,7 @@ import {
   btcusdPredictionsTable,
   btcusdLearningLogTable,
 } from "@workspace/db/schema";
-import { and, eq, desc, sql, lt } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import {
   fetchBtcusdIndicators,
   type BtcusdIndicators,
@@ -35,18 +43,26 @@ import {
   summarizeBtcTimeframeConfluence,
   getBtcCorrelationAnalysis,
   type BtcCorrelationResponse,
+  fetchFearGreedIndex,
+  type FearGreedData,
+  fetchBtcFundingRate,
+  type FundingRateData,
+  getBtcHalvingContext,
+  type HalvingContext,
 } from "./btcusd-data.js";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 const DEEPSEEK_TIMEOUT_MS = 120_000;
-const LEARN_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
-const SPIKE_THRESHOLD = 0.01;            // BTC lebih volatil dari emas (1%)
+const LEARN_INTERVAL_MS = 2 * 60 * 1000;   // 2 menit — belajar lebih sering
+const VERIFY_INTERVAL_MS = 60 * 1000;       // 1 menit — mini-siklus verifikasi cepat
+const SPIKE_THRESHOLD = 0.01;
 const QUALITY_THRESHOLD = 0.65;
-const CONFIDENCE_GATE = 0.55;            // Prediksi di bawah ini tidak disimpan
+const CONFIDENCE_GATE = 0.55;
 
 // ─── Engine state ──────────────────────────────────────────────────────────────
 let learningTimer: ReturnType<typeof setInterval> | null = null;
+let verifyTimer: ReturnType<typeof setInterval> | null = null;
 let isLearning = false;
 let lastCycleAt: Date | null = null;
 let totalCycles = 0;
@@ -103,24 +119,46 @@ function hashQuestion(q: string): string {
   return crypto.createHash("sha256").update(q.trim().toLowerCase()).digest("hex");
 }
 
-// ─── Score answer quality (0.0–1.0) ───────────────────────────────────────────
+// ─── Score answer quality (0.0–1.0) — diperbaiki ──────────────────────────────
 function scoreAnswer(question: string, answer: string): number {
   let score = 0.5;
-  if (answer.length > 300) score += 0.1;
-  if (answer.length > 600) score += 0.1;
+
+  // Panjang jawaban
+  if (answer.length > 300) score += 0.08;
+  if (answer.length > 600) score += 0.08;
+  if (answer.length > 900) score += 0.04;
+
+  // Ada angka spesifik
   const hasNumbers = /\d+\.?\d*%?/.test(answer);
-  if (hasNumbers) score += 0.1;
+  if (hasNumbers) score += 0.08;
+
+  // Kata-kata actionable
   const actionWords = [
     "entry", "stop", "target", "support", "resistance",
     "buy", "sell", "beli", "jual", "level", "harga",
     "strategi", "risiko", "konfirmasi", "breakout",
+    "funding", "fear", "greed", "halving", "on-chain",
   ];
   const hits = actionWords.filter((w) => answer.toLowerCase().includes(w)).length;
-  score += Math.min(hits * 0.02, 0.1);
+  score += Math.min(hits * 0.025, 0.12);
+
+  // Ada poin bernomor → terstruktur
+  const bulletPoints = (answer.match(/^\s*[\d\-\*•]/gm) ?? []).length;
+  if (bulletPoints >= 3) score += 0.06;
+
+  // Penalti: terlalu banyak tanda tanya (tidak pasti)
   if (answer.includes("?") && answer.split("?").length > 2) score -= 0.05;
+
+  // Penalti: jawaban terlalu pendek
   if (answer.length < 100) score = Math.min(score, 0.4);
-  const vague = ["itu tergantung", "sangat bervariasi", "tidak bisa dipastikan"];
+
+  // Penalti: jawaban samar
+  const vague = ["itu tergantung", "sangat bervariasi", "tidak bisa dipastikan", "sulit dikatakan"];
   if (vague.some((v) => answer.toLowerCase().includes(v))) score -= 0.1;
+
+  // Bonus: menyebut angka harga BTC spesifik
+  if (/\$\s*[\d,]+/.test(answer)) score += 0.04;
+
   return Math.min(Math.max(score, 0), 1);
 }
 
@@ -135,6 +173,7 @@ function extractCategory(question: string): string {
   if (q.includes("defi") || q.includes("altcoin") || q.includes("eth") || q.includes("dominance")) return "crypto_ekosistem";
   if (q.includes("news") || q.includes("fed") || q.includes("berita")) return "news_impact";
   if (q.includes("pola") || q.includes("pattern") || q.includes("breakout")) return "pattern";
+  if (q.includes("funding") || q.includes("futures") || q.includes("open interest")) return "derivatif";
   if (q.includes("strategi") || q.includes("entry") || q.includes("exit") || q.includes("stop")) return "trading_rule";
   if (q.includes("psikologi") || q.includes("kesalahan") || q.includes("manajemen")) return "lesson";
   return "insight";
@@ -147,7 +186,7 @@ function extractTitle(question: string, answer: string): string {
     : question.slice(0, 100);
 }
 
-function extractMarketTags(i: BtcusdIndicators): string {
+function extractMarketTags(i: BtcusdIndicators, avgVolume?: number): string {
   const tags: string[] = [];
   if (i.rsiSignal === "overbought") tags.push("rsi_overbought");
   if (i.rsiSignal === "oversold") tags.push("rsi_oversold");
@@ -155,29 +194,25 @@ function extractMarketTags(i: BtcusdIndicators): string {
   if (i.emaAlignment === "bearish_stack") tags.push("ema_bearish");
   if (i.macdSignalType !== "neutral") tags.push(`macd_${i.macdSignalType}`);
   tags.push(`trend_${i.trend}`);
+  if (i.bbWidth != null && i.bbWidth < 2.0) tags.push("bb_squeeze");
+  if (avgVolume && avgVolume > 0 && i.volume > avgVolume * 1.5) tags.push("vol_spike");
   return tags.join(",");
 }
 
-// ─── Feature 2: Market Regime Detector ────────────────────────────────────────
-// BTC lebih volatil — threshold ATR > 2% untuk dianggap volatile
+// ─── Feature: Market Regime Detector ──────────────────────────────────────────
 export function detectBtcMarketRegime(
   indicators: BtcusdIndicators
 ): "trending_up" | "trending_down" | "ranging" | "volatile" {
   const atr = indicators.atr14 ?? 0;
   const price = indicators.price;
   const atrPct = price > 0 ? (atr / price) * 100 : 0;
-
   if (atrPct > 2.0) return "volatile";
-
-  if (indicators.emaAlignment === "bullish_stack" && indicators.trend === "bullish")
-    return "trending_up";
-  if (indicators.emaAlignment === "bearish_stack" && indicators.trend === "bearish")
-    return "trending_down";
-
+  if (indicators.emaAlignment === "bullish_stack" && indicators.trend === "bullish") return "trending_up";
+  if (indicators.emaAlignment === "bearish_stack" && indicators.trend === "bearish") return "trending_down";
   return "ranging";
 }
 
-// ─── Feature 3: Trading Session Detector ──────────────────────────────────────
+// ─── Feature: Trading Session Detector ────────────────────────────────────────
 export function detectTradingSession(): "asia" | "london" | "new_york" | "overlap_london_ny" {
   const now = new Date();
   const h = now.getUTCHours() + now.getUTCMinutes() / 60;
@@ -187,8 +222,8 @@ export function detectTradingSession(): "asia" | "london" | "new_york" | "overla
   return "asia";
 }
 
-// ─── Feature 7: Cluster Label ─────────────────────────────────────────────────
-export function computeBtcClusterLabel(indicators: BtcusdIndicators): string {
+// ─── Feature: Cluster Label — diperkaya BB Squeeze + Volume ───────────────────
+export function computeBtcClusterLabel(indicators: BtcusdIndicators, avgVolume?: number): string {
   const rsi = indicators.rsi14 ?? 50;
   const rsiZone = rsi < 35 ? "RSI_OS" : rsi > 65 ? "RSI_OB" : "RSI_N";
   const emaZone = indicators.emaAlignment === "bullish_stack" ? "EMA_Bull"
@@ -200,10 +235,17 @@ export function computeBtcClusterLabel(indicators: BtcusdIndicators): string {
   const macdZone = indicators.macdSignalType === "bullish_cross" ? "MACD_B"
     : indicators.macdSignalType === "bearish_cross" ? "MACD_S"
     : "MACD_N";
-  return `${rsiZone}+${emaZone}+${trendZone}+${macdZone}`;
+
+  // BB Squeeze: lebar < 2% = konsolidasi, breakout akan datang
+  const bbSqueeze = (indicators.bbWidth != null && indicators.bbWidth < 2.0) ? "+BB_Sqz" : "";
+
+  // Volume spike: volume 1.5x di atas rata-rata = konfirmasi gerakan
+  const volSpike = (avgVolume && avgVolume > 0 && indicators.volume > avgVolume * 1.5) ? "+VOL_H" : "";
+
+  return `${rsiZone}+${emaZone}+${trendZone}+${macdZone}${bbSqueeze}${volSpike}`;
 }
 
-// ─── Feature 6: Rule-based Prediction Fallback ─────────────────────────────────
+// ─── Feature: Rule-based Prediction Fallback ───────────────────────────────────
 interface RuleBasedPrediction {
   direction: "up" | "down" | "sideways";
   targetPrice: number;
@@ -216,7 +258,7 @@ interface RuleBasedPrediction {
 
 function computeRuleBasedPrediction(indicators: BtcusdIndicators): RuleBasedPrediction {
   const price = indicators.price;
-  const atr = indicators.atr14 ?? price * 0.02; // BTC fallback ~2% ATR
+  const atr = indicators.atr14 ?? price * 0.02;
 
   let direction: "up" | "down" | "sideways" = "sideways";
   let score = 0;
@@ -239,7 +281,6 @@ function computeRuleBasedPrediction(indicators: BtcusdIndicators): RuleBasedPred
   const resistance = indicators.resistanceLevel ?? price + atr * 2;
 
   let entryLow: number, entryHigh: number, stopLoss: number, targetPrice: number;
-
   if (direction === "up") {
     entryLow = parseFloat((price - pullback).toFixed(2));
     entryHigh = parseFloat((price + pullback * 0.3).toFixed(2));
@@ -261,53 +302,72 @@ function computeRuleBasedPrediction(indicators: BtcusdIndicators): RuleBasedPred
   return { direction, targetPrice, entryLow, entryHigh, stopLoss, confidence, reasoning };
 }
 
-// ─── Feature 1: Macro Vote (DXY + Nasdaq) ─────────────────────────────────────
-// BTC: DXY naik → bearish BTC (USD menguat, aset berisiko turun)
-//      Nasdaq naik → bullish BTC (risk-on sentiment)
+// ─── Feature: Macro Vote + Funding Rate ────────────────────────────────────────
+// DXY naik → bearish BTC | Nasdaq naik → bullish BTC
+// Funding Rate tinggi (> 0.05%) = overleveraged longs → bearish contrarian
+// Funding Rate negatif (< -0.02%) = overleveraged shorts → bullish contrarian
 function computeBtcMacroVote(
-  corr: BtcCorrelationResponse | null
+  corr: BtcCorrelationResponse | null,
+  funding: FundingRateData | null
 ): { direction: "up" | "down" | "sideways"; confidence: number; label: string } {
-  if (!corr) return { direction: "sideways", confidence: 0.40, label: "macro" };
-
-  const dxy = corr.factors.find((f) => f.key === "dxy");
-  const nasdaq = corr.factors.find((f) => f.key === "nasdaq");
-
-  const dxyChange = dxy?.changePct ?? 0;
-  const nasdaqChange = nasdaq?.changePct ?? 0;
-
   let score = 0;
-  // DXY naik → bearish BTC
-  if (dxyChange < -0.1) score += 1;
-  else if (dxyChange > 0.1) score -= 1;
-  // Nasdaq naik → bullish BTC
-  if (nasdaqChange > 0.3) score += 1;
-  else if (nasdaqChange < -0.3) score -= 1;
+
+  if (corr) {
+    const dxy = corr.factors.find((f) => f.key === "dxy");
+    const nasdaq = corr.factors.find((f) => f.key === "nasdaq");
+    const dxyChange = dxy?.changePct ?? 0;
+    const nasdaqChange = nasdaq?.changePct ?? 0;
+
+    if (dxyChange < -0.1) score += 1;
+    else if (dxyChange > 0.1) score -= 1;
+    if (nasdaqChange > 0.3) score += 1;
+    else if (nasdaqChange < -0.3) score -= 1;
+  }
+
+  // Funding Rate sebagai contrarian signal
+  if (funding) {
+    const rate = funding.rate;
+    if (rate > 0.0005) score -= 1.5;       // Longs terlalu banyak → potensi reversal turun
+    else if (rate > 0.0002) score -= 0.75;
+    else if (rate < -0.0002) score += 1.5; // Shorts terlalu banyak → potensi short squeeze
+    else if (rate < -0.0001) score += 0.75;
+  }
 
   const direction: "up" | "down" | "sideways" =
     score >= 1 ? "up" : score <= -1 ? "down" : "sideways";
-  const confidence = Math.min(0.72, 0.38 + Math.abs(score) * 0.22);
+  const confidence = Math.min(0.82, 0.38 + Math.abs(score) * 0.16);
   return { direction, confidence, label: "macro" };
 }
 
-// ─── Feature 1 (extended): Sentiment Vote ─────────────────────────────────────
-// BTC belum punya news table — gunakan placeholder neutral
-// (dapat diperluas dengan Fear & Greed Index di masa depan)
-function computeBtcSentimentVote(): { direction: "up" | "down" | "sideways"; confidence: number; label: string } {
-  return { direction: "sideways", confidence: 0.42, label: "sentiment" };
+// ─── Feature: Sentiment Vote — Fear & Greed Index (CONTRARIAN) ─────────────────
+// Extreme Fear (0-25) → pasar oversold → potensi bullish
+// Extreme Greed (75-100) → pasar overbought → potensi reversal bearish
+function computeBtcSentimentVote(fg: FearGreedData | null): {
+  direction: "up" | "down" | "sideways";
+  confidence: number;
+  label: string;
+  fgValue?: number;
+  fgClass?: string;
+} {
+  if (!fg) return { direction: "sideways", confidence: 0.42, label: "sentiment" };
+
+  const v = fg.value;
+  if (v <= 15) return { direction: "up", confidence: 0.72, label: "sentiment", fgValue: v, fgClass: fg.classification };
+  if (v <= 25) return { direction: "up", confidence: 0.62, label: "sentiment", fgValue: v, fgClass: fg.classification };
+  if (v <= 40) return { direction: "up", confidence: 0.52, label: "sentiment", fgValue: v, fgClass: fg.classification };
+  if (v >= 85) return { direction: "down", confidence: 0.70, label: "sentiment", fgValue: v, fgClass: fg.classification };
+  if (v >= 75) return { direction: "down", confidence: 0.60, label: "sentiment", fgValue: v, fgClass: fg.classification };
+  if (v >= 60) return { direction: "down", confidence: 0.50, label: "sentiment", fgValue: v, fgClass: fg.classification };
+  return { direction: "sideways", confidence: 0.46, label: "sentiment", fgValue: v, fgClass: fg.classification };
 }
 
-// ─── Feature 4: Forget Curve — Exponential Decay ─────────────────────────────
-// Half-life ≈ 30 hari (lambda ≈ 0.023/hari), sama persis dengan XAUUSD
+// ─── Feature: Forget Curve — Exponential Decay ────────────────────────────────
 async function applyForgetCurve(): Promise<void> {
   const LAMBDA = 0.023;
   const now = Date.now();
 
   const entries = await db
-    .select({
-      id: btcusdBrainTable.id,
-      createdAt: btcusdBrainTable.createdAt,
-      decayWeight: btcusdBrainTable.decayWeight,
-    })
+    .select({ id: btcusdBrainTable.id, createdAt: btcusdBrainTable.createdAt, decayWeight: btcusdBrainTable.decayWeight })
     .from(btcusdBrainTable)
     .where(eq(btcusdBrainTable.isActive, true));
 
@@ -316,8 +376,7 @@ async function applyForgetCurve(): Promise<void> {
     const newWeight = parseFloat(Math.exp(-LAMBDA * ageDays).toFixed(4));
     const currentWeight = entry.decayWeight ?? 1.0;
     if (Math.abs(newWeight - currentWeight) > 0.01) {
-      await db
-        .update(btcusdBrainTable)
+      await db.update(btcusdBrainTable)
         .set({ decayWeight: newWeight, updatedAt: new Date() })
         .where(eq(btcusdBrainTable.id, entry.id));
     }
@@ -325,7 +384,7 @@ async function applyForgetCurve(): Promise<void> {
   console.log(`[BTC Brain] Forget curve applied to ${entries.length} brain entries.`);
 }
 
-// ─── Feature 9: Price Distribution P10/P50/P90 ────────────────────────────────
+// ─── Feature: Price Distribution P10/P50/P90 ──────────────────────────────────
 function computePriceDistribution(
   price: number,
   direction: "up" | "down" | "sideways",
@@ -356,7 +415,7 @@ function computePriceDistribution(
   }
 }
 
-// ─── Feature 9: Relevant Brain Retrieval ──────────────────────────────────────
+// ─── Feature: Relevant Brain Retrieval ────────────────────────────────────────
 async function retrieveRelevantBrainEntries(
   currentTags: string,
   session: string,
@@ -376,7 +435,7 @@ async function retrieveRelevantBrainEntries(
       .from(btcusdBrainTable)
       .where(eq(btcusdBrainTable.isActive, true))
       .orderBy(desc(sql`${btcusdBrainTable.decayWeight} * ${btcusdBrainTable.confidence}`))
-      .limit(50);
+      .limit(60);
 
     if (entries.length === 0) return "";
 
@@ -410,13 +469,23 @@ async function retrieveRelevantBrainEntries(
   }
 }
 
-// ─── Generate questions via DeepSeek ──────────────────────────────────────────
+// ─── Generate questions via DeepSeek — dengan konteks F&G, Funding, Halving ────
 async function generateQuestionsWithDeepSeek(
   indicators: BtcusdIndicators,
   count: number,
   spikeDetected: boolean,
-  sessionCache: Set<string>
+  sessionCache: Set<string>,
+  fg: FearGreedData | null,
+  funding: FundingRateData | null,
+  halving: HalvingContext
 ): Promise<Array<{ question: string; hash: string }>> {
+  const fgLine = fg
+    ? `Fear & Greed Index: ${fg.value}/100 (${fg.classification})`
+    : "Fear & Greed Index: N/A";
+  const fundingLine = funding
+    ? `Funding Rate: ${(funding.rate * 100).toFixed(4)}% (annualized ${funding.rateAnnualized.toFixed(1)}%/thn)`
+    : "Funding Rate: N/A";
+
   const ctx = [
     `Harga BTC/USD  : $${indicators.price.toLocaleString()}`,
     `RSI14          : ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal})`,
@@ -425,24 +494,28 @@ async function generateQuestionsWithDeepSeek(
     `EMA9/21/50/200 : ${indicators.ema9?.toFixed(0) ?? "N/A"} / ${indicators.ema21?.toFixed(0) ?? "N/A"} / ${indicators.ema50?.toFixed(0) ?? "N/A"} / ${indicators.ema200?.toFixed(0) ?? "N/A"}`,
     `MACD           : ${indicators.macdSignalType} (hist ${indicators.macdHistogram?.toFixed(0) ?? "N/A"})`,
     `ATR14          : $${indicators.atr14?.toFixed(0) ?? "N/A"}`,
-    `BB Width       : ${indicators.bbWidth?.toFixed(2) ?? "N/A"}%`,
+    `BB Width       : ${indicators.bbWidth?.toFixed(2) ?? "N/A"}%${(indicators.bbWidth != null && indicators.bbWidth < 2.0) ? " ⚡ BB SQUEEZE" : ""}`,
     `Support        : $${indicators.supportLevel?.toFixed(0) ?? "N/A"}`,
     `Resistance     : $${indicators.resistanceLevel?.toFixed(0) ?? "N/A"}`,
+    fgLine,
+    fundingLine,
+    `Halving Phase  : ${halving.phase} (${halving.daysSinceHalving} hari sejak halving, ${halving.daysToNextHalving} hari ke halving berikutnya)`,
     spikeDetected ? "⚡ SPIKE TERDETEKSI: BTC bergerak cepat >1%" : null,
   ].filter(Boolean).join("\n");
 
   const prompt =
     `Kondisi pasar BTC/USD saat ini:\n${ctx}\n\n` +
-    `Buat ${count} pertanyaan studi trading BITCOIN yang SPESIFIK, UNIK, dan BERVARIASI topiknya. ` +
-    `Topik harus mencakup: analisis teknikal, halving cycle, on-chain metrics, korelasi DXY/Nasdaq/emas, ` +
-    `manajemen risiko crypto, psikologi trading, DeFi & altcoin dominance, institutional adoption, dll. ` +
-    `Format: satu pertanyaan per baris, awali dengan nomor (1. 2. 3. dst). ` +
+    `Buat ${count} pertanyaan studi trading BITCOIN yang SPESIFIK, UNIK, dan BERVARIASI. ` +
+    `Topik mencakup: analisis teknikal (RSI/MACD/BB squeeze), halving cycle, funding rate, ` +
+    `Fear & Greed contrarian signals, korelasi DXY/Nasdaq, manajemen risiko, psikologi, ` +
+    `DeFi & dominance, on-chain metrics, institutional adoption. ` +
+    `Format: satu pertanyaan per baris, awali dengan nomor (1. 2. dst). ` +
     `Gunakan Bahasa Indonesia. Sertakan angka spesifik dari data di atas.`;
 
   const raw = await queryDeepSeek(
     "Kamu adalah expert trader dan analis Bitcoin/Crypto dengan pengalaman 10 tahun. Tugasmu merancang kurikulum belajar trading BTC yang mendalam dan actionable.",
     prompt,
-    600
+    700
   );
 
   const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -492,23 +565,39 @@ async function getHistoricalIndicators(): Promise<BtcusdIndicators | null> {
   };
 }
 
-// ─── Prediction maker (Feature 1: Ensemble Voting) ─────────────────────────────
+// ─── Ambil rata-rata volume dari snapshot terakhir ─────────────────────────────
+async function getAvgVolume(limit = 24): Promise<number> {
+  try {
+    const rows = await db
+      .select({ volume: btcusdSnapshotsTable.volume })
+      .from(btcusdSnapshotsTable)
+      .orderBy(desc(btcusdSnapshotsTable.snapshotAt))
+      .limit(limit);
+    if (!rows.length) return 0;
+    const sum = rows.reduce((s, r) => s + (r.volume ?? 0), 0);
+    return sum / rows.length;
+  } catch {
+    return 0;
+  }
+}
+
+// ─── Prediction maker — Ensemble Voting 5 agen ────────────────────────────────
 async function makePrediction(
   indicators: BtcusdIndicators,
-  corrResult: PromiseSettledResult<BtcCorrelationResponse>
+  corrResult: PromiseSettledResult<BtcCorrelationResponse>,
+  fg: FearGreedData | null,
+  funding: FundingRateData | null,
+  halving: HalvingContext,
+  avgVolume: number
 ): Promise<void> {
   const tradingSession = detectTradingSession();
   const marketRegime = detectBtcMarketRegime(indicators);
-  const clusterLabel = computeBtcClusterLabel(indicators);
-  const currentTags = extractMarketTags(indicators);
+  const clusterLabel = computeBtcClusterLabel(indicators, avgVolume);
+  const currentTags = extractMarketTags(indicators, avgVolume);
 
-  // Fetch konteks paralel
   const [mtfResult, winRateResult, brainResult, segWinRateResult] = await Promise.allSettled([
     getMultiBtcTimeframeAnalysis(),
-    db.select({
-      direction: btcusdPredictionsTable.direction,
-      isCorrect: btcusdPredictionsTable.isCorrect,
-    })
+    db.select({ direction: btcusdPredictionsTable.direction, isCorrect: btcusdPredictionsTable.isCorrect })
       .from(btcusdPredictionsTable)
       .where(eq(btcusdPredictionsTable.status, "verified"))
       .orderBy(desc(btcusdPredictionsTable.predictedAt))
@@ -538,7 +627,7 @@ async function makePrediction(
     } catch { /* non-fatal */ }
   }
 
-  // Win rate context (overall)
+  // Win rate context
   let winRateContext = "";
   if (winRateResult.status === "fulfilled" && winRateResult.value.length > 0) {
     const all = winRateResult.value;
@@ -575,16 +664,33 @@ async function makePrediction(
       c.factors.map((f) => `${f.name}: ${fmtF(f.changePct)} — ${f.interpretation.slice(0, 80)}`).join("\n");
   }
 
+  // Fear & Greed context
+  const fgContext = fg
+    ? `\n\n=== FEAR & GREED INDEX ===\nNilai: ${fg.value}/100 (${fg.classification})\n${fg.value <= 25 ? "⚠️ EXTREME FEAR = contrarian bullish signal" : fg.value >= 75 ? "⚠️ EXTREME GREED = contrarian bearish signal (overbought)" : "Sentimen normal — tidak ada sinyal contrarian ekstrem."}`
+    : "";
+
+  // Funding Rate context
+  const fundingContext = funding
+    ? `\n\n=== FUNDING RATE (BTC Perpetual) ===\nRate: ${(funding.rate * 100).toFixed(4)}%${funding.rate > 0.0005 ? " ⚠️ OVERFUNDED LONGS — potensi reversal turun" : funding.rate < -0.0002 ? " ⚠️ OVERFUNDED SHORTS — potensi short squeeze naik" : " (Normal)"}`
+    : "";
+
+  // Halving context
+  const halvingContext = `\n\n=== HALVING CYCLE BTC ===\n${halving.phaseDescription}\n${halving.daysSinceHalving} hari sejak halving ke-4 | ${halving.daysToNextHalving} hari ke halving ke-5`;
+
+  // BB Squeeze context
+  const bbSqueezeContext = (indicators.bbWidth != null && indicators.bbWidth < 2.0)
+    ? `\n\n⚡ BB SQUEEZE TERDETEKSI: Width ${indicators.bbWidth.toFixed(2)}% (< 2%) — pasar konsolidasi, potensi breakout besar.`
+    : "";
+
   const brainContext = brainResult.status === "fulfilled" ? brainResult.value : "";
   const sessionRegimeContext = `\n\n=== KONTEKS PASAR ===\nSesi: ${tradingSession.toUpperCase()} | Regime: ${marketRegime.toUpperCase()} | Cluster: ${clusterLabel}`;
 
-  // Rule-based fallback
   const ruleBased = computeRuleBasedPrediction(indicators);
 
   const systemPrompt = `Kamu adalah AI predictor BTC/USD. Berikan prediksi dalam format JSON yang valid.`;
-  const userMsg = `Harga BTC $${indicators.price.toLocaleString()} | RSI ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal}) | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}${mtfContext}${correlationContext}${winRateContext}${segmentWinRateContext}${sessionRegimeContext}${brainContext}
+  const userMsg = `Harga BTC $${indicators.price.toLocaleString()} | RSI ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal}) | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}${mtfContext}${correlationContext}${fgContext}${fundingContext}${halvingContext}${bbSqueezeContext}${winRateContext}${segmentWinRateContext}${sessionRegimeContext}${brainContext}
 
-Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
+Buat prediksi BTC untuk 4 jam ke depan. Pertimbangkan Fear & Greed, Funding Rate, dan fase halving dalam reasoning. Respons HANYA JSON:
 {
   "direction": "up/down/sideways",
   "targetPrice": <harga target>,
@@ -592,7 +698,7 @@ Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
   "entryHigh": <batas atas entry>,
   "stopLoss": <harga stop loss>,
   "confidence": <0.0-1.0>,
-  "reasoning": "<3-4 kalimat — sebutkan MTF, korelasi makro, win rate, dan insight dari memori AI>"
+  "reasoning": "<3-4 kalimat — sebutkan F&G, funding rate, halving phase, MTF, dan win rate>"
 }`;
 
   let pred: RuleBasedPrediction = ruleBased;
@@ -632,7 +738,6 @@ Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
 
   try {
     const verifyAt = new Date(Date.now() + 4 * 60 * 60 * 1000);
-
     const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
     const targetPrice = pred.targetPrice ?? ruleBased.targetPrice;
     const entryLow = pred.entryLow ?? ruleBased.entryLow;
@@ -642,25 +747,22 @@ Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
       ? (pred.reasoning ?? ruleBased.reasoning)
       : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`;
 
-    // ── Feature 1: Ensemble Voting (4 agents) ──────────────────────────────────
+    // Ensemble Voting — 5 agen
     const techVote = { direction: ruleBased.direction, confidence: ruleBased.confidence, label: "technical" };
-    const macroVote = computeBtcMacroVote(corrResult.status === "fulfilled" ? corrResult.value : null);
-    const sentimentVote = computeBtcSentimentVote();
+    const macroVote = computeBtcMacroVote(corrResult.status === "fulfilled" ? corrResult.value : null, funding);
+    const sentimentVote = computeBtcSentimentVote(fg);
     const baseAiConf = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
     const aiVote = { direction, confidence: baseAiConf, label: aiPowered ? "ai" : "rule" };
 
-    // Majority vote dari 3 core agents (tech + macro + sentiment)
+    // Majority vote dari 3 core agen
     const coreVotes = [techVote.direction, macroVote.direction, sentimentVote.direction];
     const upVotes = coreVotes.filter((d) => d === "up").length;
     const downVotes = coreVotes.filter((d) => d === "down").length;
     const sideVotes = coreVotes.filter((d) => d === "sideways").length;
     const majorityDir = upVotes >= 2 ? "up" : downVotes >= 2 ? "down" : sideVotes >= 2 ? "sideways" : null;
-    // Hard guard: finalDirection must always be a canonical value
     const rawFinal = majorityDir ?? direction;
     const finalDirection: "up" | "down" | "sideways" =
-      rawFinal === "up" || rawFinal === "down" || rawFinal === "sideways"
-        ? rawFinal
-        : ruleBased.direction;
+      rawFinal === "up" || rawFinal === "down" || rawFinal === "sideways" ? rawFinal : ruleBased.direction;
 
     const allDirs = [techVote.direction, macroVote.direction, sentimentVote.direction, aiVote.direction];
     const agreementCount = Math.max(
@@ -671,20 +773,19 @@ Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
     const agreementBonus = agreementCount === 4 ? 0.08 : agreementCount === 3 ? 0.04 : agreementCount === 1 ? -0.06 : 0;
     const confidence = Math.min(1, Math.max(0, baseAiConf + agreementBonus));
 
-    // ── Feature 7: Confidence Gate ─────────────────────────────────────────────
+    // Confidence Gate
     if (confidence < CONFIDENCE_GATE) {
       console.log(`[BTC Brain] Prediksi tidak disimpan — confidence ${(confidence * 100).toFixed(0)}% di bawah gate ${(CONFIDENCE_GATE * 100).toFixed(0)}%`);
       return;
     }
 
-    // ── Feature 8: Price Distribution ──────────────────────────────────────────
     const atr = indicators.atr14 ?? indicators.price * 0.02;
     const distribution = computePriceDistribution(indicators.price, finalDirection, confidence, atr);
 
     const ensembleVotes = {
       technical: techVote,
       macro: macroVote,
-      sentiment: sentimentVote,
+      sentiment: { ...sentimentVote },
       ai: aiVote,
       agreementCount,
       agreementBonus: parseFloat(agreementBonus.toFixed(3)),
@@ -692,6 +793,9 @@ Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
       session: tradingSession,
       regime: marketRegime,
       cluster: clusterLabel,
+      fearGreed: fg ? { value: fg.value, classification: fg.classification } : null,
+      fundingRate: funding ? funding.rate : null,
+      halvingPhase: halving.phase,
     };
 
     await db.insert(btcusdPredictionsTable).values({
@@ -720,7 +824,7 @@ Buat prediksi BTC untuk 4 jam ke depan. Respons HANYA JSON:
   }
 }
 
-// ─── Feature 5: Self-correction + Negative Reinforcement ─────────────────────
+// ─── Self-correction + Negative & Positive Reinforcement (diperkuat) ──────────
 async function verifyOldPredictions(currentPrice: number): Promise<{ checked: number; wrong: number }> {
   const now = new Date();
 
@@ -774,7 +878,7 @@ async function verifyOldPredictions(currentPrice: number): Promise<{ checked: nu
     console.log(`[BTC Brain] Prediksi #${pred.id} ${pred.direction.toUpperCase()} → ${isCorrect ? "✅ BENAR" : "❌ SALAH"} | ${resolveReason}`);
 
     if (!isCorrect) {
-      // Self-critique: tanya DeepSeek kenapa salah → simpan sebagai lesson
+      // Self-critique: tanya DeepSeek kenapa salah
       try {
         const sysPr = `Kamu adalah AI trading coach untuk BTC/USD. Analisis mengapa prediksi salah dan berikan pelajaran spesifik.`;
         const msg = `Prediksi saya ${pred.direction} dari $${pred.priceAtPrediction.toLocaleString()} dengan alasan: "${pred.reasoning}"
@@ -787,12 +891,13 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
             category: "lesson",
             title: `Revisi: Prediksi ${pred.direction} salah pada $${pred.priceAtPrediction.toFixed(0)}`,
             content: critique,
-            confidence: 0.8,
+            confidence: 0.85,
             sourceQuestion: `Why was ${pred.direction} prediction from $${pred.priceAtPrediction} wrong?`,
             marketConditionTags: [
               `dir_${pred.direction}`,
               pred.tradingSession ? `session_${pred.tradingSession}` : null,
               pred.marketRegime ? `regime_${pred.marketRegime}` : null,
+              pred.clusterLabel ? `cluster_${pred.clusterLabel.split("+")[0]}` : null,
             ].filter(Boolean).join(","),
           });
         }
@@ -800,12 +905,13 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
         console.error("[BTC Brain] Self-critique error:", err);
       }
 
-      // Negative reinforcement: lemahkan entries dengan arah yang salah
+      // Negative reinforcement DIPERKUAT: decay 0.75 (dari 0.88)
+      // Melemahkan insight dengan arah + cluster yang sama
       try {
         const wrongDirTag = `dir_${pred.direction}`;
         await db.update(btcusdBrainTable)
           .set({
-            decayWeight: sql`GREATEST(0.1, ${btcusdBrainTable.decayWeight} * 0.88)`,
+            decayWeight: sql`GREATEST(0.05, ${btcusdBrainTable.decayWeight} * 0.75)`,
             updatedAt: new Date(),
           })
           .where(
@@ -814,27 +920,63 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
               sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + wrongDirTag + "%"}`
             )
           );
+        console.log(`[BTC Brain] ⬇️ Negative reinforcement: insight dir_${pred.direction} dilemahkan (×0.75)`);
       } catch (err) {
         console.error("[BTC Brain] Negative reinforcement error:", err);
       }
+    } else {
+      // Positive reinforcement BARU: boost insight yang berkontribusi benar
+      try {
+        const rightDirTag = `dir_${pred.direction}`;
+        const session = pred.tradingSession ? `session_${pred.tradingSession}` : null;
+        await db.update(btcusdBrainTable)
+          .set({
+            decayWeight: sql`LEAST(1.0, ${btcusdBrainTable.decayWeight} * 1.05)`,
+            usageCount: sql`${btcusdBrainTable.usageCount} + 1`,
+            lastValidated: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(btcusdBrainTable.isActive, true),
+              sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + rightDirTag + "%"}`,
+              session
+                ? sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + session + "%"}`
+                : sql`true`
+            )
+          );
+        console.log(`[BTC Brain] ⬆️ Positive reinforcement: insight dir_${pred.direction} diperkuat (×1.05)`);
+      } catch (err) {
+        console.error("[BTC Brain] Positive reinforcement error:", err);
+      }
     }
 
-    // Selalu tandai prediksi sebagai resolved — jangan biarkan stuck di pending
     await db.update(btcusdPredictionsTable)
-      .set({
-        actualPrice: currentPrice,
-        actualDirection,
-        isCorrect,
-        priceDiff,
-        status: "verified",
-      })
+      .set({ actualPrice: currentPrice, actualDirection, isCorrect, priceDiff, status: "verified" })
       .where(eq(btcusdPredictionsTable.id, pred.id));
   }
 
   return { checked: checkedCount, wrong: wrongCount };
 }
 
-// ─── Core learning cycle ───────────────────────────────────────────────────────
+// ─── Mini-siklus Verifikasi Cepat (60 detik, tanpa AI) ────────────────────────
+async function runBtcVerificationCycle(): Promise<void> {
+  if (isLearning || isExtremeRunning) return;
+  try {
+    const [last] = await db
+      .select({ price: btcusdSnapshotsTable.price, snapshotAt: btcusdSnapshotsTable.snapshotAt })
+      .from(btcusdSnapshotsTable)
+      .orderBy(desc(btcusdSnapshotsTable.snapshotAt))
+      .limit(1);
+    if (!last) return;
+    const result = await verifyOldPredictions(last.price);
+    if (result.checked > 0) {
+      console.log(`[BTC Verify] ⚡ Fast check: ${result.checked} prediksi diverifikasi (${result.wrong} salah)`);
+    }
+  } catch { /* non-fatal */ }
+}
+
+// ─── Core Learning Cycle — belajar setiap 2 menit ─────────────────────────────
 export async function runBtcLearningCycle(): Promise<void> {
   if (isLearning || isExtremeRunning) return;
   isLearning = true;
@@ -845,7 +987,7 @@ export async function runBtcLearningCycle(): Promise<void> {
   let indicators: BtcusdIndicators | null = null;
 
   try {
-    // 1. Fetch live indicators (with historical fallback)
+    // 1. Fetch live indicators
     try { indicators = await fetchBtcusdIndicators("1h"); } catch { /* try fallback */ }
     if (!indicators) {
       try { indicators = await getHistoricalIndicators(); } catch { /* skip */ }
@@ -862,7 +1004,23 @@ export async function runBtcLearningCycle(): Promise<void> {
       if (last) spikeDetected = Math.abs((indicators.price - last.price) / last.price) >= SPIKE_THRESHOLD;
     } catch { /* non-fatal */ }
 
-    // 3. Save snapshot
+    // 3. Ambil data tambahan secara paralel
+    const [fgResult, fundingResult, avgVolumeResult] = await Promise.allSettled([
+      fetchFearGreedIndex(),
+      fetchBtcFundingRate(),
+      getAvgVolume(24),
+    ]);
+
+    const fg = fgResult.status === "fulfilled" ? fgResult.value : null;
+    const funding = fundingResult.status === "fulfilled" ? fundingResult.value : null;
+    const avgVolume = avgVolumeResult.status === "fulfilled" ? avgVolumeResult.value : 0;
+    const halving = getBtcHalvingContext();
+
+    if (fg) console.log(`[BTC Brain] 😨 Fear & Greed: ${fg.value}/100 (${fg.classification})`);
+    if (funding) console.log(`[BTC Brain] 💰 Funding Rate: ${(funding.rate * 100).toFixed(4)}%`);
+    console.log(`[BTC Brain] 🪙 Halving: fase ${halving.phase} (${halving.daysSinceHalving} hari sejak halving)`);
+
+    // 4. Save snapshot
     db.insert(btcusdSnapshotsTable).values({
       price: indicators.price, open: indicators.open, high: indicators.high,
       low: indicators.low, volume: indicators.volume, isSpike: spikeDetected,
@@ -878,12 +1036,14 @@ export async function runBtcLearningCycle(): Promise<void> {
       emaAlignment: indicators.emaAlignment,
     }).catch(() => {});
 
-    // 4. Generate & jawab pertanyaan (3 per siklus normal)
+    // 5. Generate & jawab 5 pertanyaan per siklus (dari 3)
     const SYS = `Kamu adalah expert trader Bitcoin dengan pengalaman 10 tahun. Berikan jawaban SANGAT SPESIFIK dengan angka konkret, strategi actionable. Bahasa Indonesia. Minimal 3 poin actionable per jawaban.`;
     const sessionCache = new Set<string>();
-    const questions = await generateQuestionsWithDeepSeek(indicators, 5, spikeDetected, sessionCache).catch(() => []);
+    const questions = await generateQuestionsWithDeepSeek(
+      indicators, 7, spikeDetected, sessionCache, fg, funding, halving
+    ).catch(() => []);
 
-    for (const { question, hash } of questions.slice(0, 3)) {
+    for (const { question, hash } of questions.slice(0, 5)) {
       try {
         sessionCache.add(hash);
         const inserted = await db
@@ -893,7 +1053,7 @@ export async function runBtcLearningCycle(): Promise<void> {
           .returning({ id: btcusdQuestionsLogTable.id });
         if (!inserted.length) continue;
 
-        const answer = await queryDeepSeek(SYS, question, 800);
+        const answer = await queryDeepSeek(SYS, question, 900);
         const quality = scoreAnswer(question, answer);
         await db.update(btcusdQuestionsLogTable)
           .set({ answer, quality, answeredAt: new Date(), savedToBrain: quality >= QUALITY_THRESHOLD })
@@ -907,30 +1067,30 @@ export async function runBtcLearningCycle(): Promise<void> {
             content: answer,
             confidence: quality,
             sourceQuestion: question,
-            marketConditionTags: extractMarketTags(indicators),
+            marketConditionTags: extractMarketTags(indicators, avgVolume),
           });
           insightsSaved++;
           totalInsights++;
         }
-      } catch { /* non-fatal, lanjut pertanyaan berikutnya */ }
+      } catch { /* non-fatal */ }
     }
 
-    // 5. Prediksi dengan Ensemble Voting (paralel dengan korelasi makro)
+    // 6. Prediksi Ensemble Voting
     try {
       const corrResult = await Promise.allSettled([getBtcCorrelationAnalysis()]);
-      await makePrediction(indicators, corrResult[0]);
+      await makePrediction(indicators, corrResult[0], fg, funding, halving, avgVolume);
     } catch (err) {
       console.error("[BTC Brain] Prediction error:", err);
     }
 
-    // 6. Verifikasi prediksi lama + self-correction
+    // 7. Verifikasi prediksi lama + self-correction
     let checked = 0; let wrong = 0;
     try {
       const r = await verifyOldPredictions(indicators.price);
       checked = r.checked; wrong = r.wrong;
     } catch { /* non-fatal */ }
 
-    // 7. Forget Curve — exponential decay (setiap siklus, bukan setiap 50 siklus)
+    // 8. Forget Curve
     try { await applyForgetCurve(); } catch { /* non-fatal */ }
 
     totalCycles++;
@@ -944,7 +1104,7 @@ export async function runBtcLearningCycle(): Promise<void> {
       predictionsChecked: checked,
       wrongPredictions: wrong,
       spikeDetected,
-      summary: `Siklus #${totalCycles}: +${insightsSaved} insights, ${checked} prediksi diverifikasi (${wrong} salah)`,
+      summary: `Siklus #${totalCycles}: +${insightsSaved} insights, ${checked} prediksi diverifikasi (${wrong} salah). F&G: ${fg ? fg.value : "N/A"}, Funding: ${funding ? (funding.rate * 100).toFixed(4) + "%" : "N/A"}`,
       durationMs: Date.now() - cycleStart,
     }).catch(() => {});
 
@@ -970,6 +1130,7 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
   const SYS = `Kamu adalah expert trader Bitcoin/Crypto dengan pengalaman 10 tahun. Berikan jawaban SANGAT SPESIFIK, angka konkret, strategi actionable. Bahasa Indonesia. Minimal 3 poin actionable per jawaban.`;
   let consecutiveErrors = 0;
   const MAX_ERR = 5;
+  const halving = getBtcHalvingContext();
 
   while (extremeProgress < target && !extremeAbort) {
     if (consecutiveErrors >= MAX_ERR) {
@@ -988,12 +1149,19 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
     }
     if (!indicators) { if (await sleepOrAbort(30_000)) break; continue; }
 
+    const [fgResult, fundingResult] = await Promise.allSettled([
+      fetchFearGreedIndex(),
+      fetchBtcFundingRate(),
+    ]);
+    const fg = fgResult.status === "fulfilled" ? fgResult.value : null;
+    const funding = fundingResult.status === "fulfilled" ? fundingResult.value : null;
+
     const remaining = target - extremeProgress;
     const count = Math.min(qpc, remaining);
     let toAsk: Array<{ question: string; hash: string }> = [];
 
     try {
-      toAsk = (await generateQuestionsWithDeepSeek(indicators, count + 3, false, extremeHashCache!)).slice(0, count);
+      toAsk = (await generateQuestionsWithDeepSeek(indicators, count + 3, false, extremeHashCache!, fg, funding, halving)).slice(0, count);
       if (toAsk.length) console.log(`[BTC Extreme] 🤖 DeepSeek generate ${toAsk.length} pertanyaan`);
     } catch (e) { console.warn("[BTC Extreme] Generate gagal:", String(e)); }
 
@@ -1040,7 +1208,7 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
         }
         if (extremeProgress >= target || extremeAbort) break;
 
-        const pause = 15_000 + Math.random() * 15_000;
+        const pause = 10_000 + Math.random() * 10_000;
         console.log(`[BTC Extreme] ⏱ Jeda ${(pause / 1000).toFixed(0)}s → ke-${extremeProgress + 1}/${target}`);
         if (await sleepOrAbort(pause)) break;
       } catch (err) {
@@ -1110,7 +1278,7 @@ export function getBtcEngineStatus() {
     totalCycles,
     totalInsights,
     isLearning,
-    marketOpen: true, // BTC 24/7
+    marketOpen: true,
     extremeMode: {
       active: isExtremeRunning,
       target: extremeTarget,
@@ -1127,15 +1295,24 @@ export function getBtcEngineStatus() {
   };
 }
 
-// ─── Engine start/stop ─────────────────────────────────────────────────────────
+// ─── Engine start/stop — belajar setiap 2 menit + verifikasi setiap 60 detik ───
 export function startBtcBrainEngine(): void {
   if (learningTimer) return;
-  console.log("[BTC Brain] Engine started. Learning cycle every 5 minutes.");
+  console.log("[BTC Brain] 🚀 Engine v2 started. Belajar setiap 2 menit + verifikasi setiap 60 detik.");
+  console.log("[BTC Brain] Fitur baru: Fear & Greed Index, Funding Rate, Halving Phase, BB Squeeze, Volume Spike, Positive Reinforcement.");
+
+  // Main cycle: setiap 2 menit (full learning + prediction)
   learningTimer = setInterval(() => { runBtcLearningCycle().catch(console.error); }, LEARN_INTERVAL_MS);
+
+  // Mini cycle: setiap 60 detik (hanya verifikasi prediksi, tanpa AI call)
+  verifyTimer = setInterval(() => { runBtcVerificationCycle().catch(console.error); }, VERIFY_INTERVAL_MS);
+
+  // Jalankan cycle pertama langsung
   runBtcLearningCycle().catch(console.error);
 }
 
 export function stopBtcBrainEngine(): void {
   if (learningTimer) { clearInterval(learningTimer); learningTimer = null; }
+  if (verifyTimer) { clearInterval(verifyTimer); verifyTimer = null; }
   console.log("[BTC Brain] Engine stopped.");
 }

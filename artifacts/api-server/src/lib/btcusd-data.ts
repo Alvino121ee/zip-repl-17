@@ -226,6 +226,104 @@ const CORRELATION_FACTORS = [
   },
 ];
 
+// ─── Fear & Greed Index (alternative.me — gratis, tanpa API key) ──────────────
+export interface FearGreedData {
+  value: number;
+  classification: string;
+  timestamp: number;
+}
+
+export async function fetchFearGreedIndex(): Promise<FearGreedData> {
+  const res = await fetch("https://api.alternative.me/fng/?limit=1", {
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`Fear & Greed API HTTP ${res.status}`);
+  const json = (await res.json()) as {
+    data: Array<{ value: string; value_classification: string; timestamp: string }>;
+  };
+  const item = json.data[0];
+  if (!item) throw new Error("Fear & Greed: no data");
+  return {
+    value: parseInt(item.value, 10),
+    classification: item.value_classification,
+    timestamp: parseInt(item.timestamp, 10) * 1000,
+  };
+}
+
+// ─── BTC Funding Rate (Binance Perpetual — gratis, tanpa API key) ─────────────
+export interface FundingRateData {
+  rate: number;
+  rateAnnualized: number;
+  timestamp: number;
+}
+
+export async function fetchBtcFundingRate(): Promise<FundingRateData> {
+  const res = await fetch(
+    "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+    { signal: AbortSignal.timeout(8000) }
+  );
+  if (!res.ok) throw new Error(`Binance Funding Rate HTTP ${res.status}`);
+  const json = (await res.json()) as {
+    lastFundingRate: string;
+    time: number;
+  };
+  const rate = parseFloat(json.lastFundingRate ?? "0");
+  return {
+    rate,
+    rateAnnualized: rate * 3 * 365 * 100,
+    timestamp: json.time ?? Date.now(),
+  };
+}
+
+// ─── BTC Halving Phase ────────────────────────────────────────────────────────
+export type BtcHalvingPhase =
+  | "post_halving_early"
+  | "bull_peak"
+  | "bear_distribution"
+  | "bear_bottom"
+  | "pre_halving_recovery";
+
+export interface HalvingContext {
+  phase: BtcHalvingPhase;
+  daysSinceHalving: number;
+  daysToNextHalving: number;
+  phaseDescription: string;
+}
+
+export function getBtcHalvingContext(): HalvingContext {
+  const LAST_HALVING = new Date("2024-04-20T00:00:00Z").getTime();
+  const CYCLE_DAYS = 1458;
+  const daysSince = (Date.now() - LAST_HALVING) / 86_400_000;
+  const daysToNext = Math.max(0, CYCLE_DAYS - daysSince);
+
+  let phase: BtcHalvingPhase;
+  let phaseDescription: string;
+
+  if (daysSince < 180) {
+    phase = "post_halving_early";
+    phaseDescription = "Awal pasca-halving (0-6 bln): supply shock — historis bullish kuat.";
+  } else if (daysSince < 540) {
+    phase = "bull_peak";
+    phaseDescription = "Bull peak (6-18 bln): BTC sering ATH — momentum bullish dominan.";
+  } else if (daysSince < 900) {
+    phase = "bear_distribution";
+    phaseDescription = "Distribusi bear (18-30 bln): koreksi besar, distribusi holder jangka panjang.";
+  } else if (daysSince < 1100) {
+    phase = "bear_bottom";
+    phaseDescription = "Bottom bear (30-36 bln): kapitulasi & akumulasi smart money.";
+  } else {
+    phase = "pre_halving_recovery";
+    phaseDescription = "Pre-halving recovery (36+ bln): antisipasi halving mendorong harga naik.";
+  }
+
+  return {
+    phase,
+    daysSinceHalving: Math.round(daysSince),
+    daysToNextHalving: Math.round(daysToNext),
+    phaseDescription,
+  };
+}
+
 export async function getBtcCorrelationAnalysis(): Promise<BtcCorrelationResponse> {
   // Fetch BTC price first
   const btcData = await fetchBtcusdLivePrice().catch(() => null);
