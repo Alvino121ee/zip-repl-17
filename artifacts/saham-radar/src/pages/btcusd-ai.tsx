@@ -1114,7 +1114,7 @@ function SettingsTab({ settings, onSaveKey, savingKey, toast, qc }: {
 // ─── Extreme Mode Tab ─────────────────────────────────────────────────────────
 function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onRefresh: () => void; toast: ReturnType<typeof useToast>["toast"] }) {
   const [target, setTarget] = useState(100);
-  const [qpc, setQpc] = useState(10);
+  const [qpc, setQpc] = useState(15);
 
   const startM = useMutation({
     mutationFn: () => apiPost("/engine/extreme/start", { target, questionsPerCycle: qpc }),
@@ -1173,7 +1173,7 @@ function ExtremeTab({ em, onRefresh, toast }: { em: ExtremeMode | undefined; onR
         ) : (
           <div className="space-y-4">
             <p className="text-xs text-muted-foreground">
-              Mode ekstrem menggunakan DeepSeek R1 untuk menghasilkan dan menjawab ratusan pertanyaan trading Bitcoin secara otomatis. BTC 24/7 — bisa dijalankan kapan saja.
+              Mode ekstrem menggunakan DeepSeek untuk menghasilkan dan menjawab ratusan pertanyaan trading Bitcoin <strong className="text-orange-400">tanpa jeda</strong> — setelah jawab langsung tanya lagi. BTC 24/7, bisa dijalankan kapan saja.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div>

@@ -1221,43 +1221,96 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
   const MAX_ERR = 5;
   const halving = getBtcHalvingContext();
 
+  // Pipeline: batch pertanyaan berikutnya di-prefetch saat batch ini sedang dijawab
+  let nextBatchPromise: Promise<Array<{ question: string; hash: string }>> | null = null;
+  let currentIndicators: BtcusdIndicators | null = null;
+  let currentFg: FearGreedData | null = null;
+  let currentFunding: FundingRateData | null = null;
+
+  // Fungsi fetch semua data market sekaligus
+  async function fetchMarketData(): Promise<BtcusdIndicators | null> {
+    let ind: BtcusdIndicators | null = null;
+    try { ind = await fetchBtcusdIndicators("1h"); extremeDataMode = "live"; }
+    catch { try { ind = await getHistoricalIndicators(); extremeDataMode = "historical"; } catch { /* */ } }
+    return ind;
+  }
+
+  // Fungsi generate pertanyaan dan langsung filter duplikat
+  async function prefetchBatch(ind: BtcusdIndicators, fg: FearGreedData | null, funding: FundingRateData | null, count: number): Promise<Array<{ question: string; hash: string }>> {
+    try {
+      const questions = await generateQuestionsWithDeepSeek(ind, count + 5, false, extremeHashCache!, fg, funding, halving);
+      return questions.slice(0, count);
+    } catch { return []; }
+  }
+
   while (extremeProgress < target && !extremeAbort) {
+    // Circuit breaker
     if (consecutiveErrors >= MAX_ERR) {
-      console.warn("[BTC Extreme] Circuit breaker — jeda 5 menit...");
+      console.warn("[BTC Extreme] ⚡ Circuit breaker — jeda 5 menit...");
       consecutiveErrors = 0;
       if (await sleepOrAbort(5 * 60_000)) break;
       continue;
     }
 
-    let indicators: BtcusdIndicators | null = null;
-    try {
-      indicators = await fetchBtcusdIndicators("1h");
-      extremeDataMode = "live";
-    } catch {
-      try { indicators = await getHistoricalIndicators(); extremeDataMode = "historical"; } catch { /* */ }
-    }
+    // Ambil data market
+    const indicators = currentIndicators ?? await fetchMarketData();
+    currentIndicators = null; // reset setelah dipakai
     if (!indicators) { if (await sleepOrAbort(30_000)) break; continue; }
 
-    const [fgResult, fundingResult] = await Promise.allSettled([
-      fetchFearGreedIndex(),
-      fetchBtcFundingRate(),
-    ]);
-    const fg = fgResult.status === "fulfilled" ? fgResult.value : null;
-    const funding = fundingResult.status === "fulfilled" ? fundingResult.value : null;
+    const [fgResult, fundingResult] = await Promise.allSettled([fetchFearGreedIndex(), fetchBtcFundingRate()]);
+    const fg = currentFg ?? (fgResult.status === "fulfilled" ? fgResult.value : null);
+    const funding = currentFunding ?? (fundingResult.status === "fulfilled" ? fundingResult.value : null);
+    currentFg = null;
+    currentFunding = null;
 
     const remaining = target - extremeProgress;
     const count = Math.min(qpc, remaining);
+
+    // Pakai batch yang sudah di-prefetch sebelumnya, atau generate sekarang
     let toAsk: Array<{ question: string; hash: string }> = [];
+    if (nextBatchPromise) {
+      toAsk = await nextBatchPromise;
+      nextBatchPromise = null;
+    }
+    if (!toAsk.length) {
+      toAsk = await prefetchBatch(indicators, fg, funding, count);
+    }
+    if (toAsk.length) console.log(`[BTC Extreme] 🤖 Batch ${toAsk.length} pertanyaan siap`);
 
-    try {
-      toAsk = (await generateQuestionsWithDeepSeek(indicators, count + 3, false, extremeHashCache!, fg, funding, halving)).slice(0, count);
-      if (toAsk.length) console.log(`[BTC Extreme] 🤖 DeepSeek generate ${toAsk.length} pertanyaan`);
-    } catch (e) { console.warn("[BTC Extreme] Generate gagal:", String(e)); }
+    if (!toAsk.length) {
+      console.warn("[BTC Extreme] ⚠️ Tidak ada pertanyaan baru — generate ulang 10s...");
+      if (await sleepOrAbort(10_000)) break;
+      extremeCycleCount++;
+      continue;
+    }
 
-    if (!toAsk.length) { if (await sleepOrAbort(30_000)) break; extremeCycleCount++; continue; }
-
-    for (const { question, hash } of toAsk) {
+    // Jawab setiap pertanyaan TANPA JEDA — langsung lanjut ke berikutnya
+    for (let i = 0; i < toAsk.length; i++) {
       if (extremeAbort || extremeProgress >= target) break;
+      const { question, hash } = toAsk[i];
+
+      // Pipeline: mulai prefetch batch berikutnya saat menjawab pertanyaan terakhir di batch ini
+      if (i === toAsk.length - 1 && !extremeAbort && extremeProgress + 1 < target) {
+        const nextCount = Math.min(qpc, target - extremeProgress - 1);
+        if (nextCount > 0) {
+          // Fetch data market baru untuk batch berikutnya secara paralel
+          nextBatchPromise = (async () => {
+            const [nextInd, nextFgR, nextFundR] = await Promise.all([
+              fetchMarketData(),
+              fetchFearGreedIndex().catch(() => null),
+              fetchBtcFundingRate().catch(() => null),
+            ]);
+            if (nextInd) {
+              currentIndicators = nextInd;
+              currentFg = nextFgR;
+              currentFunding = nextFundR;
+              return prefetchBatch(nextInd, nextFgR, nextFundR, nextCount);
+            }
+            return [];
+          })();
+        }
+      }
+
       try {
         extremeHashCache!.add(hash);
         const inserted = await db
@@ -1265,7 +1318,12 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
           .values({ question, questionHash: hash, marketContext: indicators as unknown as Record<string, unknown> })
           .onConflictDoNothing()
           .returning({ id: btcusdQuestionsLogTable.id });
-        if (!inserted.length) { console.log("[BTC Extreme] ⏭ Skip duplikat"); continue; }
+
+        // Skip duplikat dari sesi sebelumnya (hash ada di DB) — tidak hitung sebagai error
+        if (!inserted.length) {
+          console.log("[BTC Extreme] ⏭ Skip duplikat (sudah pernah ditanya)");
+          continue;
+        }
 
         const answer = await queryDeepSeek(SYS, question, 1_000);
         const quality = scoreAnswer(question, answer);
@@ -1290,21 +1348,30 @@ async function runBtcExtremeLearningLoop(target: number, qpc: number): Promise<v
         const nowTs = Date.now();
         extremeLastProgressAt = nowTs;
         extremeProgressHistory.push({ ts: nowTs, count: extremeProgress });
-        if (extremeProgressHistory.length > 30) extremeProgressHistory.shift();
+        if (extremeProgressHistory.length > 50) extremeProgressHistory.shift();
 
         if (extremeProgress % 10 === 0 || extremeProgress === target) {
           console.log(`[BTC Extreme] 📊 ${extremeProgress}/${target} (${Math.round((extremeProgress / target) * 100)}%) — Insights: ${extremeInsightsTotal}`);
         }
-        if (extremeProgress >= target || extremeAbort) break;
 
-        const pause = 10_000 + Math.random() * 10_000;
-        console.log(`[BTC Extreme] ⏱ Jeda ${(pause / 1000).toFixed(0)}s → ke-${extremeProgress + 1}/${target}`);
-        if (await sleepOrAbort(pause)) break;
+        // Yield singkat (100ms) agar event loop tidak terblokir — BUKAN jeda belajar
+        await new Promise(r => setTimeout(r, 100));
+
       } catch (err) {
+        const errStr = String(err);
         consecutiveErrors++;
-        console.error(`[BTC Extreme] ❌ Error (${consecutiveErrors}/${MAX_ERR}):`, String(err));
-        extremeHashCache!.delete(hash);
-        if (await sleepOrAbort(5_000)) break;
+        console.error(`[BTC Extreme] ❌ Error (${consecutiveErrors}/${MAX_ERR}):`, errStr);
+        extremeHashCache!.delete(hash); // hapus dari cache agar bisa dicoba di sesi lain
+
+        // Adaptive backoff: hanya jeda panjang jika kena rate limit
+        const isRateLimit = errStr.includes("429") || errStr.toLowerCase().includes("rate limit");
+        if (isRateLimit) {
+          console.warn("[BTC Extreme] 🚦 Rate limit terdeteksi — jeda 60 detik...");
+          if (await sleepOrAbort(60_000)) break;
+        } else {
+          // Error biasa: jeda 2 detik saja, langsung lanjut
+          if (await sleepOrAbort(2_000)) break;
+        }
       }
     }
     extremeCycleCount++;
@@ -1326,17 +1393,27 @@ export function startBtcExtremeLearningMode(target: number, questionsPerCycle: n
   extremeLastProgressAt = null;
   extremeDataMode = "live";
   extremeHashCache = new Set();
-  console.log(`[BTC Extreme] 🚀 Mulai — target: ${target} pertanyaan, ${safeQpc}/siklus`);
+  console.log(`[BTC Extreme] 🚀 Mulai — target: ${target} pertanyaan, ${safeQpc}/siklus (tanpa jeda)`);
   (async () => {
-    try { await runBtcExtremeLearningLoop(target, safeQpc); }
-    catch (e) { console.error("[BTC Extreme] Loop error:", e); }
-    finally {
+    try {
+      // Muat hash semua pertanyaan yang pernah ditanya dari DB ke memory cache
+      // sehingga pertanyaan dari sesi sebelumnya tidak akan terulang
+      const existingHashes = await db
+        .select({ questionHash: btcusdQuestionsLogTable.questionHash })
+        .from(btcusdQuestionsLogTable);
+      for (const row of existingHashes) extremeHashCache!.add(row.questionHash);
+      console.log(`[BTC Extreme] 🔐 Dedup lintas-sesi aktif — ${existingHashes.length} hash dimuat dari DB`);
+
+      await runBtcExtremeLearningLoop(target, safeQpc);
+    } catch (e) {
+      console.error("[BTC Extreme] Loop error:", e);
+    } finally {
       isExtremeRunning = false;
       extremeHashCache = null;
       console.log(`[BTC Extreme] ✅ Sesi berakhir — ${extremeProgress}/${extremeTarget} pertanyaan`);
     }
   })();
-  return { ok: true, message: `Mode ekstrem BTC dimulai — target ${target} pertanyaan.` };
+  return { ok: true, message: `Mode ekstrem BTC dimulai — target ${target} pertanyaan, tanpa jeda.` };
 }
 
 export function stopBtcExtremeLearningMode(): { ok: boolean; message: string } {
