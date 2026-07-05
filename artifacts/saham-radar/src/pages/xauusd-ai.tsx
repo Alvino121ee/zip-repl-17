@@ -710,6 +710,7 @@ interface Prediction {
   status: string; revisionNote: string | null; timeframe: string;
   predictionType: "training" | "main";
   entryLow: number | null; entryHigh: number | null; stopLoss: number | null;
+  priceP10: number | null; priceP50: number | null; priceP90: number | null;
   indicatorsAtPrediction?: { ensembleVotes?: EnsembleVotes; [key: string]: unknown };
 }
 
@@ -1322,6 +1323,42 @@ function PredictionList({ preds }: { preds: Prediction[] }) {
                   )}
                 </div>
               )}
+              {/* Perbaikan #4: Fan chart distribusi probabilitas harga P10/P50/P90 */}
+              {(p.priceP10 != null || p.priceP50 != null || p.priceP90 != null) && (() => {
+                const p10 = p.priceP10 ?? p.priceAtPrediction;
+                const p50 = p.priceP50 ?? p.priceAtPrediction;
+                const p90 = p.priceP90 ?? p.priceAtPrediction;
+                const lo = Math.min(p10, p50, p90, p.priceAtPrediction) * 0.9996;
+                const hi = Math.max(p10, p50, p90, p.priceAtPrediction) * 1.0004;
+                const span = hi - lo || 1;
+                const pos = (v: number) => `${((v - lo) / span * 100).toFixed(1)}%`;
+                return (
+                  <div className="bg-background/50 rounded p-2">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-2">Distribusi Probabilitas Harga</p>
+                    <div className="relative h-5 bg-slate-800/80 rounded overflow-hidden mb-1">
+                      {/* Gradient fill P10→P90 */}
+                      <div
+                        className="absolute top-0 h-full bg-gradient-to-r from-red-500/25 via-amber-500/25 to-emerald-500/25"
+                        style={{ left: pos(Math.min(p10, p90)), width: `${((Math.abs(p90 - p10)) / span * 100).toFixed(1)}%` }}
+                      />
+                      {/* P10 tick */}
+                      <div className="absolute top-0 h-full w-px bg-red-400/80" style={{ left: pos(p10) }} />
+                      {/* P50 tick */}
+                      <div className="absolute top-0 h-full w-0.5 bg-amber-400" style={{ left: pos(p50) }} />
+                      {/* P90 tick */}
+                      <div className="absolute top-0 h-full w-px bg-emerald-400/80" style={{ left: pos(p90) }} />
+                      {/* Entry price tick */}
+                      <div className="absolute top-0 h-full w-px bg-white/50" style={{ left: pos(p.priceAtPrediction) }} />
+                    </div>
+                    <div className="flex justify-between text-[9px]">
+                      {p.priceP10 != null && <span className="text-red-400">P10: ${p.priceP10.toFixed(2)}</span>}
+                      {p.priceP50 != null && <span className="text-amber-400">P50: ${p.priceP50.toFixed(2)}</span>}
+                      {p.priceP90 != null && <span className="text-emerald-400">P90: ${p.priceP90.toFixed(2)}</span>}
+                    </div>
+                    <p className="text-[9px] text-muted-foreground/50 mt-0.5">Garis putih = entry · Bearish-case / Median / Bullish-case</p>
+                  </div>
+                );
+              })()}
               <div className="bg-background/50 rounded p-2">
                 <p className="text-xs font-medium text-muted-foreground mb-1">Alasan Prediksi:</p>
                 <p className="text-sm">{p.reasoning}</p>

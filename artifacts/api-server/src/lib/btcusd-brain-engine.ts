@@ -136,44 +136,52 @@ function hashQuestion(q: string): string {
 }
 
 // ─── Score answer quality (0.0–1.0) — diperbaiki ──────────────────────────────
+/**
+ * Perbaikan #1: scoreAnswer berbasis kualitas — struktur, penalaran
+ * kondisional, angka actionable; bukan sekadar keyword count / panjang.
+ */
 function scoreAnswer(question: string, answer: string): number {
+  if (!answer || answer.length < 100) return Math.min(0.4, 0.5);
+
   let score = 0.5;
+  const lc = answer.toLowerCase();
 
-  // Panjang jawaban
-  if (answer.length > 300) score += 0.08;
-  if (answer.length > 600) score += 0.08;
-  if (answer.length > 900) score += 0.04;
+  // ── Panjang (bonus modest) ─────────────────────────────────────────────────
+  if (answer.length > 400) score += 0.05;
+  if (answer.length > 800) score += 0.04;
 
-  // Ada angka spesifik
-  const hasNumbers = /\d+\.?\d*%?/.test(answer);
-  if (hasNumbers) score += 0.08;
+  // ── Struktur: poin bernomor / bullet ──────────────────────────────────────
+  const bulletLines = (answer.match(/^\s*[\d\-\*•]/gm) ?? []).length;
+  if (bulletLines >= 3) score += 0.08;
+  if (bulletLines >= 6) score += 0.04;
 
-  // Kata-kata actionable
+  // ── Penalaran kondisional — "jika…maka", skenario if-then ─────────────────
+  const conditionals = (lc.match(/\b(jika|apabila|ketika|bila|saat)\b/g) ?? []).length;
+  if (conditionals >= 2) score += 0.08;
+  if (conditionals >= 4) score += 0.04;
+
+  // ── Angka actionable spesifik (harga, %, level) ───────────────────────────
+  const specificNumbers = answer.match(/\d+\.?\d*\s*(%|k|ribu|\$)/gi) ?? [];
+  score += Math.min(0.10, specificNumbers.length * 0.025);
+  if (/\$\s*[\d,]+/.test(answer)) score += 0.04;   // harga BTC dengan $ prefix
+  const allNumbers = answer.match(/\d+\.?\d*/g) ?? [];
+  if (allNumbers.length >= 5) score += 0.04;
+
+  // ── Terminologi relevan BTC ────────────────────────────────────────────────
   const actionWords = [
     "entry", "stop", "target", "support", "resistance",
-    "buy", "sell", "beli", "jual", "level", "harga",
-    "strategi", "risiko", "konfirmasi", "breakout",
-    "funding", "fear", "greed", "halving", "on-chain",
+    "buy", "sell", "beli", "jual", "level", "harga", "strategi",
+    "risiko", "konfirmasi", "breakout", "funding", "fear", "greed",
+    "halving", "on-chain", "dominance", "liquidation", "confluence",
   ];
-  const hits = actionWords.filter((w) => answer.toLowerCase().includes(w)).length;
-  score += Math.min(hits * 0.025, 0.12);
+  const hits = actionWords.filter((w) => lc.includes(w)).length;
+  score += Math.min(hits * 0.015, 0.10);
 
-  // Ada poin bernomor → terstruktur
-  const bulletPoints = (answer.match(/^\s*[\d\-\*•]/gm) ?? []).length;
-  if (bulletPoints >= 3) score += 0.06;
-
-  // Penalti: terlalu banyak tanda tanya (tidak pasti)
-  if (answer.includes("?") && answer.split("?").length > 2) score -= 0.05;
-
-  // Penalti: jawaban terlalu pendek
-  if (answer.length < 100) score = Math.min(score, 0.4);
-
-  // Penalti: jawaban samar
+  // ── Penalti: jawaban samar / retoris ──────────────────────────────────────
   const vague = ["itu tergantung", "sangat bervariasi", "tidak bisa dipastikan", "sulit dikatakan"];
-  if (vague.some((v) => answer.toLowerCase().includes(v))) score -= 0.1;
-
-  // Bonus: menyebut angka harga BTC spesifik
-  if (/\$\s*[\d,]+/.test(answer)) score += 0.04;
+  if (vague.some((v) => lc.includes(v))) score -= 0.12;
+  const questionMarks = (answer.match(/\?/g) ?? []).length;
+  if (questionMarks > 3) score -= 0.06;
 
   return Math.min(Math.max(score, 0), 1);
 }

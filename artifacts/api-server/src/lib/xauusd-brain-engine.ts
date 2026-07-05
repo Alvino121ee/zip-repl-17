@@ -516,33 +516,57 @@ async function filterNewQuestions(
 
 // ─── Answer quality scorer ─────────────────────────────────────────────────────
 
+/**
+ * Perbaikan #1: scoreAnswer berbasis kualitas — menilai struktur, penalaran
+ * kondisional, dan spesifisitas angka; bukan sekadar panjang teks.
+ */
 function scoreAnswer(question: string, answer: string): number {
   if (!answer || answer.length < 100) return 0;
 
   let score = 0.5;
   const lc = answer.toLowerCase();
 
-  // Length bonus
-  if (answer.length > 500) score += 0.1;
-  if (answer.length > 1000) score += 0.1;
+  // ── Panjang (bonus modest, bukan poin utama) ───────────────────────────────
+  if (answer.length > 400) score += 0.05;
+  if (answer.length > 800) score += 0.05;
 
-  // Technical specificity
+  // ── Struktur: poin bernomor / bullet → jawaban terorganisir ───────────────
+  const bulletLines = (answer.match(/^\s*[\d\-\*•]/gm) ?? []).length;
+  if (bulletLines >= 3) score += 0.08;
+  if (bulletLines >= 6) score += 0.04;
+
+  // ── Penalaran kondisional — "jika…maka", skenario if-then ─────────────────
+  const conditionals = (lc.match(/\b(jika|apabila|ketika|bila|saat)\b/g) ?? []).length;
+  if (conditionals >= 2) score += 0.08;
+  if (conditionals >= 4) score += 0.04;
+
+  // ── Angka actionable spesifik (harga, %, pips, ATR, level) ───────────────
+  const specificNumbers = answer.match(/\d+\.?\d*\s*(%|pips?|atr|\$)/gi) ?? [];
+  score += Math.min(0.10, specificNumbers.length * 0.025);
+  const allNumbers = answer.match(/\d+\.?\d*/g) ?? [];
+  if (allNumbers.length >= 5) score += 0.04;
+
+  // ── Terminologi teknikal relevan XAUUSD ───────────────────────────────────
   const technicalTerms = [
     "rsi", "ema", "macd", "support", "resistance", "entry", "exit",
     "stop loss", "take profit", "risk", "ratio", "win rate", "setup",
     "breakout", "breakdown", "divergence", "momentum", "trend",
-    "session", "volatility", "atr", "bollinger",
+    "session", "volatility", "atr", "bollinger", "fib", "retracement",
+    "dxy", "yield", "confluence", "timeframe",
   ];
-  const matchedTerms = technicalTerms.filter((t) => lc.includes(t));
-  score += Math.min(0.25, matchedTerms.length * 0.02);
+  const matched = technicalTerms.filter((t) => lc.includes(t)).length;
+  score += Math.min(0.12, matched * 0.015);
 
-  // Numbers and specific data
-  const numbers = answer.match(/\d+\.?\d*/g) ?? [];
-  if (numbers.length > 5) score += 0.05;
+  // ── Penalti: jawaban samar / tidak menjawab ────────────────────────────────
+  const vague = [
+    "itu tergantung", "sangat bervariasi", "tidak bisa dipastikan",
+    "sulit dikatakan", "tidak ada jawaban pasti",
+  ];
+  if (vague.some((v) => lc.includes(v))) score -= 0.12;
 
-  // Penalize vague answers
-  const vague = ["itu tergantung", "sangat bervariasi", "tidak bisa dipastikan"];
-  if (vague.some((v) => lc.includes(v))) score -= 0.1;
+  // Penalti: terlalu banyak pertanyaan retoris (AI balik bertanya)
+  const questionMarks = (answer.match(/\?/g) ?? []).length;
+  if (questionMarks > 3) score -= 0.06;
 
   return Math.min(1, Math.max(0, score));
 }
@@ -706,7 +730,14 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
 
 // ─── Macro vote helper ─────────────────────────────────────────────────────────
 
-function computeMacroVote(corr: { dxy: { changePct?: number | null }; us10y: { changePct?: number | null } }): { direction: "up" | "down" | "sideways"; confidence: number } {
+/**
+ * Perbaikan #2: Macro vote kini mempertimbangkan tren kumulatif 5 hari terakhir
+ * DXY/US10Y, bukan hanya perubahan satu hari. Blend 50% single-day + 50% trend.
+ */
+function computeMacroVote(
+  corr: { dxy: { changePct?: number | null }; us10y: { changePct?: number | null } },
+  recentMacro?: Array<{ dxyChangePct: number | null; us10yChangePct: number | null }>
+): { direction: "up" | "down" | "sideways"; confidence: number } {
   const dxyChange = corr.dxy.changePct ?? 0;
   const yieldChange = corr.us10y.changePct ?? 0;
   // DXY up → bearish gold; DXY down → bullish gold
@@ -716,7 +747,20 @@ function computeMacroVote(corr: { dxy: { changePct?: number | null }; us10y: { c
   else if (dxyChange > 0.1) score -= 1;
   if (yieldChange < -0.02) score += 0.5;
   else if (yieldChange > 0.02) score -= 0.5;
-  const direction: "up" | "down" | "sideways" = score >= 0.8 ? "up" : score <= -0.8 ? "down" : "sideways";
+
+  // Tren kumulatif 5 hari — menangkap sustained move yang lolos dari threshold harian
+  if (recentMacro && recentMacro.length >= 3) {
+    const dxyCum = recentMacro.reduce((s, r) => s + (r.dxyChangePct ?? 0), 0);
+    const yieldCum = recentMacro.reduce((s, r) => s + (r.us10yChangePct ?? 0), 0);
+    let trendScore = 0;
+    if (dxyCum < -0.3) trendScore += 1;       // DXY turun >0.3% kumulatif → bullish gold
+    else if (dxyCum > 0.3) trendScore -= 1;
+    if (yieldCum < -0.08) trendScore += 0.5;
+    else if (yieldCum > 0.08) trendScore -= 0.5;
+    score = score * 0.5 + trendScore * 0.5;   // blend 50/50
+  }
+
+  const direction: "up" | "down" | "sideways" = score >= 0.6 ? "up" : score <= -0.6 ? "down" : "sideways";
   const confidence = Math.min(0.72, 0.38 + Math.abs(score) * 0.22);
   return { direction, confidence };
 }
@@ -844,30 +888,61 @@ export function computeClusterLabel(indicators: XauusdIndicators): string {
 // ─── Feature 1 (extended): Sentiment Vote ─────────────────────────────────────
 // Agen ke-3 dari ensemble: menghitung arah berdasarkan sentimen berita
 
+/**
+ * Perbaikan #5: sentiment vote dengan bobot recency + keyword importance.
+ * Berita < 4 jam → bobot 2×; berita high-impact (Fed/NFP/CPI/dll.) → ×1.5.
+ * Neutral diabaikan; normalisasi berbasis total bobot bukan jumlah berita.
+ */
 function computeSentimentVote(
-  news: Array<{ sentiment: string | null }>
+  news: Array<{ sentiment: string | null; title?: string | null; publishedAt?: Date | string | null }>
 ): { direction: "up" | "down" | "sideways"; confidence: number; label: string } {
   if (news.length === 0)
     return { direction: "sideways", confidence: 0.42, label: "sentiment" };
 
-  let score = 0;
-  for (const n of news) {
-    if (n.sentiment === "bullish") score += 1;
-    else if (n.sentiment === "bearish") score -= 1;
-  }
-  score /= news.length; // normalize −1..+1
+  const HIGH_IMPACT = [
+    "fed", "fomc", "nfp", "cpi", "pce", "war", "sanction", "crisis",
+    "central bank", "rate hike", "rate cut", "inflation", "recession",
+    "federal reserve", "powell", "geopoliti", "conflict",
+  ];
+  const now = Date.now();
 
-  if (score > 0.25) {
+  let weightedScore = 0;
+  let totalWeight = 0;
+
+  for (const n of news) {
+    if (!n.sentiment || n.sentiment === "neutral") continue;
+
+    // Bobot recency: makin baru makin berat
+    let weight = 1.0;
+    if (n.publishedAt) {
+      const ageHours = (now - new Date(n.publishedAt).getTime()) / 3_600_000;
+      if (ageHours < 4) weight = 2.0;
+      else if (ageHours < 12) weight = 1.5;
+    }
+
+    // Bobot tambahan untuk berita high-impact
+    const titleLower = (n.title ?? "").toLowerCase();
+    if (HIGH_IMPACT.some((k) => titleLower.includes(k))) weight *= 1.5;
+
+    weightedScore += (n.sentiment === "bullish" ? 1 : -1) * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight === 0) return { direction: "sideways", confidence: 0.42, label: "sentiment" };
+
+  const score = weightedScore / totalWeight; // normalized −1..+1
+
+  if (score > 0.2) {
     return {
       direction: "up",
-      confidence: Math.min(0.70, 0.48 + Math.abs(score) * 0.25),
+      confidence: Math.min(0.72, 0.48 + Math.abs(score) * 0.28),
       label: "sentiment",
     };
   }
-  if (score < -0.25) {
+  if (score < -0.2) {
     return {
       direction: "down",
-      confidence: Math.min(0.70, 0.48 + Math.abs(score) * 0.25),
+      confidence: Math.min(0.72, 0.48 + Math.abs(score) * 0.28),
       label: "sentiment",
     };
   }
@@ -1017,7 +1092,7 @@ async function makePrediction(
   const currentTags = extractMarketTags(indicators);
 
   // Fetch semua context secara paralel termasuk brain retrieval + segmen win rate
-  const [mtfResult, corrResult, winRateResult, newsResult, brainResult, segWinRateResult] = await Promise.allSettled([
+  const [mtfResult, corrResult, winRateResult, newsResult, brainResult, segWinRateResult, macroSnapshotsResult] = await Promise.allSettled([
     getMultiTimeframeAnalysis(),
     getCorrelationAnalysis(),
     // Win rate: last 50 verified predictions (overall)
@@ -1029,15 +1104,16 @@ async function makePrediction(
       .where(eq(xauusdPredictionsTable.status, "verified"))
       .orderBy(desc(xauusdPredictionsTable.predictedAt))
       .limit(50),
-    // Recent news sentiment
+    // Perbaikan #5: tambah publishedAt + limit 6 untuk recency weighting
     db.select({
       title: xauusdNewsTable.title,
       sentiment: xauusdNewsTable.sentiment,
       aiAnalysis: xauusdNewsTable.aiAnalysis,
+      publishedAt: xauusdNewsTable.publishedAt,
     })
       .from(xauusdNewsTable)
       .orderBy(desc(xauusdNewsTable.publishedAt))
-      .limit(4),
+      .limit(6),
     // Brain retrieval — insights relevan dari memori AI (Prioritas 1)
     retrieveRelevantBrainEntries(currentTags, tradingSession, marketRegime),
     // Segment win rate — akurasi per sesi × regime (last 200 verified)
@@ -1051,6 +1127,14 @@ async function makePrediction(
       .where(eq(xauusdPredictionsTable.status, "verified"))
       .orderBy(desc(xauusdPredictionsTable.predictedAt))
       .limit(200),
+    // Perbaikan #2: 5 macro snapshots terakhir untuk tren kumulatif DXY/Yield
+    db.select({
+      dxyChangePct: xauusdMacroSnapshotsTable.dxyChangePct,
+      us10yChangePct: xauusdMacroSnapshotsTable.us10yChangePct,
+    })
+      .from(xauusdMacroSnapshotsTable)
+      .orderBy(desc(xauusdMacroSnapshotsTable.snapshotAt))
+      .limit(5),
   ]);
 
   let mtfContext = "";
@@ -1271,8 +1355,9 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
 
     // ── Ensemble Voting (Feature 1 — 4 agents: technical/macro/sentiment/AI) ──
     const techVote = { direction: ruleBased.direction, confidence: ruleBased.confidence, label: "technical" };
+    const recentMacro = macroSnapshotsResult.status === "fulfilled" ? macroSnapshotsResult.value : [];
     const macroVote = corrResult.status === "fulfilled"
-      ? { ...computeMacroVote(corrResult.value), label: "macro" }
+      ? { ...computeMacroVote(corrResult.value, recentMacro), label: "macro" }
       : { direction: "sideways" as const, confidence: 0.45, label: "macro" };
     const baseAiConf = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
     const aiVote = { direction, confidence: baseAiConf, label: aiPowered ? "ai" : "rule" };
@@ -2265,11 +2350,33 @@ export async function runLearningCycle(): Promise<{
       }
     }
 
-    // 4. Generate & ask unique questions (5 per cycle, 8 on spike)
+    // 4. Generate & ask unique questions — Perbaikan #3: dynamic gen as primary, static as fallback
     const questionCount = spikeDetected ? 8 : 5;
-    const candidates = getRandomQuestions(indicators, questionCount + 6, spikeDetected); // extras for filtering
-    const newQuestions = await filterNewQuestions(candidates);
-    const toAsk = newQuestions.slice(0, questionCount);
+    let toAsk: Array<{ question: string; hash: string }> = [];
+
+    // Dynamic generation (seperti BTC engine) — adaptif terhadap kondisi pasar real-time
+    try {
+      const dynamicQs = await generateQuestionsWithDeepSeek(
+        indicators, questionCount + 3, spikeDetected, new Set<string>()
+      );
+      const filtered = await filterNewQuestions(dynamicQs);
+      toAsk = filtered.slice(0, questionCount);
+      if (toAsk.length > 0) {
+        console.log(`[XAUUSD Brain] 🧠 Dynamic questions: ${toAsk.length} pertanyaan dari kondisi pasar saat ini`);
+      }
+    } catch {
+      // Fallback ke static templates jika DeepSeek tidak tersedia / gagal
+    }
+
+    // Topup dari static templates jika dynamic tidak cukup
+    if (toAsk.length < questionCount) {
+      const needed = questionCount - toAsk.length;
+      const candidates = getRandomQuestions(indicators, needed + 6, spikeDetected);
+      const filtered = await filterNewQuestions(candidates);
+      const extra = filtered.filter((q) => !toAsk.some((a) => a.hash === q.hash));
+      toAsk.push(...extra.slice(0, needed));
+      if (needed > 0) console.log(`[XAUUSD Brain] 📋 Static fallback: ${Math.min(needed, extra.length)} pertanyaan dari template`);
+    }
 
     // ── Feature 3: Adaptive Question Generator ─────────────────────────────
     // Every 3rd cycle, inject a targeted failure-analysis question if 50+ verified preds
