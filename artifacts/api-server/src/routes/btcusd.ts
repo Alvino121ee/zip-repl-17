@@ -22,6 +22,7 @@ import {
   getBtcEngineStatus, runBtcLearningCycle,
   startBtcExtremeLearningMode, stopBtcExtremeLearningMode,
   startBtcBrainEngine, stopBtcBrainEngine,
+  generateBtcOnDemandPrediction,
 } from "../lib/btcusd-brain-engine.js";
 
 type Req = import("express").Request;
@@ -272,6 +273,20 @@ btcusdRouter.get("/questions", async (req, res) => {
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /btcusd/predict — on-demand prediction (mode: normal|technical|fundamental) ─
+btcusdRouter.post("/predict", requireMember, async (req, res) => {
+  const { mode } = req.body as { mode?: string };
+  if (!mode || !["normal", "technical", "fundamental"].includes(mode)) {
+    return res.status(400).json({ error: "mode harus salah satu dari: normal, technical, fundamental" });
+  }
+  try {
+    const result = await generateBtcOnDemandPrediction(mode as "normal" | "technical" | "fundamental");
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: "Gagal menghasilkan prediksi. Coba lagi." });
   }
 });
 

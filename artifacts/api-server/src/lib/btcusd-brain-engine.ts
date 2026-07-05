@@ -1527,6 +1527,211 @@ export function getBtcEngineStatus() {
   };
 }
 
+// ─── On-Demand Prediction BTC (3 mode: normal | technical | fundamental) ──────
+
+export interface BtcOnDemandPredictionResult {
+  direction: "up" | "down" | "sideways";
+  targetPrice: number;
+  tp2: number | null;
+  tp3: number | null;
+  entryLow: number | null;
+  entryHigh: number | null;
+  stopLoss: number | null;
+  confidence: number;
+  reasoning: string;
+  mode: "normal" | "technical" | "fundamental";
+  asset: "BTCUSD";
+  priceAtPrediction: number;
+  generatedAt: string;
+  aiPowered: boolean;
+}
+
+export async function generateBtcOnDemandPrediction(
+  mode: "normal" | "technical" | "fundamental"
+): Promise<BtcOnDemandPredictionResult> {
+  const indicators = await fetchBtcusdIndicators("1h");
+  if (!indicators) throw new Error("Gagal mengambil data BTC.");
+
+  const ruleBased = computeRuleBasedPrediction(indicators);
+
+  // ── Fetch context berdasarkan mode ────────────────────────────────────────
+  let mtfContext = "";
+  let correlationContext = "";
+  let fgContext = "";
+  let fundingContext = "";
+  let halvingContext = "";
+
+  if (mode === "normal" || mode === "technical") {
+    try {
+      const mtf = await getMultiBtcTimeframeAnalysis();
+      const confluence = summarizeBtcTimeframeConfluence(mtf);
+      mtfContext = `\n\n=== ANALISIS MULTI-TIMEFRAME ===\n${mtf
+        .map((t) => `${t.label}: trend=${t.indicators?.trend ?? "n/a"}, RSI=${t.indicators?.rsi14?.toFixed(1) ?? "n/a"}, EMA=${t.indicators?.emaAlignment ?? "n/a"}`)
+        .join("\n")}\nKonfluensi: ${confluence.agreement} (${confluence.bullishCount} TF bullish, ${confluence.bearishCount} TF bearish)`;
+    } catch { /* non-fatal */ }
+  }
+
+  if (mode === "normal" || mode === "fundamental") {
+    // Correlation
+    try {
+      const corr = await getBtcCorrelationAnalysis();
+      const fmtF = (v: number | null) => v != null ? `${v > 0 ? "+" : ""}${v.toFixed(2)}%` : "n/a";
+      correlationContext = `\n\n=== KORELASI MAKRO BTC ===\n` +
+        corr.factors.map((f) => `${f.name}: ${fmtF(f.changePct)} — ${f.interpretation.slice(0, 80)}`).join("\n");
+    } catch { /* non-fatal */ }
+
+    // Fear & Greed
+    try {
+      const fg = await fetchFearGreedIndex();
+      if (fg) {
+        fgContext = `\n\n=== FEAR & GREED INDEX ===\nNilai: ${fg.value}/100 (${fg.classification})\n${fg.value <= 25 ? "⚠️ EXTREME FEAR = contrarian bullish signal" : fg.value >= 75 ? "⚠️ EXTREME GREED = contrarian bearish signal" : "Sentimen normal."}`;
+      }
+    } catch { /* non-fatal */ }
+
+    // Funding Rate
+    try {
+      const funding = await fetchBtcFundingRate();
+      if (funding) {
+        fundingContext = `\n\n=== FUNDING RATE ===\nRate: ${(funding.rate * 100).toFixed(4)}%${funding.rate > 0.0005 ? " ⚠️ OVERFUNDED LONGS — potensi reversal turun" : funding.rate < -0.0002 ? " ⚠️ OVERFUNDED SHORTS — potensi short squeeze naik" : " (Normal)"}`;
+      }
+    } catch { /* non-fatal */ }
+
+    // Halving
+    try {
+      const halving = getBtcHalvingContext();
+      halvingContext = `\n\n=== HALVING CYCLE BTC ===\n${halving.phaseDescription}\n${halving.daysSinceHalving} hari sejak halving ke-4 | ${halving.daysToNextHalving} hari ke halving ke-5`;
+    } catch { /* non-fatal */ }
+  }
+
+  const modeLabel = mode === "normal" ? "LENGKAP" : mode === "technical" ? "TEKNIKAL ONLY" : "FUNDAMENTAL ONLY";
+
+  let systemPrompt: string;
+  let userMsg: string;
+
+  if (mode === "fundamental") {
+    systemPrompt = `Kamu adalah analis fundamental BTC/USD. Gunakan HANYA data makro dan on-chain: DXY, Nasdaq, Fear & Greed Index, Funding Rate, dan Halving Cycle. Abaikan indikator teknikal.
+
+Fokus pada:
+1. KORELASI MAKRO — DXY, Nasdaq, risiko global
+2. SENTIMEN PASAR — Fear & Greed Index (contrarian di ekstrem)
+3. FUNDING RATE — overleveraged longs/shorts = potensi reversal
+4. HALVING PHASE — posisi dalam siklus 4 tahunan BTC
+
+Jawab HANYA dalam format JSON:
+{
+  "direction": "up" | "down" | "sideways",
+  "targetPrice": <estimasi target, USD>,
+  "tp2": <target lanjutan, USD>,
+  "tp3": <target jauh, USD>,
+  "entryLow": <batas bawah entry, USD>,
+  "entryHigh": <batas atas entry, USD>,
+  "stopLoss": <stop loss, USD>,
+  "confidence": <0.0-1.0>,
+  "reasoning": "<3-4 kalimat — hanya analisis fundamental: makro, F&G, funding, halving>"
+}`;
+    userMsg = `Harga BTC saat ini: ${indicators.price.toLocaleString()}
+Support: ${indicators.supportLevel ?? "n/a"} | Resistance: ${indicators.resistanceLevel ?? "n/a"}
+ATR14: ${indicators.atr14 ?? "n/a"}${correlationContext}${fgContext}${fundingContext}${halvingContext}
+
+Mode: FUNDAMENTAL ONLY. Jawab JSON saja.`;
+  } else if (mode === "technical") {
+    systemPrompt = `Kamu adalah analis teknikal BTC/USD. Gunakan HANYA indikator teknikal: RSI, EMA, MACD, BB, ATR, Support/Resistance, Multi-Timeframe. Abaikan makro dan fundamental.
+
+Urutan analisis:
+1. TREND — EMA alignment, higher high/lower low
+2. MOMENTUM — RSI, MACD, histogram
+3. LEVEL — S/R struktural valid
+4. MTF — konfirmasi timeframe lebih besar
+
+Jawab HANYA dalam format JSON:
+{
+  "direction": "up" | "down" | "sideways",
+  "targetPrice": <TP1 di S/R pertama, USD>,
+  "tp2": <TP2 S/R lanjutan, USD>,
+  "tp3": <TP3 ekstensi, USD>,
+  "entryLow": <batas bawah entry, USD>,
+  "entryHigh": <batas atas entry, USD>,
+  "stopLoss": <SL di swing low/high struktural, USD>,
+  "confidence": <0.0-1.0>,
+  "reasoning": "<3-4 kalimat — hanya analisis teknikal>"
+}`;
+    userMsg = `Harga BTC: ${indicators.price.toLocaleString()} | RSI ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal}) | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}
+BB: upper=${indicators.bbUpper}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
+ATR14: ${indicators.atr14} | Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}
+
+Mode: TEKNIKAL ONLY. Jawab JSON saja.`;
+  } else {
+    // normal — full context
+    systemPrompt = `Kamu adalah AI trading system BTC/USD. Analisis lengkap: teknikal + fundamental + on-chain.
+
+Urutan analisis:
+1. TREND — EMA alignment, struktur market
+2. MOMENTUM — RSI, MACD, BB width
+3. LEVEL — S/R struktural valid
+4. KONFIRMASI — MTF, DXY/Nasdaq korelasi, Fear & Greed contrarian, funding rate, halving phase
+5. RISIKO — RR, SL/TP dari struktur
+
+Jawab HANYA dalam format JSON:
+{
+  "direction": "up" | "down" | "sideways",
+  "targetPrice": <TP1 — S/R pertama, USD>,
+  "tp2": <TP2, USD>,
+  "tp3": <TP3, USD>,
+  "entryLow": <batas bawah entry, USD>,
+  "entryHigh": <batas atas entry, USD>,
+  "stopLoss": <SL di level struktural invalidasi thesis, USD>,
+  "confidence": <0.0-1.0>,
+  "reasoning": "<3-4 kalimat — trend, momentum, S/R, konfirmasi makro/F&G/funding/halving>"
+}`;
+    userMsg = `Harga BTC: ${indicators.price.toLocaleString()} | RSI ${indicators.rsi14?.toFixed(1) ?? "N/A"} (${indicators.rsiSignal}) | Trend ${indicators.trend} | EMA ${indicators.emaAlignment} | MACD ${indicators.macdSignalType}
+BB: upper=${indicators.bbUpper}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
+ATR14: ${indicators.atr14} | Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${fgContext}${fundingContext}${halvingContext}
+
+Mode: ${modeLabel}. Buat prediksi BTC. Jawab JSON saja.`;
+  }
+
+  let pred = { ...ruleBased };
+  let aiPowered = false;
+  const VALID_DIRS = new Set(["up", "down", "sideways"]);
+
+  try {
+    const raw = await queryDeepSeek(systemPrompt, userMsg, 500);
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        direction: string; targetPrice: number; tp2?: number; tp3?: number;
+        entryLow?: number; entryHigh?: number; stopLoss?: number; confidence: number; reasoning: string;
+      };
+      const dirValid = typeof parsed.direction === "string" && VALID_DIRS.has(parsed.direction.toLowerCase());
+      if (
+        dirValid && typeof parsed.entryLow === "number" && typeof parsed.entryHigh === "number" &&
+        typeof parsed.stopLoss === "number" && typeof parsed.targetPrice === "number" &&
+        parsed.targetPrice > 0 && parsed.stopLoss > 0
+      ) {
+        pred = { ...ruleBased, ...parsed, direction: parsed.direction.toLowerCase() as "up" | "down" | "sideways" };
+        aiPowered = true;
+      }
+    }
+  } catch { /* fallback ke rule-based */ }
+
+  return {
+    direction: (pred.direction ?? "sideways") as "up" | "down" | "sideways",
+    targetPrice: pred.targetPrice,
+    tp2: pred.tp2 ?? null,
+    tp3: pred.tp3 ?? null,
+    entryLow: pred.entryLow ?? null,
+    entryHigh: pred.entryHigh ?? null,
+    stopLoss: pred.stopLoss ?? null,
+    confidence: Math.min(1, Math.max(0, pred.confidence)),
+    reasoning: aiPowered ? pred.reasoning : `${ruleBased.reasoning} (AI tidak tersedia — hasil rule-based)`,
+    mode,
+    asset: "BTCUSD",
+    priceAtPrediction: indicators.price,
+    generatedAt: new Date().toISOString(),
+    aiPowered,
+  };
+}
+
 // ─── Engine start/stop — belajar setiap 2 menit + verifikasi setiap 60 detik ───
 export function startBtcBrainEngine(): void {
   if (learningTimer) return;

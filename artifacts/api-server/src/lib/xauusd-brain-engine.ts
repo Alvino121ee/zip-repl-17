@@ -2542,6 +2542,212 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
   }
 }
 
+// ─── On-Demand Prediction (3 mode: normal | technical | fundamental) ──────────
+
+export interface OnDemandPredictionResult {
+  direction: "up" | "down" | "sideways";
+  targetPrice: number;
+  tp2: number | null;
+  tp3: number | null;
+  entryLow: number | null;
+  entryHigh: number | null;
+  stopLoss: number | null;
+  confidence: number;
+  reasoning: string;
+  mode: "normal" | "technical" | "fundamental";
+  asset: "XAUUSD";
+  priceAtPrediction: number;
+  generatedAt: string;
+  aiPowered: boolean;
+}
+
+export async function generateXauusdOnDemandPrediction(
+  mode: "normal" | "technical" | "fundamental"
+): Promise<OnDemandPredictionResult> {
+  const indicators = await fetchXauusdIndicators("1h");
+  if (!indicators) throw new Error("Gagal mengambil data XAUUSD.");
+
+  const ruleBased = computeRuleBasedPrediction(indicators);
+
+  // ── Fetch context berdasarkan mode ────────────────────────────────────────
+  let mtfContext = "";
+  let correlationContext = "";
+  let newsContext = "";
+
+  if (mode === "normal" || mode === "technical") {
+    try {
+      const mtf = await getMultiTimeframeAnalysis();
+      const confluence = summarizeTimeframeConfluence(mtf);
+      mtfContext = `\n\n=== ANALISIS MULTI-TIMEFRAME ===\n${mtf
+        .map((t) => `${t.label}: trend=${t.indicators?.trend ?? "n/a"}, RSI=${t.indicators?.rsi14?.toFixed(1) ?? "n/a"}, EMA=${t.indicators?.emaAlignment ?? "n/a"}`)
+        .join("\n")}\nKonfluensi: ${confluence.agreement} (${confluence.bullishCount} TF bullish, ${confluence.bearishCount} TF bearish)`;
+    } catch { /* non-fatal */ }
+  }
+
+  if (mode === "normal" || mode === "fundamental") {
+    try {
+      const corr = await getCorrelationAnalysis();
+      const fmt = (v: number | null, suffix = "") => v != null ? `${v > 0 ? "+" : ""}${v.toFixed(2)}${suffix}` : "n/a";
+      correlationContext = `\n\n=== KORELASI MAKRO (DXY, US10Y, VIX, Silver) ===` +
+        `\nDXY: ${corr.dxy.price ?? "n/a"} (${fmt(corr.dxy.changePct, "%")}) — ${corr.dxy.interpretation}` +
+        `\nUS 10Y Yield: ${corr.us10y.price ?? "n/a"}% (${fmt(corr.us10y.changePct, "%")}) — ${corr.us10y.interpretation}` +
+        `\nVIX (Fear): ${corr.vix.price ?? "n/a"} (${fmt(corr.vix.changePct, "%")}) — ${corr.vix.interpretation}` +
+        `\nSilver: ${corr.silver.price ?? "n/a"} (${fmt(corr.silver.changePct, "%")}) — ${corr.silver.interpretation}`;
+    } catch { /* non-fatal */ }
+
+    try {
+      const news = await db.select({ title: xauusdNewsTable.title, sentiment: xauusdNewsTable.sentiment, aiAnalysis: xauusdNewsTable.aiAnalysis })
+        .from(xauusdNewsTable).orderBy(desc(xauusdNewsTable.publishedAt)).limit(5);
+      if (news.length > 0) {
+        newsContext = `\n\n=== SENTIMEN BERITA TERBARU ===\n${news
+          .map((n) => `• [${(n.sentiment ?? "neutral").toUpperCase()}] ${n.title}${n.aiAnalysis ? ` — ${n.aiAnalysis}` : ""}`)
+          .join("\n")}`;
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // ── System prompt berdasarkan mode ────────────────────────────────────────
+  const modeLabel = mode === "normal" ? "LENGKAP (teknikal + fundamental + AI)" : mode === "technical" ? "TEKNIKAL ONLY" : "FUNDAMENTAL ONLY";
+
+  let systemPrompt: string;
+  let userMsg: string;
+
+  if (mode === "fundamental") {
+    systemPrompt = `Kamu adalah analis fundamental XAUUSD. Gunakan HANYA data makroekonomi: DXY, US10Y Yield, VIX, Silver, dan sentimen berita. Abaikan indikator teknikal (RSI/EMA/MACD).
+
+Fokus pada:
+1. KORELASI MAKRO — DXY vs Gold (terbalik), US10Y vs Gold (terbalik), VIX vs Gold (risiko-off)
+2. SENTIMEN BERITA — dampak berita fundamental terhadap gold demand
+3. BIAS FUNDAMENTAL — apakah fundamental mendukung safe-haven demand atau risk-on?
+
+Jawab HANYA dalam format JSON:
+{
+  "direction": "up" | "down" | "sideways",
+  "targetPrice": <estimasi target harga berdasarkan level teknikal terdekat, USD>,
+  "tp2": <target lanjutan, USD>,
+  "tp3": <target jauh, USD>,
+  "entryLow": <batas bawah entry, USD>,
+  "entryHigh": <batas atas entry, USD>,
+  "stopLoss": <stop loss, USD>,
+  "confidence": <0.0-1.0 — rendah jika data fundamental tidak konklusif>,
+  "reasoning": "<3-4 kalimat — hanya analisis fundamental: DXY, US10Y, VIX, berita, demand gold>"
+}`;
+    userMsg = `Harga XAUUSD saat ini: ${indicators.price}
+Support: ${indicators.supportLevel ?? "n/a"} | Resistance: ${indicators.resistanceLevel ?? "n/a"}
+ATR14: ${indicators.atr14 ?? "n/a"}${correlationContext}${newsContext}
+
+Mode: FUNDAMENTAL ONLY — analisis hanya berdasarkan makro & berita. Jawab JSON saja.`;
+  } else if (mode === "technical") {
+    systemPrompt = `Kamu adalah analis teknikal XAUUSD. Gunakan HANYA indikator teknikal: RSI, EMA, MACD, Bollinger Band, ATR, Support/Resistance, dan Multi-Timeframe analysis. Abaikan berita dan data makro.
+
+Urutan analisis:
+1. TREND — EMA alignment, struktur higher high/lower low
+2. MOMENTUM — RSI, MACD histogram, apakah divergen?
+3. LEVEL — S/R struktural valid (bukan angka acak)
+4. MTF CONFLUENCE — apakah timeframe lebih besar konfirmasi?
+
+Jawab HANYA dalam format JSON:
+{
+  "direction": "up" | "down" | "sideways",
+  "targetPrice": <TP1 di S/R pertama, USD>,
+  "tp2": <TP2 S/R lanjutan, USD>,
+  "tp3": <TP3 ekstensi jauh, USD>,
+  "entryLow": <batas bawah entry, USD>,
+  "entryHigh": <batas atas entry, USD>,
+  "stopLoss": <SL di swing low/high struktural, USD>,
+  "confidence": <0.0-1.0>,
+  "reasoning": "<3-4 kalimat — hanya analisis teknikal: trend/EMA/RSI/MACD/MTF/S&R>"
+}`;
+    userMsg = `=== INDIKATOR 1H XAUUSD ===
+Harga: ${indicators.price}
+RSI14: ${indicators.rsi14} (${indicators.rsiSignal})
+EMA9/21/50/200: ${indicators.ema9} / ${indicators.ema21} / ${indicators.ema50} / ${indicators.ema200}
+MACD: line=${indicators.macdLine}, signal=${indicators.macdSignal}, hist=${indicators.macdHistogram} (${indicators.macdSignalType})
+BB: upper=${indicators.bbUpper}, mid=${indicators.bbMiddle}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
+ATR14: ${indicators.atr14}
+Trend: ${indicators.trend} | EMA Alignment: ${indicators.emaAlignment}
+Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}
+
+Mode: TEKNIKAL ONLY — analisis hanya berdasarkan indikator teknikal. Jawab JSON saja.`;
+  } else {
+    // normal — full context
+    systemPrompt = `Kamu adalah AI trading system XAUUSD dengan metodologi analisis terstruktur.
+
+URUTAN ANALISIS:
+1. TREND — struktur EMA, higher high/lower low
+2. MOMENTUM — RSI, MACD, histogram
+3. LEVEL — S/R struktural valid
+4. KONFIRMASI — MTF confluence, DXY/US10Y korelasi, sentimen berita
+5. RISIKO — hitung RR, SL/TP berdasarkan struktur
+
+Jawab HANYA dalam format JSON:
+{
+  "direction": "up" | "down" | "sideways",
+  "targetPrice": <TP1 — S/R pertama dalam arah prediksi, USD>,
+  "tp2": <TP2, USD>,
+  "tp3": <TP3, USD>,
+  "entryLow": <batas bawah entry, USD>,
+  "entryHigh": <batas atas entry, USD>,
+  "stopLoss": <SL di level struktural invalidasi thesis, USD>,
+  "confidence": <0.0-1.0>,
+  "reasoning": "<3-4 kalimat — trend, momentum, S/R, konfirmasi MTF/makro/berita>"
+}`;
+    userMsg = `=== INDIKATOR 1H XAUUSD ===
+Harga: ${indicators.price}
+RSI14: ${indicators.rsi14} (${indicators.rsiSignal})
+EMA9/21/50/200: ${indicators.ema9} / ${indicators.ema21} / ${indicators.ema50} / ${indicators.ema200}
+MACD: line=${indicators.macdLine}, signal=${indicators.macdSignal}, hist=${indicators.macdHistogram} (${indicators.macdSignalType})
+BB: upper=${indicators.bbUpper}, mid=${indicators.bbMiddle}, lower=${indicators.bbLower}, width=${indicators.bbWidth}%
+ATR14: ${indicators.atr14}
+Trend: ${indicators.trend} | EMA Alignment: ${indicators.emaAlignment}
+Support: ${indicators.supportLevel} | Resistance: ${indicators.resistanceLevel}${mtfContext}${correlationContext}${newsContext}
+
+Mode: ${modeLabel}. Buat prediksi XAUUSD. Jawab JSON saja.`;
+  }
+
+  let pred = { ...ruleBased, tp2: ruleBased.tp2, tp3: ruleBased.tp3, entryLow: ruleBased.entryLow, entryHigh: ruleBased.entryHigh };
+  let aiPowered = false;
+  const VALID_DIRS = new Set(["up", "down", "sideways"]);
+
+  try {
+    const raw = await queryDeepSeek(systemPrompt, userMsg, 400);
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        direction: string; targetPrice: number; tp2?: number; tp3?: number;
+        entryLow?: number; entryHigh?: number; stopLoss?: number; confidence: number; reasoning: string;
+      };
+      const dirValid = typeof parsed.direction === "string" && VALID_DIRS.has(parsed.direction.toLowerCase());
+      if (
+        dirValid &&
+        typeof parsed.entryLow === "number" && typeof parsed.entryHigh === "number" &&
+        typeof parsed.stopLoss === "number" && typeof parsed.targetPrice === "number" &&
+        parsed.targetPrice > 0 && parsed.stopLoss > 0
+      ) {
+        pred = { ...ruleBased, ...parsed, direction: parsed.direction.toLowerCase() as "up" | "down" | "sideways" };
+        aiPowered = true;
+      }
+    }
+  } catch { /* fallback ke rule-based */ }
+
+  return {
+    direction: (pred.direction ?? "sideways") as "up" | "down" | "sideways",
+    targetPrice: pred.targetPrice,
+    tp2: pred.tp2 ?? null,
+    tp3: pred.tp3 ?? null,
+    entryLow: pred.entryLow ?? null,
+    entryHigh: pred.entryHigh ?? null,
+    stopLoss: pred.stopLoss ?? null,
+    confidence: Math.min(1, Math.max(0, pred.confidence)),
+    reasoning: aiPowered ? pred.reasoning : `${ruleBased.reasoning} (AI tidak tersedia — hasil rule-based)`,
+    mode,
+    asset: "XAUUSD",
+    priceAtPrediction: indicators.price,
+    generatedAt: new Date().toISOString(),
+    aiPowered,
+  };
+}
+
 // ─── Start / Stop engine ───────────────────────────────────────────────────────
 
 export function startXauusdBrainEngine(): void {

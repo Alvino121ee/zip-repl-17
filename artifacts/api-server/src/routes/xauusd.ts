@@ -31,6 +31,7 @@ import {
   detectMarketRegime,
   computeClusterLabel,
   isXauusdMarketOpen,
+  generateXauusdOnDemandPrediction,
 } from "../lib/xauusd-brain-engine.js";
 import { chatWithAgent } from "../lib/agent-engine.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
@@ -508,6 +509,20 @@ xauusdRouter.post("/settings/deepseek-key", requireAdmin, async (req, res) => {
     return res.json({ ok: true, cleared: false });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /xauusd/predict — on-demand prediction (mode: normal|technical|fundamental) ─
+xauusdRouter.post("/predict", requireMember, async (req, res) => {
+  const { mode } = req.body as { mode?: string };
+  if (!mode || !["normal", "technical", "fundamental"].includes(mode)) {
+    return res.status(400).json({ error: "mode harus salah satu dari: normal, technical, fundamental" });
+  }
+  try {
+    const result = await generateXauusdOnDemandPrediction(mode as "normal" | "technical" | "fundamental");
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: "Gagal menghasilkan prediksi. Coba lagi." });
   }
 });
 

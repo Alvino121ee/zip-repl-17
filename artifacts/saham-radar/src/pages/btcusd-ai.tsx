@@ -75,10 +75,10 @@ async function apiGet<T>(path: string): Promise<T> {
 }
 
 async function apiPost<T = unknown>(path: string, body?: unknown): Promise<T> {
-  const token = getAdminToken() ?? "";
+  const token = getMemberToken() ?? getAdminToken() ?? "";
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -124,7 +124,7 @@ interface BtcCorrelationResponse { btcPrice: number; factors: BtcCorrelationFact
 interface TimeframeData { timeframe: string; label: string; indicators: { price: number; rsi14: number | null; trend: string; emaAlignment: string; macdSignalType: string; supportLevel: number | null; resistanceLevel: number | null; } | null; error: string | null; }
 interface MultiTimeframeResponse { timeframes: TimeframeData[]; confluence: { agreement: string; bullishCount: number; bearishCount: number; sidewaysCount: number; total: number; }; }
 
-type Tab = "chart" | "overview" | "brain" | "chat" | "predictions" | "questions" | "log" | "winrate" | "backtest" | "multitimeframe" | "correlation" | "settings" | "extreme";
+type Tab = "chart" | "overview" | "brain" | "chat" | "predictions" | "ondemand" | "questions" | "log" | "winrate" | "backtest" | "multitimeframe" | "correlation" | "settings" | "extreme";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function fmtBtc(n: number | null | undefined) {
@@ -219,6 +219,7 @@ export default function BtcusdAi() {
     { id: "brain", label: `Otak AI (${statsQ.data?.activeBrainEntries ?? 0})`, icon: <Brain className="w-3.5 h-3.5" /> },
     { id: "chat", label: "Chat AI", icon: <MessageSquare className="w-3.5 h-3.5" /> },
     { id: "predictions", label: `Prediksi (${statsQ.data?.totalPredictions ?? 0})`, icon: <Target className="w-3.5 h-3.5" /> },
+    { id: "ondemand", label: "Prediksi On-Demand", icon: <Zap className="w-3.5 h-3.5" /> },
     { id: "questions", label: `Q&A (${statsQ.data?.totalQuestionsAsked ?? 0})`, icon: <BookOpen className="w-3.5 h-3.5" /> },
     { id: "log", label: `Log Belajar`, icon: <History className="w-3.5 h-3.5" /> },
     { id: "winrate", label: "Win Rate", icon: <Trophy className="w-3.5 h-3.5" /> },
@@ -318,6 +319,7 @@ export default function BtcusdAi() {
       {activeTab === "brain" && <BrainTab entries={brainQ.data ?? []} stats={statsQ.data} />}
       {activeTab === "chat" && <ChatTab />}
       {activeTab === "predictions" && <PredictionsTab preds={predsQ.data ?? []} />}
+      {activeTab === "ondemand" && <div className="bg-card border border-border/40 rounded-2xl p-5"><OnDemandPredictionTab /></div>}
       {activeTab === "questions" && <QuestionsTab questions={questionsQ.data ?? []} />}
       {activeTab === "log" && <LearningLogTab logs={logQ.data ?? []} />}
       {activeTab === "winrate" && <WinrateTab preds={predsQ.data ?? []} />}
@@ -702,6 +704,192 @@ function ChatTab() {
           <Send className="w-4 h-4" />
         </Button>
       </div>
+    </div>
+  );
+}
+
+// ─── On-Demand Prediction Tab (BTC) ───────────────────────────────────────────
+interface OnDemandResult {
+  direction: "up" | "down" | "sideways";
+  targetPrice: number;
+  tp2?: number | null;
+  tp3?: number | null;
+  entryLow?: number | null;
+  entryHigh?: number | null;
+  stopLoss?: number | null;
+  confidence: number;
+  reasoning: string;
+  mode: "normal" | "technical" | "fundamental";
+  priceAtPrediction: number;
+  generatedAt: string;
+  aiPowered: boolean;
+}
+
+function OnDemandPredictionTab() {
+  const [selectedMode, setSelectedMode] = useState<"normal" | "technical" | "fundamental">("normal");
+  const [result, setResult] = useState<OnDemandResult | null>(null);
+
+  const predictM = useMutation({
+    mutationFn: (mode: string) =>
+      apiPost<OnDemandResult>("/predict", { mode }),
+    onSuccess: (data) => setResult(data),
+  });
+
+  const MODES: { id: "normal" | "technical" | "fundamental"; label: string; icon: string; desc: string; color: string }[] = [
+    {
+      id: "normal",
+      label: "Prediksi Normal",
+      icon: "🤖",
+      desc: "Analisis lengkap: teknikal + fundamental + Fear & Greed + Funding Rate + Halving Cycle. Mode terbaik untuk keputusan trading.",
+      color: "border-orange-500/40 bg-orange-500/5 text-orange-400",
+    },
+    {
+      id: "technical",
+      label: "Teknikal Only",
+      icon: "📊",
+      desc: "Hanya indikator teknikal: RSI, EMA, MACD, Bollinger Band, ATR, Support/Resistance, Multi-Timeframe. Tanpa data makro atau on-chain.",
+      color: "border-blue-500/40 bg-blue-500/5 text-blue-400",
+    },
+    {
+      id: "fundamental",
+      label: "Fundamental Only",
+      icon: "🌐",
+      desc: "Hanya data fundamental: DXY/Nasdaq korelasi, Fear & Greed Index (contrarian), Funding Rate, dan posisi Halving Cycle BTC.",
+      color: "border-purple-500/40 bg-purple-500/5 text-purple-400",
+    },
+  ];
+
+  const dirLabel = (d: string) => d === "up" ? "▲ NAIK" : d === "down" ? "▼ TURUN" : "↔ SIDEWAYS";
+  const dirCls = (d: string) =>
+    d === "up" ? "text-emerald-400" : d === "down" ? "text-red-400" : "text-yellow-400";
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-sm font-semibold text-foreground mb-1">Prediksi On-Demand BTC/USD</p>
+        <p className="text-xs text-muted-foreground">
+          Generate prediksi instan dengan 3 mode analisis berbeda. Hasil langsung dari AI, tidak disimpan ke database.
+        </p>
+      </div>
+
+      {/* Mode selection */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setSelectedMode(m.id)}
+            className={`text-left p-4 rounded-xl border-2 transition-all ${
+              selectedMode === m.id
+                ? m.color + " border-opacity-100"
+                : "border-border/30 bg-card/30 text-muted-foreground hover:border-border/60"
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-lg">{m.icon}</span>
+              <span className="text-sm font-semibold">{m.label}</span>
+            </div>
+            <p className="text-[11px] leading-relaxed opacity-80">{m.desc}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* Generate button */}
+      <button
+        onClick={() => predictM.mutate(selectedMode)}
+        disabled={predictM.isPending}
+        className="w-full py-3 px-6 rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-60 text-black font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+      >
+        {predictM.isPending ? (
+          <><RefreshCw className="w-4 h-4 animate-spin" />AI sedang menganalisis...</>
+        ) : (
+          <><Zap className="w-4 h-4" />Generate Prediksi — {MODES.find(m => m.id === selectedMode)?.label}</>
+        )}
+      </button>
+
+      {predictM.isError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-400">
+          ⚠️ Gagal: {String(predictM.error)}
+        </div>
+      )}
+
+      {/* Result */}
+      {result && (
+        <div className={`rounded-xl border-2 p-5 space-y-4 ${
+          result.direction === "up" ? "border-emerald-500/40 bg-emerald-500/5"
+          : result.direction === "down" ? "border-red-500/40 bg-red-500/5"
+          : "border-yellow-500/40 bg-yellow-500/5"
+        }`}>
+          {/* Header */}
+          <div className="flex items-start justify-between flex-wrap gap-3">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-2xl font-bold ${dirCls(result.direction)}`}>
+                  {dirLabel(result.direction)}
+                </span>
+                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
+                  result.direction === "up" ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+                  : result.direction === "down" ? "border-red-500/40 text-red-400 bg-red-500/10"
+                  : "border-yellow-500/40 text-yellow-400 bg-yellow-500/10"
+                }`}>
+                  {(result.confidence * 100).toFixed(0)}% confidence
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                @ ${result.priceAtPrediction.toLocaleString()} · {result.aiPowered ? "🤖 AI-powered" : "📏 Rule-based"} ·
+                Mode: <span className="text-foreground font-medium">{MODES.find(m => m.id === result.mode)?.label}</span>
+              </p>
+            </div>
+            <div className="text-right text-xs text-muted-foreground">
+              <p>{new Date(result.generatedAt).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</p>
+            </div>
+          </div>
+
+          {/* Trade levels */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+            {result.entryLow != null && result.entryHigh != null && (
+              <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-2.5">
+                <p className="text-blue-400/70 mb-0.5">Entry Zone</p>
+                <p className="font-semibold text-blue-300">${result.entryLow.toLocaleString()} – ${result.entryHigh.toLocaleString()}</p>
+              </div>
+            )}
+            {result.stopLoss != null && (
+              <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2.5">
+                <p className="text-red-400/70 mb-0.5">Stop Loss</p>
+                <p className="font-semibold text-red-300">${result.stopLoss.toLocaleString()}</p>
+              </div>
+            )}
+            {result.targetPrice != null && (
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5">
+                <p className="text-emerald-400/70 mb-0.5">TP1</p>
+                <p className="font-semibold text-emerald-300">${result.targetPrice.toLocaleString()}</p>
+              </div>
+            )}
+            {result.tp2 != null && result.tp2 !== result.targetPrice && (
+              <div className="rounded-lg bg-emerald-500/8 border border-emerald-500/15 p-2.5">
+                <p className="text-emerald-400/60 mb-0.5">TP2</p>
+                <p className="font-semibold text-emerald-300/70">${result.tp2.toLocaleString()}</p>
+              </div>
+            )}
+            {result.tp3 != null && result.tp3 !== result.targetPrice && (
+              <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/10 p-2.5">
+                <p className="text-emerald-400/50 mb-0.5">TP3</p>
+                <p className="font-semibold text-emerald-300/50">${result.tp3.toLocaleString()}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Reasoning */}
+          <div className="rounded-lg bg-card/50 border border-border/30 p-3">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">Alasan Prediksi</p>
+            <p className="text-xs text-foreground/80 leading-relaxed">{result.reasoning}</p>
+          </div>
+
+          {/* Disclaimer */}
+          <p className="text-[10px] text-muted-foreground/60 text-center">
+            ⚠️ Prediksi ini tidak disimpan ke database dan bukan saran keuangan. Selalu gunakan manajemen risiko.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
