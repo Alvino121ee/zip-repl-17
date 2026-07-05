@@ -1799,169 +1799,213 @@ interface OnDemandResult {
   aiPowered: boolean;
 }
 
-function OnDemandPredictionPanel() {
-  const [selectedMode, setSelectedMode] = useState<"normal" | "technical" | "fundamental">("normal");
-  const [result, setResult] = useState<OnDemandResult | null>(null);
+type PredictState = { status: "idle" | "loading" | "done" | "error"; data: OnDemandResult | null; error: string | null };
 
-  const predictM = useMutation({
-    mutationFn: (mode: string) =>
-      apiPost<OnDemandResult>("/predict", { mode }),
-    onSuccess: (data) => setResult(data),
+const PRED_MODES = [
+  { id: "normal" as const, label: "Normal", icon: "🤖", accent: "amber" },
+  { id: "technical" as const, label: "Teknikal", icon: "📊", accent: "blue" },
+  { id: "fundamental" as const, label: "Fundamental", icon: "🌐", accent: "purple" },
+];
+
+function OnDemandPredictionPanel() {
+  const [activeMode, setActiveMode] = useState<"normal" | "technical" | "fundamental">("normal");
+  const [states, setStates] = useState<Record<string, PredictState>>({
+    normal:      { status: "idle", data: null, error: null },
+    technical:   { status: "idle", data: null, error: null },
+    fundamental: { status: "idle", data: null, error: null },
   });
 
-  const MODES: { id: "normal" | "technical" | "fundamental"; label: string; icon: string; desc: string; color: string }[] = [
-    {
-      id: "normal",
-      label: "Prediksi Normal",
-      icon: "🤖",
-      desc: "Analisis lengkap: teknikal + fundamental + korelasi makro + sentimen berita. Mode terbaik untuk keputusan trading.",
-      color: "border-amber-500/40 bg-amber-500/5 text-amber-400",
-    },
-    {
-      id: "technical",
-      label: "Teknikal Only",
-      icon: "📊",
-      desc: "Hanya indikator teknikal: RSI, EMA, MACD, Bollinger Band, ATR, Support/Resistance, Multi-Timeframe. Tanpa data berita atau makro.",
-      color: "border-blue-500/40 bg-blue-500/5 text-blue-400",
-    },
-    {
-      id: "fundamental",
-      label: "Fundamental Only",
-      icon: "🌐",
-      desc: "Hanya data fundamental: DXY, US10Y Yield, VIX, Silver korelasi, dan sentimen berita. Tanpa indikator teknikal.",
-      color: "border-purple-500/40 bg-purple-500/5 text-purple-400",
-    },
-  ];
+  const fetchMode = async (mode: "normal" | "technical" | "fundamental") => {
+    setStates(s => ({ ...s, [mode]: { status: "loading", data: null, error: null } }));
+    try {
+      const result = await apiPost<OnDemandResult>("/predict", { mode });
+      setStates(s => ({ ...s, [mode]: { status: "done", data: result, error: null } }));
+    } catch (e) {
+      setStates(s => ({ ...s, [mode]: { status: "error", data: null, error: String(e) } }));
+    }
+  };
+
+  // auto-generate all 3 on mount
+  useEffect(() => {
+    fetchMode("normal");
+    fetchMode("technical");
+    fetchMode("fundamental");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const dirLabel = (d: string) => d === "up" ? "▲ NAIK" : d === "down" ? "▼ TURUN" : "↔ SIDEWAYS";
   const dirCls = (d: string) =>
     d === "up" ? "text-emerald-400" : d === "down" ? "text-red-400" : "text-amber-400";
+  const borderCls = (d: string) =>
+    d === "up" ? "border-emerald-500/40 bg-emerald-500/5"
+    : d === "down" ? "border-red-500/40 bg-red-500/5"
+    : "border-amber-500/40 bg-amber-500/5";
+  const badgeCls = (d: string) =>
+    d === "up" ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+    : d === "down" ? "border-red-500/40 text-red-400 bg-red-500/10"
+    : "border-amber-500/40 text-amber-400 bg-amber-500/10";
+
+  const accentTabCls: Record<string, string> = {
+    amber: "border-amber-500 text-amber-400 bg-amber-500/10",
+    blue:  "border-blue-500 text-blue-400 bg-blue-500/10",
+    purple:"border-purple-500 text-purple-400 bg-purple-500/10",
+  };
+  const accentTabInactive: Record<string, string> = {
+    amber: "hover:text-amber-400/70",
+    blue:  "hover:text-blue-400/70",
+    purple:"hover:text-purple-400/70",
+  };
+
+  const current = states[activeMode];
+  const m = PRED_MODES.find(x => x.id === activeMode)!;
+
+  const loadingCount = Object.values(states).filter(s => s.status === "loading").length;
+  const doneCount    = Object.values(states).filter(s => s.status === "done").length;
 
   return (
-    <div className="space-y-5">
-      <div>
-        <p className="text-sm font-semibold text-foreground mb-1">Prediksi On-Demand XAUUSD</p>
-        <p className="text-xs text-muted-foreground">
-          Generate prediksi instan dengan 3 mode analisis berbeda. Hasil langsung dari AI, tidak disimpan ke database.
-        </p>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Prediksi On-Demand XAUUSD</p>
+          <p className="text-xs text-muted-foreground">
+            {loadingCount > 0
+              ? `Menganalisis ${loadingCount} prediksi...`
+              : doneCount === 3
+              ? "Semua prediksi selesai · Pilih tab untuk lihat detail"
+              : "Prediksi AI realtime — tidak disimpan ke database"}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => { fetchMode("normal"); fetchMode("technical"); fetchMode("fundamental"); }}
+          disabled={loadingCount > 0}
+          className="h-7 text-xs"
+        >
+          <RefreshCw className={`w-3 h-3 mr-1.5 ${loadingCount > 0 ? "animate-spin" : ""}`} />
+          Refresh Semua
+        </Button>
       </div>
 
-      {/* Mode selection */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => setSelectedMode(m.id)}
-            className={`text-left p-4 rounded-xl border-2 transition-all ${
-              selectedMode === m.id
-                ? m.color + " border-opacity-100"
-                : "border-border/30 bg-card/30 text-muted-foreground hover:border-border/60"
-            }`}
-          >
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-lg">{m.icon}</span>
-              <span className="text-sm font-semibold">{m.label}</span>
-            </div>
-            <p className="text-[11px] leading-relaxed opacity-80">{m.desc}</p>
-          </button>
-        ))}
+      {/* Sub-tabs */}
+      <div className="flex gap-1 border border-border/40 rounded-xl p-1 bg-card/30">
+        {PRED_MODES.map((pm) => {
+          const s = states[pm.id];
+          const isActive = activeMode === pm.id;
+          return (
+            <button
+              key={pm.id}
+              onClick={() => setActiveMode(pm.id)}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                isActive
+                  ? accentTabCls[pm.accent]
+                  : `text-muted-foreground border border-transparent ${accentTabInactive[pm.accent]}`
+              }`}
+            >
+              <span>{pm.icon}</span>
+              <span>{pm.label}</span>
+              {s.status === "loading" && <Loader2 className="w-3 h-3 animate-spin" />}
+              {s.status === "done" && s.data && (
+                <span className={`text-[9px] font-bold ${dirCls(s.data.direction)}`}>
+                  {s.data.direction === "up" ? "▲" : s.data.direction === "down" ? "▼" : "↔"}
+                </span>
+              )}
+              {s.status === "error" && <span className="text-red-400 text-[10px]">!</span>}
+            </button>
+          );
+        })}
       </div>
 
-      {/* Generate button */}
-      <Button
-        onClick={() => predictM.mutate(selectedMode)}
-        disabled={predictM.isPending}
-        className="w-full bg-amber-500 hover:bg-amber-600 text-black font-semibold"
-      >
-        {predictM.isPending ? (
-          <><Loader2 className="w-4 h-4 mr-2 animate-spin" />AI sedang menganalisis...</>
-        ) : (
-          <><Zap className="w-4 h-4 mr-2" />Generate Prediksi — {MODES.find(m => m.id === selectedMode)?.label}</>
-        )}
-      </Button>
-
-      {predictM.isError && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-400">
-          ⚠️ Gagal: {String(predictM.error)}
+      {/* Content area */}
+      {current.status === "loading" && (
+        <div className="rounded-xl border border-border/30 bg-card/30 p-10 flex flex-col items-center gap-3">
+          <Loader2 className="w-7 h-7 animate-spin text-amber-400" />
+          <p className="text-sm text-muted-foreground">AI sedang menganalisis mode <span className="font-medium text-foreground">{m.label}</span>…</p>
         </div>
       )}
 
-      {/* Result */}
-      {result && (
-        <div className={`rounded-xl border-2 p-5 space-y-4 ${
-          result.direction === "up" ? "border-emerald-500/40 bg-emerald-500/5"
-          : result.direction === "down" ? "border-red-500/40 bg-red-500/5"
-          : "border-amber-500/40 bg-amber-500/5"
-        }`}>
-          {/* Header */}
-          <div className="flex items-start justify-between flex-wrap gap-3">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`text-2xl font-bold ${dirCls(result.direction)}`}>
-                  {dirLabel(result.direction)}
-                </span>
-                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
-                  result.direction === "up" ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-                  : result.direction === "down" ? "border-red-500/40 text-red-400 bg-red-500/10"
-                  : "border-amber-500/40 text-amber-400 bg-amber-500/10"
-                }`}>
-                  {(result.confidence * 100).toFixed(0)}% confidence
-                </span>
+      {current.status === "error" && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-5 space-y-3">
+          <p className="text-sm text-red-400 font-medium">⚠️ Gagal memuat prediksi {m.label}</p>
+          <p className="text-xs text-red-400/70">{current.error}</p>
+          <Button size="sm" variant="outline" onClick={() => fetchMode(m.id)} className="text-xs">
+            <RefreshCw className="w-3 h-3 mr-1.5" />Coba Lagi
+          </Button>
+        </div>
+      )}
+
+      {current.status === "done" && current.data && (() => {
+        const r = current.data;
+        return (
+          <div className={`rounded-xl border-2 p-5 space-y-4 ${borderCls(r.direction)}`}>
+            {/* Header */}
+            <div className="flex items-start justify-between flex-wrap gap-3">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-2xl font-bold ${dirCls(r.direction)}`}>{dirLabel(r.direction)}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${badgeCls(r.direction)}`}>
+                    {(r.confidence * 100).toFixed(0)}% confidence
+                  </span>
+                  {r.aiPowered
+                    ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">🤖 AI</span>
+                    : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/10 border border-slate-500/20 text-slate-400">📏 Rule</span>
+                  }
+                </div>
+                <p className="text-xs text-muted-foreground">@ ${r.priceAtPrediction.toFixed(2)} · {new Date(r.generatedAt).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                @ ${result.priceAtPrediction.toFixed(2)} · {result.aiPowered ? "🤖 AI-powered" : "📏 Rule-based"} ·
-                Mode: <span className="text-foreground font-medium">{MODES.find(m => m.id === result.mode)?.label}</span>
-              </p>
             </div>
-            <div className="text-right text-xs text-muted-foreground">
-              <p>{new Date(result.generatedAt).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</p>
+
+            {/* Trade levels */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+              {r.entryLow != null && r.entryHigh != null && (
+                <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-2.5">
+                  <p className="text-blue-400/70 mb-0.5">Entry Zone</p>
+                  <p className="font-semibold text-blue-300">${r.entryLow.toFixed(2)} – ${r.entryHigh.toFixed(2)}</p>
+                </div>
+              )}
+              {r.stopLoss != null && (
+                <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2.5">
+                  <p className="text-red-400/70 mb-0.5">Stop Loss</p>
+                  <p className="font-semibold text-red-300">${r.stopLoss.toFixed(2)}</p>
+                </div>
+              )}
+              {r.targetPrice != null && (
+                <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5">
+                  <p className="text-emerald-400/70 mb-0.5">TP1</p>
+                  <p className="font-semibold text-emerald-300">${r.targetPrice.toFixed(2)}</p>
+                </div>
+              )}
+              {r.tp2 != null && r.tp2 !== r.targetPrice && (
+                <div className="rounded-lg bg-emerald-500/8 border border-emerald-500/15 p-2.5">
+                  <p className="text-emerald-400/60 mb-0.5">TP2</p>
+                  <p className="font-semibold text-emerald-300/70">${r.tp2.toFixed(2)}</p>
+                </div>
+              )}
+              {r.tp3 != null && r.tp3 !== r.targetPrice && (
+                <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/10 p-2.5">
+                  <p className="text-emerald-400/50 mb-0.5">TP3</p>
+                  <p className="font-semibold text-emerald-300/50">${r.tp3.toFixed(2)}</p>
+                </div>
+              )}
             </div>
-          </div>
 
-          {/* Trade levels */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-            {result.entryLow != null && result.entryHigh != null && (
-              <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-2.5">
-                <p className="text-blue-400/70 mb-0.5">Entry Zone</p>
-                <p className="font-semibold text-blue-300">${result.entryLow.toFixed(2)} – ${result.entryHigh.toFixed(2)}</p>
-              </div>
-            )}
-            {result.stopLoss != null && (
-              <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2.5">
-                <p className="text-red-400/70 mb-0.5">Stop Loss</p>
-                <p className="font-semibold text-red-300">${result.stopLoss.toFixed(2)}</p>
-              </div>
-            )}
-            {result.targetPrice != null && (
-              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5">
-                <p className="text-emerald-400/70 mb-0.5">TP1</p>
-                <p className="font-semibold text-emerald-300">${result.targetPrice.toFixed(2)}</p>
-              </div>
-            )}
-            {result.tp2 != null && result.tp2 !== result.targetPrice && (
-              <div className="rounded-lg bg-emerald-500/8 border border-emerald-500/15 p-2.5">
-                <p className="text-emerald-400/60 mb-0.5">TP2</p>
-                <p className="font-semibold text-emerald-300/70">${result.tp2.toFixed(2)}</p>
-              </div>
-            )}
-            {result.tp3 != null && result.tp3 !== result.targetPrice && (
-              <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/10 p-2.5">
-                <p className="text-emerald-400/50 mb-0.5">TP3</p>
-                <p className="font-semibold text-emerald-300/50">${result.tp3.toFixed(2)}</p>
-              </div>
-            )}
-          </div>
+            {/* Reasoning */}
+            <div className="rounded-lg bg-card/50 border border-border/30 p-3">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">Alasan Prediksi</p>
+              <p className="text-xs text-foreground/80 leading-relaxed">{r.reasoning}</p>
+            </div>
 
-          {/* Reasoning */}
-          <div className="rounded-lg bg-card/50 border border-border/30 p-3">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">Alasan Prediksi</p>
-            <p className="text-xs text-foreground/80 leading-relaxed">{result.reasoning}</p>
+            <p className="text-[10px] text-muted-foreground/60 text-center">
+              ⚠️ Bukan saran keuangan. Selalu gunakan manajemen risiko.
+            </p>
           </div>
+        );
+      })()}
 
-          {/* Disclaimer */}
-          <p className="text-[10px] text-muted-foreground/60 text-center">
-            ⚠️ Prediksi ini tidak disimpan ke database dan bukan saran keuangan. Selalu gunakan manajemen risiko.
-          </p>
+      {current.status === "idle" && (
+        <div className="rounded-xl border border-border/30 bg-card/30 p-8 text-center text-sm text-muted-foreground">
+          Prediksi belum dimuat.
         </div>
       )}
     </div>
