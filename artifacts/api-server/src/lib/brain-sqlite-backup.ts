@@ -20,6 +20,10 @@ import {
   xauusdQuestionsLogTable,
   xauusdLearningLogTable,
   xauusdSettingsTable,
+  btcusdBrainTable,
+  btcusdPredictionsTable,
+  btcusdQuestionsLogTable,
+  btcusdLearningLogTable,
 } from "@workspace/db/schema";
 import { sql } from "drizzle-orm";
 import type { SqlJsStatic, Database as SqlJsDb } from "sql.js";
@@ -143,6 +147,77 @@ function initSchema(sqlDb: SqlJsDb) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS btcusd_brain (
+      id INTEGER PRIMARY KEY,
+      category TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 0.5,
+      usage_count INTEGER NOT NULL DEFAULT 0,
+      last_validated TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      source_question TEXT,
+      market_condition_tags TEXT,
+      decay_weight REAL NOT NULL DEFAULT 1.0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS btcusd_predictions (
+      id INTEGER PRIMARY KEY,
+      predicted_at TEXT NOT NULL,
+      timeframe TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      target_price REAL,
+      tp2 REAL,
+      tp3 REAL,
+      entry_low REAL,
+      entry_high REAL,
+      stop_loss REAL,
+      confidence REAL NOT NULL,
+      reasoning TEXT NOT NULL,
+      price_at_prediction REAL NOT NULL,
+      indicators_at_prediction TEXT,
+      trading_session TEXT,
+      market_regime TEXT,
+      cluster_label TEXT,
+      prediction_type TEXT NOT NULL DEFAULT 'training',
+      verify_at TEXT,
+      actual_price REAL,
+      actual_direction TEXT,
+      is_correct INTEGER,
+      price_diff REAL,
+      price_p10 REAL,
+      price_p50 REAL,
+      price_p90 REAL,
+      status TEXT NOT NULL DEFAULT 'pending'
+    );
+
+    CREATE TABLE IF NOT EXISTS btcusd_questions_log (
+      id INTEGER PRIMARY KEY,
+      question TEXT NOT NULL,
+      question_hash TEXT NOT NULL UNIQUE,
+      answer TEXT,
+      quality REAL,
+      saved_to_brain INTEGER NOT NULL DEFAULT 0,
+      market_context TEXT,
+      asked_at TEXT NOT NULL,
+      answered_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS btcusd_learning_log (
+      id INTEGER PRIMARY KEY,
+      cycle_at TEXT NOT NULL,
+      price_at_cycle REAL,
+      questions_asked INTEGER NOT NULL DEFAULT 0,
+      insights_saved INTEGER NOT NULL DEFAULT 0,
+      predictions_checked INTEGER NOT NULL DEFAULT 0,
+      wrong_predictions INTEGER NOT NULL DEFAULT 0,
+      spike_detected INTEGER NOT NULL DEFAULT 0,
+      summary TEXT,
+      duration_ms INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS backup_meta (
       id INTEGER PRIMARY KEY DEFAULT 1,
       last_sync_at TEXT,
@@ -150,11 +225,30 @@ function initSchema(sqlDb: SqlJsDb) {
       predictions_count INTEGER DEFAULT 0,
       questions_count INTEGER DEFAULT 0,
       log_count INTEGER DEFAULT 0,
-      settings_count INTEGER DEFAULT 0
+      settings_count INTEGER DEFAULT 0,
+      btc_brain_count INTEGER DEFAULT 0,
+      btc_predictions_count INTEGER DEFAULT 0,
+      btc_questions_count INTEGER DEFAULT 0,
+      btc_log_count INTEGER DEFAULT 0
     );
 
     INSERT OR IGNORE INTO backup_meta (id) VALUES (1);
   `);
+
+  // ── Migrasi ringan: tambah kolom baru ke backup_meta jika file lama belum punya ──
+  const metaColumns = [
+    "btc_brain_count INTEGER DEFAULT 0",
+    "btc_predictions_count INTEGER DEFAULT 0",
+    "btc_questions_count INTEGER DEFAULT 0",
+    "btc_log_count INTEGER DEFAULT 0",
+  ];
+  for (const col of metaColumns) {
+    try {
+      sqlDb.run(`ALTER TABLE backup_meta ADD COLUMN ${col}`);
+    } catch {
+      // Kolom sudah ada — abaikan
+    }
+  }
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────────
@@ -170,6 +264,10 @@ export interface BackupStats {
   questionsCount: number;
   logCount: number;
   settingsCount: number;
+  btcBrainCount: number;
+  btcPredictionsCount: number;
+  btcQuestionsCount: number;
+  btcLogCount: number;
 }
 
 export async function getBackupStats(): Promise<BackupStats> {
@@ -182,6 +280,7 @@ export async function getBackupStats(): Promise<BackupStats> {
       fileExists, fileSizeBytes, fileSizeMB, backupPath: BACKUP_PATH,
       lastSyncAt: null, brainCount: 0, predictionsCount: 0,
       questionsCount: 0, logCount: 0, settingsCount: 0,
+      btcBrainCount: 0, btcPredictionsCount: 0, btcQuestionsCount: 0, btcLogCount: 0,
     };
   }
 
@@ -191,6 +290,7 @@ export async function getBackupStats(): Promise<BackupStats> {
 
   let lastSyncAt: string | null = null;
   let brainCount = 0, predictionsCount = 0, questionsCount = 0, logCount = 0, settingsCount = 0;
+  let btcBrainCount = 0, btcPredictionsCount = 0, btcQuestionsCount = 0, btcLogCount = 0;
 
   try {
     const stmt = sqlDb.prepare("SELECT * FROM backup_meta WHERE id = 1");
@@ -202,6 +302,10 @@ export async function getBackupStats(): Promise<BackupStats> {
       questionsCount = (row.questions_count as number) ?? 0;
       logCount = (row.log_count as number) ?? 0;
       settingsCount = (row.settings_count as number) ?? 0;
+      btcBrainCount = (row.btc_brain_count as number) ?? 0;
+      btcPredictionsCount = (row.btc_predictions_count as number) ?? 0;
+      btcQuestionsCount = (row.btc_questions_count as number) ?? 0;
+      btcLogCount = (row.btc_log_count as number) ?? 0;
     }
     stmt.free();
   } finally {
@@ -211,6 +315,7 @@ export async function getBackupStats(): Promise<BackupStats> {
   return {
     fileExists, fileSizeBytes, fileSizeMB, backupPath: BACKUP_PATH,
     lastSyncAt, brainCount, predictionsCount, questionsCount, logCount, settingsCount,
+    btcBrainCount, btcPredictionsCount, btcQuestionsCount, btcLogCount,
   };
 }
 
@@ -311,19 +416,96 @@ export async function syncToFile(): Promise<{ ok: boolean; message: string }> {
     }
     sStmt.free();
 
+    // ── 6. btcusd_brain ───────────────────────────────────────────────────────
+    const btcBrain = await db.select().from(btcusdBrainTable);
+    sqlDb.run("DELETE FROM btcusd_brain");
+    const btcBrainStmt = sqlDb.prepare(
+      `INSERT INTO btcusd_brain VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    );
+    for (const r of btcBrain) {
+      btcBrainStmt.run([
+        r.id, r.category, r.title, r.content,
+        r.confidence, r.usageCount,
+        r.lastValidated?.toISOString() ?? null,
+        r.isActive ? 1 : 0,
+        r.sourceQuestion ?? null, r.marketConditionTags ?? null,
+        r.decayWeight,
+        r.createdAt.toISOString(), r.updatedAt.toISOString(),
+      ]);
+    }
+    btcBrainStmt.free();
+
+    // ── 7. btcusd_predictions ─────────────────────────────────────────────────
+    const btcPreds = await db.select().from(btcusdPredictionsTable);
+    sqlDb.run("DELETE FROM btcusd_predictions");
+    const btcPredStmt = sqlDb.prepare(
+      `INSERT INTO btcusd_predictions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    );
+    for (const r of btcPreds) {
+      btcPredStmt.run([
+        r.id, r.predictedAt.toISOString(), r.timeframe, r.direction,
+        r.targetPrice ?? null, r.tp2 ?? null, r.tp3 ?? null,
+        r.entryLow ?? null, r.entryHigh ?? null, r.stopLoss ?? null,
+        r.confidence, r.reasoning, r.priceAtPrediction,
+        r.indicatorsAtPrediction ? JSON.stringify(r.indicatorsAtPrediction) : null,
+        r.tradingSession ?? null, r.marketRegime ?? null, r.clusterLabel ?? null,
+        r.predictionType, r.verifyAt?.toISOString() ?? null,
+        r.actualPrice ?? null, r.actualDirection ?? null,
+        r.isCorrect === null ? null : (r.isCorrect ? 1 : 0),
+        r.priceDiff ?? null,
+        r.priceP10 ?? null, r.priceP50 ?? null, r.priceP90 ?? null,
+        r.status,
+      ]);
+    }
+    btcPredStmt.free();
+
+    // ── 8. btcusd_questions_log ───────────────────────────────────────────────
+    const btcQuestions = await db.select().from(btcusdQuestionsLogTable);
+    sqlDb.run("DELETE FROM btcusd_questions_log");
+    const btcQStmt = sqlDb.prepare(
+      `INSERT OR IGNORE INTO btcusd_questions_log VALUES (?,?,?,?,?,?,?,?,?)`
+    );
+    for (const r of btcQuestions) {
+      btcQStmt.run([
+        r.id, r.question, r.questionHash, r.answer ?? null, r.quality ?? null,
+        r.savedToBrain ? 1 : 0,
+        r.marketContext ? JSON.stringify(r.marketContext) : null,
+        r.askedAt.toISOString(),
+        r.answeredAt?.toISOString() ?? null,
+      ]);
+    }
+    btcQStmt.free();
+
+    // ── 9. btcusd_learning_log ────────────────────────────────────────────────
+    const btcLogs = await db.select().from(btcusdLearningLogTable);
+    sqlDb.run("DELETE FROM btcusd_learning_log");
+    const btcLogStmt = sqlDb.prepare(
+      `INSERT INTO btcusd_learning_log VALUES (?,?,?,?,?,?,?,?,?,?)`
+    );
+    for (const r of btcLogs) {
+      btcLogStmt.run([
+        r.id, r.cycleAt.toISOString(), r.priceAtCycle ?? null,
+        r.questionsAsked, r.insightsSaved,
+        r.predictionsChecked, r.wrongPredictions,
+        r.spikeDetected ? 1 : 0, r.summary ?? null, r.durationMs ?? null,
+      ]);
+    }
+    btcLogStmt.free();
+
     // ── Update meta ───────────────────────────────────────────────────────────
     sqlDb.run(
-      `UPDATE backup_meta SET last_sync_at=?,brain_count=?,predictions_count=?,questions_count=?,log_count=?,settings_count=? WHERE id=1`,
+      `UPDATE backup_meta SET last_sync_at=?,brain_count=?,predictions_count=?,questions_count=?,log_count=?,settings_count=?,btc_brain_count=?,btc_predictions_count=?,btc_questions_count=?,btc_log_count=? WHERE id=1`,
       [
         new Date().toISOString(),
         brain.length, preds.length, questions.length, logs.length, settings.length,
+        btcBrain.length, btcPreds.length, btcQuestions.length, btcLogs.length,
       ]
     );
 
     saveDb(sqlDb);
     sqlDb.close();
 
-    const msg = `Synced: ${brain.length} brain, ${preds.length} prediksi, ${questions.length} Q&A, ${logs.length} siklus`;
+    const msg = `Synced: ${brain.length} brain, ${preds.length} prediksi, ${questions.length} Q&A, ${logs.length} siklus | BTC: ${btcBrain.length} brain, ${btcPreds.length} prediksi, ${btcQuestions.length} Q&A, ${btcLogs.length} siklus`;
     console.log(`[Brain Backup] ✅ ${msg}`);
     return { ok: true, message: msg };
   } catch (err) {
@@ -338,10 +520,16 @@ export async function syncToFile(): Promise<{ ok: boolean; message: string }> {
  */
 export async function restoreFromFile(): Promise<{
   ok: boolean;
-  restored: { brain: number; predictions: number; questions: number; logs: number; settings: number };
+  restored: {
+    brain: number; predictions: number; questions: number; logs: number; settings: number;
+    btcBrain: number; btcPredictions: number; btcQuestions: number; btcLogs: number;
+  };
   message: string;
 }> {
-  const empty = { brain: 0, predictions: 0, questions: 0, logs: 0, settings: 0 };
+  const empty = {
+    brain: 0, predictions: 0, questions: 0, logs: 0, settings: 0,
+    btcBrain: 0, btcPredictions: 0, btcQuestions: 0, btcLogs: 0,
+  };
   if (!fs.existsSync(BACKUP_PATH)) {
     return { ok: false, restored: empty, message: `File backup tidak ditemukan: ${BACKUP_PATH}` };
   }
@@ -467,6 +655,103 @@ export async function restoreFromFile(): Promise<{
       rSettings++;
     }
 
+    // ── btc brain ─────────────────────────────────────────────────────────────
+    const btcBrainRows = readAll("btcusd_brain");
+    let rBtcBrain = 0;
+    for (const r of btcBrainRows) {
+      await db.insert(btcusdBrainTable).values({
+        id: r.id as number,
+        category: r.category as string,
+        title: r.title as string,
+        content: r.content as string,
+        confidence: r.confidence as number,
+        usageCount: r.usage_count as number,
+        lastValidated: r.last_validated ? new Date(r.last_validated as string) : null,
+        isActive: r.is_active === 1,
+        sourceQuestion: (r.source_question as string) ?? null,
+        marketConditionTags: (r.market_condition_tags as string) ?? null,
+        decayWeight: r.decay_weight as number,
+        createdAt: new Date(r.created_at as string),
+        updatedAt: new Date(r.updated_at as string),
+      }).onConflictDoNothing();
+      rBtcBrain++;
+    }
+
+    // ── btc predictions ───────────────────────────────────────────────────────
+    const btcPredRows = readAll("btcusd_predictions");
+    let rBtcPreds = 0;
+    for (const r of btcPredRows) {
+      await db.insert(btcusdPredictionsTable).values({
+        id: r.id as number,
+        predictedAt: new Date(r.predicted_at as string),
+        timeframe: r.timeframe as string,
+        direction: r.direction as string,
+        targetPrice: (r.target_price as number) ?? null,
+        tp2: (r.tp2 as number) ?? null,
+        tp3: (r.tp3 as number) ?? null,
+        entryLow: (r.entry_low as number) ?? null,
+        entryHigh: (r.entry_high as number) ?? null,
+        stopLoss: (r.stop_loss as number) ?? null,
+        confidence: r.confidence as number,
+        reasoning: r.reasoning as string,
+        priceAtPrediction: r.price_at_prediction as number,
+        indicatorsAtPrediction: r.indicators_at_prediction
+          ? JSON.parse(r.indicators_at_prediction as string)
+          : null,
+        tradingSession: (r.trading_session as string) ?? null,
+        marketRegime: (r.market_regime as string) ?? null,
+        clusterLabel: (r.cluster_label as string) ?? null,
+        predictionType: (r.prediction_type as string) ?? "training",
+        verifyAt: r.verify_at ? new Date(r.verify_at as string) : null,
+        actualPrice: (r.actual_price as number) ?? null,
+        actualDirection: (r.actual_direction as string) ?? null,
+        isCorrect: r.is_correct === null ? null : r.is_correct === 1,
+        priceDiff: (r.price_diff as number) ?? null,
+        priceP10: (r.price_p10 as number) ?? null,
+        priceP50: (r.price_p50 as number) ?? null,
+        priceP90: (r.price_p90 as number) ?? null,
+        status: r.status as string,
+      }).onConflictDoNothing();
+      rBtcPreds++;
+    }
+
+    // ── btc questions ─────────────────────────────────────────────────────────
+    const btcQRows = readAll("btcusd_questions_log");
+    let rBtcQ = 0;
+    for (const r of btcQRows) {
+      await db.insert(btcusdQuestionsLogTable).values({
+        id: r.id as number,
+        question: r.question as string,
+        questionHash: r.question_hash as string,
+        answer: (r.answer as string) ?? null,
+        quality: (r.quality as number) ?? null,
+        savedToBrain: r.saved_to_brain === 1,
+        marketContext: r.market_context ? JSON.parse(r.market_context as string) : null,
+        askedAt: new Date(r.asked_at as string),
+        answeredAt: r.answered_at ? new Date(r.answered_at as string) : null,
+      }).onConflictDoNothing();
+      rBtcQ++;
+    }
+
+    // ── btc learning log ──────────────────────────────────────────────────────
+    const btcLogRows = readAll("btcusd_learning_log");
+    let rBtcLogs = 0;
+    for (const r of btcLogRows) {
+      await db.insert(btcusdLearningLogTable).values({
+        id: r.id as number,
+        cycleAt: new Date(r.cycle_at as string),
+        priceAtCycle: (r.price_at_cycle as number) ?? null,
+        questionsAsked: r.questions_asked as number,
+        insightsSaved: r.insights_saved as number,
+        predictionsChecked: r.predictions_checked as number,
+        wrongPredictions: r.wrong_predictions as number,
+        spikeDetected: r.spike_detected === 1,
+        summary: (r.summary as string) ?? null,
+        durationMs: (r.duration_ms as number) ?? null,
+      }).onConflictDoNothing();
+      rBtcLogs++;
+    }
+
     sqlDb.close();
 
     // ── Reset PostgreSQL sequences agar INSERT berikutnya tidak tabrakan PK ──
@@ -478,6 +763,10 @@ export async function restoreFromFile(): Promise<{
         { seq: "xauusd_questions_log_id_seq", table: "xauusd_questions_log" },
         { seq: "xauusd_learning_log_id_seq", table: "xauusd_learning_log" },
         { seq: "xauusd_settings_id_seq", table: "xauusd_settings" },
+        { seq: "btcusd_brain_id_seq", table: "btcusd_brain" },
+        { seq: "btcusd_predictions_id_seq", table: "btcusd_predictions" },
+        { seq: "btcusd_questions_log_id_seq", table: "btcusd_questions_log" },
+        { seq: "btcusd_learning_log_id_seq", table: "btcusd_learning_log" },
       ];
       for (const { seq, table } of seqTables) {
         await db.execute(
@@ -489,11 +778,14 @@ export async function restoreFromFile(): Promise<{
       console.error("[Brain Backup] ⚠️ Gagal reset sequence:", seqErr);
     }
 
-    const msg = `Restore berhasil: ${rBrain} brain, ${rPreds} prediksi, ${rQ} pertanyaan, ${rLogs} siklus, ${rSettings} setting`;
+    const msg = `Restore berhasil: ${rBrain} brain, ${rPreds} prediksi, ${rQ} pertanyaan, ${rLogs} siklus, ${rSettings} setting | BTC: ${rBtcBrain} brain, ${rBtcPreds} prediksi, ${rBtcQ} pertanyaan, ${rBtcLogs} siklus`;
     console.log(`[Brain Backup] ✅ ${msg}`);
     return {
       ok: true,
-      restored: { brain: rBrain, predictions: rPreds, questions: rQ, logs: rLogs, settings: rSettings },
+      restored: {
+        brain: rBrain, predictions: rPreds, questions: rQ, logs: rLogs, settings: rSettings,
+        btcBrain: rBtcBrain, btcPredictions: rBtcPreds, btcQuestions: rBtcQ, btcLogs: rBtcLogs,
+      },
       message: msg,
     };
   } catch (err) {
@@ -508,15 +800,17 @@ export async function restoreFromFile(): Promise<{
  */
 export async function autoRestoreIfEmpty(): Promise<void> {
   try {
-    const existing = await db
-      .select({ id: xauusdBrainTable.id })
-      .from(xauusdBrainTable)
-      .limit(1);
-    if (existing.length > 0) return; // PostgreSQL sudah ada data
     if (!fs.existsSync(BACKUP_PATH)) return; // Tidak ada backup
 
+    const [xauExisting, btcExisting] = await Promise.all([
+      db.select({ id: xauusdBrainTable.id }).from(xauusdBrainTable).limit(1),
+      db.select({ id: btcusdBrainTable.id }).from(btcusdBrainTable).limit(1),
+    ]);
+
+    if (xauExisting.length > 0 && btcExisting.length > 0) return; // Keduanya sudah ada data
+
     console.log(
-      "[Brain Backup] 🔄 PostgreSQL brain kosong — auto-restore dari backup file..."
+      "[Brain Backup] 🔄 PostgreSQL brain (XAUUSD dan/atau BTC) kosong — auto-restore dari backup file..."
     );
     const result = await restoreFromFile();
     if (result.ok) {
