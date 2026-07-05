@@ -63,7 +63,6 @@ const TV_INDICATOR_COLUMNS = [
   "MACD.macd", "MACD.signal", "MACD.macd[1]", "MACD.signal[1]",
   "BB.upper", "BB.lower", "BB.basis",
   "ATR",
-  "Pivot.M.Classic.S1", "Pivot.M.Classic.R1",
 ] as const;
 
 async function queryTvScanner(interval: string): Promise<(number | null)[]> {
@@ -369,8 +368,7 @@ export async function fetchBtcusdIndicators(timeframe: "1h" | "4h" | "1d" = "1h"
   const [close, open, high, low, volume, , ,
     rsi, rsiPrev, ema9, ema21, ema50, ema200,
     macdLine, macdSignal, macdLinePrev, macdSignalPrev,
-    bbUpper, bbLower, bbMiddle, atr,
-    s1, r1] = d;
+    bbUpper, bbLower, bbMiddle, atr] = d;
 
   const price = close ?? 0;
   const bbWidth = bbMiddle && bbMiddle > 0 ? ((bbUpper ?? 0) - (bbLower ?? 0)) / bbMiddle * 100 : null;
@@ -426,7 +424,9 @@ export async function fetchBtcusdIndicators(timeframe: "1h" | "4h" | "1d" = "1h"
     rsiSignal,
     macdSignalType,
     emaAlignment,
-    supportLevel: s1 ?? null,
-    resistanceLevel: r1 ?? null,
+    // Support/resistance berbasis ATR (volatilitas jangka pendek), bukan pivot bulanan —
+    // agar level TP1/SL sesuai dengan horizon prediksi 4 jam, bukan meleset jauh.
+    supportLevel: atr != null ? price - atr * 1.5 : null,
+    resistanceLevel: atr != null ? price + atr * 1.5 : null,
   };
 }
