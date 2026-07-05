@@ -967,6 +967,32 @@ async function retrieveRelevantBrainEntries(
   }
 }
 
+// ─── Weekend-aware verifyAt helper ─────────────────────────────────────────────
+/**
+ * Bug fix #3: Dorong `date` melewati window tutup XAUUSD weekend
+ * (Jumat 22:00 UTC – Minggu 22:00 UTC) agar prediksi Jumat sore tidak
+ * kadaluarsa saat market libur dan dihitung salah secara tidak adil.
+ */
+function skipXauusdWeekend(date: Date): Date {
+  const day = date.getUTCDay();   // 0=Min, 1=Sen, ..., 5=Jum, 6=Sab
+  const hour = date.getUTCHours();
+  // Jumat setelah 22:00 UTC atau Sabtu penuh → dorong ke Minggu 22:00 UTC
+  if ((day === 5 && hour >= 22) || day === 6) {
+    const next = new Date(date);
+    const daysToSunday = (7 - day) % 7; // 5→2, 6→1
+    next.setUTCDate(next.getUTCDate() + daysToSunday);
+    next.setUTCHours(22, 0, 0, 0);
+    return next;
+  }
+  // Minggu sebelum 22:00 UTC → dorong ke Minggu 22:00 UTC
+  if (day === 0 && hour < 22) {
+    const next = new Date(date);
+    next.setUTCHours(22, 0, 0, 0);
+    return next;
+  }
+  return date; // market buka, tidak perlu penyesuaian
+}
+
 // ─── Prediction maker ──────────────────────────────────────────────────────────
 
 async function makePrediction(
@@ -1227,7 +1253,10 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
 
   try {
     // max 24 jam — validasi utama via SL/TP, ini hanya fallback kadaluarsa
-    const verifyAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    // Bug fix: lewati window weekend XAUUSD (Jumat 22:00 UTC – Minggu 22:00 UTC)
+    // agar prediksi Jumat sore tidak kadaluarsa saat market tutup.
+    const rawVerifyAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const verifyAt = skipXauusdWeekend(rawVerifyAt);
 
     const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
     const targetPrice = pred.targetPrice ?? ruleBased.targetPrice; // TP1
@@ -1388,14 +1417,19 @@ async function verifyOldPredictions(currentPrice: number): Promise<{ checked: nu
         resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≥ $${sl.toFixed(2)})`;
       }
     } else {
-      // sideways: SL/TP biasanya tidak tajam — anggap selesai jika harga sudah jauh (>0.5%)
+      // Bug fix #1: sideways kini punya jalur BENAR — harga tetap dalam kisaran saat verifyAt
       if (Math.abs(pricePct) > 0.005) {
+        // Harga keluar dari kisaran sideways → SALAH (langsung)
         resolved = true; isCorrect = false;
         resolveReason = `Harga bergerak terlalu jauh dari sideways (${(pricePct * 100).toFixed(2)}%)`;
+      } else if (pred.verifyAt && now > new Date(pred.verifyAt)) {
+        // Waktu habis & harga masih dalam kisaran ±0.5% → BENAR
+        resolved = true; isCorrect = true;
+        resolveReason = `Sideways valid: harga tetap dalam kisaran (±${(Math.abs(pricePct) * 100).toFixed(2)}%)`;
       }
     }
 
-    // ── Fallback waktu: max 24 jam jika SL/TP belum kena ─────────────────────
+    // ── Fallback waktu untuk up/down: max 24 jam jika SL/TP belum kena ───────
     if (!resolved && pred.verifyAt && now > new Date(pred.verifyAt)) {
       resolved = true;
       resolveReason = "Kadaluarsa 24 jam tanpa hit SL/TP";
@@ -1444,20 +1478,28 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
       }
 
       // ── Prioritas 2: Reinforcement negatif — lemahkan entries dengan arah yang salah ──
-      // Prediksi SALAH → turunkan decayWeight entries yang menandai arah yang salah (floor 0.1)
+      // Bug fix #2: hanya melemahkan insight dari konteks (session + regime) yang sama
+      // agar AI tidak melupakan insight bagus dari kondisi pasar yang berbeda.
       try {
-        const wrongDirTag = `dir_${pred.direction}`; // arah yang salah
+        const wrongDirTag = `dir_${pred.direction}`;
+        const sessionTag = pred.tradingSession ? `session_${pred.tradingSession}` : null;
+        const regimeTag  = pred.marketRegime   ? `regime_${pred.marketRegime}`   : null;
+
+        const negConds = [
+          eq(xauusdBrainTable.isActive, true),
+          sql`${xauusdBrainTable.marketConditionTags} ILIKE ${"%" + wrongDirTag + "%"}`,
+          ...(sessionTag ? [sql`${xauusdBrainTable.marketConditionTags} ILIKE ${"%" + sessionTag + "%"}`] : []),
+          ...(regimeTag  ? [sql`${xauusdBrainTable.marketConditionTags} ILIKE ${"%" + regimeTag  + "%"}`] : []),
+        ] as Parameters<typeof and>;
+
         await db.update(xauusdBrainTable)
           .set({
             decayWeight: sql`GREATEST(0.1, ${xauusdBrainTable.decayWeight} * 0.88)`,
             updatedAt: new Date(),
           })
-          .where(
-            and(
-              eq(xauusdBrainTable.isActive, true),
-              sql`${xauusdBrainTable.marketConditionTags} ILIKE ${"%" + wrongDirTag + "%"}`
-            )
-          );
+          .where(and(...negConds));
+
+        console.log(`[XAUUSD Brain] ⬇️ Negative reinforcement: ${wrongDirTag}${sessionTag ? " +" + sessionTag : ""}${regimeTag ? " +" + regimeTag : ""} dilemahkan (×0.88)`);
       } catch (err) {
         console.error("[XAUUSD Brain] Negative reinforcement error:", err);
       }

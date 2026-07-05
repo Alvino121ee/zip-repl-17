@@ -969,12 +969,19 @@ async function verifyOldPredictions(currentPrice: number): Promise<{ checked: nu
       if (tp != null && currentPrice <= tp) { resolved = true; isCorrect = true; resolveReason = `TP tercapai ($${currentPrice.toFixed(2)} ≤ $${tp.toFixed(2)})`; }
       else if (sl != null && currentPrice >= sl) { resolved = true; isCorrect = false; resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≥ $${sl.toFixed(2)})`; }
     } else {
+      // Bug fix #1: sideways kini punya jalur BENAR — harga tetap dalam kisaran saat verifyAt
       if (Math.abs(pricePct) > 0.01) {
+        // Harga keluar dari kisaran sideways → SALAH (langsung)
         resolved = true; isCorrect = false;
         resolveReason = `Harga bergerak terlalu jauh dari sideways (${(pricePct * 100).toFixed(2)}%)`;
+      } else if (pred.verifyAt && now > new Date(pred.verifyAt)) {
+        // Waktu habis & harga masih dalam kisaran ±1% → BENAR
+        resolved = true; isCorrect = true;
+        resolveReason = `Sideways valid: harga tetap dalam kisaran (±${(Math.abs(pricePct) * 100).toFixed(2)}%)`;
       }
     }
 
+    // ── Fallback waktu untuk up/down: max 4 jam jika SL/TP belum kena ────────
     if (!resolved && pred.verifyAt && now > new Date(pred.verifyAt)) {
       resolved = true;
       resolveReason = "Kadaluarsa 4 jam tanpa hit SL/TP";
@@ -1018,22 +1025,30 @@ Tulis 2-3 kalimat pelajaran spesifik yang harus diingat untuk menghindari kesala
         console.error("[BTC Brain] Self-critique error:", err);
       }
 
-      // Negative reinforcement DIPERKUAT: decay 0.75 (dari 0.88)
-      // Melemahkan insight dengan arah + cluster yang sama
+      // Bug fix #2: reinforcement negatif kini scoped ke session + regime + cluster yang sama
+      // agar AI tidak melupakan insight bagus dari kondisi pasar yang berbeda.
       try {
-        const wrongDirTag = `dir_${pred.direction}`;
+        const wrongDirTag  = `dir_${pred.direction}`;
+        const sessionTag   = pred.tradingSession ? `session_${pred.tradingSession}` : null;
+        const regimeTag    = pred.marketRegime   ? `regime_${pred.marketRegime}`   : null;
+        const clusterTag   = pred.clusterLabel   ? `cluster_${pred.clusterLabel.split("+")[0]}` : null;
+
+        const negConds = [
+          eq(btcusdBrainTable.isActive, true),
+          sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + wrongDirTag + "%"}`,
+          ...(sessionTag ? [sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + sessionTag + "%"}`] : []),
+          ...(regimeTag  ? [sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + regimeTag  + "%"}`] : []),
+          ...(clusterTag ? [sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + clusterTag + "%"}`] : []),
+        ] as Parameters<typeof and>;
+
         await db.update(btcusdBrainTable)
           .set({
             decayWeight: sql`GREATEST(0.05, ${btcusdBrainTable.decayWeight} * 0.75)`,
             updatedAt: new Date(),
           })
-          .where(
-            and(
-              eq(btcusdBrainTable.isActive, true),
-              sql`${btcusdBrainTable.marketConditionTags} ILIKE ${"%" + wrongDirTag + "%"}`
-            )
-          );
-        console.log(`[BTC Brain] ⬇️ Negative reinforcement: insight dir_${pred.direction} dilemahkan (×0.75)`);
+          .where(and(...negConds));
+
+        console.log(`[BTC Brain] ⬇️ Negative reinforcement: ${wrongDirTag}${sessionTag ? " +" + sessionTag : ""}${regimeTag ? " +" + regimeTag : ""}${clusterTag ? " +" + clusterTag : ""} dilemahkan (×0.75)`);
       } catch (err) {
         console.error("[BTC Brain] Negative reinforcement error:", err);
       }

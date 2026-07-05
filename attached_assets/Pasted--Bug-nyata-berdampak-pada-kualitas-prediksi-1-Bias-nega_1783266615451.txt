@@ -1,0 +1,39 @@
+🔴 Bug nyata (berdampak pada kualitas prediksi)
+1. Bias negatif pada prediksi "sideways" (XAUUSD & BTC)
+
+File: xauusd-brain-engine.ts & btcusd-brain-engine.ts, di logika verifikasi.
+Prediksi "sideways" hanya bisa berstatus Salah (jika harga bergerak >0.5%/1%) atau kadaluarsa — tidak pernah ada kondisi eksplisit "Benar" di tengah jalan seperti TP/SL pada arah up/down. Akibatnya AI jadi "malas" memprediksi sideways karena sistem reinforcement menghukumnya lebih sering, walau sideways sebenarnya valid.
+2. Reinforcement negatif "generalisasi berlebihan" (XAUUSD & BTC)
+
+File: xauusd-brain-engine.ts baris ~1449-1460, pola sama di BTC.
+Saat 1 prediksi arah "up" salah, sistem melemahkan SEMUA insight brain yang pernah ditandai dir_up — termasuk insight bagus dari sesi/regime pasar yang beda sama sekali. Ini membuat brain bisa "lupa" insight bagus hanya gara-gara 1 prediksi gagal di kondisi lain.
+3. Verifikasi 24 jam untuk XAUUSD bisa nyangkut saat weekend
+
+File: xauusd-brain-engine.ts baris 1230.
+verifyAt di-hardcode +24 jam. Kalau prediksi dibuat Jumat sore sebelum market tutup, market libur ±48 jam, sehingga prediksi otomatis kadaluarsa (dan dihitung salah) sebelum market buka lagi — padahal belum tentu salah, cuma belum sempat tervalidasi.
+🟡 Perlu ditinjau (bukan pasti bug, tapi mencurigakan)
+4. Ambang batas "volatile" beda jauh antara XAUUSD dan BTC
+
+XAUUSD: ATR > 0.75% dari harga dianggap "volatile" — cukup rendah, kemungkinan sering salah kategori jadi volatile padahal wajar untuk gold.
+BTC: ATR > 2.0% — lebih masuk akal untuk aset sevolatile crypto.
+5. Reinforcement multiplier tidak konsisten
+
+XAUUSD pakai 0.88 untuk pelemahan bobot brain saat salah, BTC pakai 0.75 (lebih agresif). Bukan error teknis, tapi asimetri ini mungkin tidak sengaja — BTC jadi "lebih cepat lupa" insight yang gagal dibanding XAUUSD.
+✅ Yang sudah saya cek dan ternyata benar (bukan bug seperti dugaan awal)
+Saya sempat mengecek logika tie-breaker voting ensemble (3 agen: teknikal/makro/sentimen) — ternyata sudah benar: kalau seri (1-1-1), sistem fallback ke arah dari AI/rule-based, bukan error.
+
+Mana yang mau saya perbaiki dulu? Saya sarankan urutan prioritas: (1) fix weekend expiry XAUUSD → paling jelas merugikan skor akurasi, (2) fix reinforcement negatif supaya lebih spesifik per regime/sesi → paling berdampak ke kualitas belajar AI jangka panjang, (3) tambah kondisi "benar" untuk sideways.
+
+Sudah saya sampaikan laporan lengkapnya di atas. Karena tool tanya-jawab tidak bisa dipanggil dua kali dalam satu giliran, saya tunggu jawaban Anda di sini — mana yang mau diperbaiki dulu:
+
+Semua 3 bug nyata sekaligus (weekend expiry, reinforcement negatif terlalu luas, sideways selalu bias salah)
+Cuma fix weekend expiry XAUUSD dulu
+Cuma fix reinforcement negatif dulu
+Tidak perlu diperbaiki, cukup laporan saja
+Beri tahu saya pilihannya, atau kombinasi lain yang Anda inginkan.
+
+
+Checkpoint made
+8 minutes ago
+
+Worked for 1 minute
