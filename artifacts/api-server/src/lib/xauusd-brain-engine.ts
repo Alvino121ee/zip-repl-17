@@ -637,6 +637,17 @@ function clampMainTpDistance(rawDistance: number): number {
   return Math.min(MAIN_TP_MAX_USD, Math.max(MAIN_TP_MIN_USD, rawDistance));
 }
 
+// Karena TP1 sekarang selalu kecil ($5–$20), SL struktural lama (jarak jauh ke
+// swing high/low) membuat RR jatuh jauh di bawah minimum. SL untuk prediksi
+// UTAMA di-clamp proporsional terhadap TP1 (bukan angka tetap) supaya RR selalu
+// >= MAIN_MIN_RR_TARGET — beri margin aman di atas MIN_RR_MAIN (1.0) di makePrediction.
+const MAIN_MIN_RR_TARGET = 1.2;
+
+function clampMainSlDistance(rawDistance: number, tpDistance: number): number {
+  const maxAllowed = tpDistance / MAIN_MIN_RR_TARGET;
+  return Math.max(1, Math.min(maxAllowed, rawDistance));
+}
+
 function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPrediction {
   const price = indicators.price;
   const atr = indicators.atr14 ?? price * 0.003; // fallback ~0.3% if ATR unavailable
@@ -689,9 +700,9 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
     const slCandidate = indicators.supportLevel != null
       ? parseFloat((indicators.supportLevel - atr * 0.1).toFixed(2))
       : null;
-    stopLoss = (slCandidate != null && slCandidate < price)
-      ? slCandidate
-      : parseFloat((price - atr * 1.5).toFixed(2));
+    const slRawUp = (slCandidate != null && slCandidate < price)
+      ? price - slCandidate
+      : atr * 1.5;
     // TP1: resistance terdekat di ATAS harga (area reaksi pertama); fallback ATR.
     // Jarak akhir di-clamp ke $5–$20 (≈50–200 pip) supaya target selalu realistis.
     const tp1Candidate = indicators.resistanceLevel != null
@@ -700,7 +711,10 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
     const tp1RawDistance = (tp1Candidate != null && tp1Candidate > price)
       ? tp1Candidate - price
       : atr * 1.5;
-    targetPrice = parseFloat((price + clampMainTpDistance(tp1RawDistance)).toFixed(2));
+    const tp1DistanceUp = clampMainTpDistance(tp1RawDistance);
+    targetPrice = parseFloat((price + tp1DistanceUp).toFixed(2));
+    // SL di-clamp proporsional terhadap TP1 supaya RR tetap sehat setelah TP dikecilkan
+    stopLoss = parseFloat((price - clampMainSlDistance(slRawUp, tp1DistanceUp)).toFixed(2));
     // TP2/TP3: ektensi ATR dari TP1 (selalu valid karena relatif terhadap TP1)
     tp2 = parseFloat((targetPrice + atr * 1.5).toFixed(2));
     tp3 = parseFloat((targetPrice + atr * 3.5).toFixed(2));
@@ -711,9 +725,9 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
     const slCandidate = indicators.resistanceLevel != null
       ? parseFloat((indicators.resistanceLevel + atr * 0.1).toFixed(2))
       : null;
-    stopLoss = (slCandidate != null && slCandidate > price)
-      ? slCandidate
-      : parseFloat((price + atr * 1.5).toFixed(2));
+    const slRawDown = (slCandidate != null && slCandidate > price)
+      ? slCandidate - price
+      : atr * 1.5;
     // TP1: support terdekat di BAWAH harga (area reaksi pertama); fallback ATR.
     // Jarak akhir di-clamp ke $5–$20 (≈50–200 pip) supaya target selalu realistis.
     const tp1Candidate = indicators.supportLevel != null
@@ -722,7 +736,10 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
     const tp1RawDistance = (tp1Candidate != null && tp1Candidate < price)
       ? price - tp1Candidate
       : atr * 1.5;
-    targetPrice = parseFloat((price - clampMainTpDistance(tp1RawDistance)).toFixed(2));
+    const tp1DistanceDown = clampMainTpDistance(tp1RawDistance);
+    targetPrice = parseFloat((price - tp1DistanceDown).toFixed(2));
+    // SL di-clamp proporsional terhadap TP1 supaya RR tetap sehat setelah TP dikecilkan
+    stopLoss = parseFloat((price + clampMainSlDistance(slRawDown, tp1DistanceDown)).toFixed(2));
     // TP2/TP3: ekstensi ATR dari TP1
     tp2 = parseFloat((targetPrice - atr * 1.5).toFixed(2));
     tp3 = parseFloat((targetPrice - atr * 3.5).toFixed(2));
@@ -734,9 +751,9 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
     const slCandidateSide = indicators.supportLevel != null
       ? parseFloat((indicators.supportLevel - atr * 0.1).toFixed(2))
       : null;
-    stopLoss = (slCandidateSide != null && slCandidateSide < price)
-      ? slCandidateSide
-      : parseFloat((price - atr * 1.5).toFixed(2));
+    const slRawSide = (slCandidateSide != null && slCandidateSide < price)
+      ? price - slCandidateSide
+      : atr * 1.5;
     // TP1: resistance terdekat (batas atas range); fallback 1.0×ATR ke atas.
     // Jarak akhir di-clamp ke $5–$20 (≈50–200 pip) supaya target selalu realistis.
     const tp1CandidateSide = indicators.resistanceLevel != null
@@ -745,7 +762,10 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
     const tp1RawDistanceSide = (tp1CandidateSide != null && tp1CandidateSide > price)
       ? tp1CandidateSide - price
       : atr * 1.0;
-    targetPrice = parseFloat((price + clampMainTpDistance(tp1RawDistanceSide)).toFixed(2));
+    const tp1DistanceSide = clampMainTpDistance(tp1RawDistanceSide);
+    targetPrice = parseFloat((price + tp1DistanceSide).toFixed(2));
+    // SL di-clamp proporsional terhadap TP1 supaya RR tetap sehat setelah TP dikecilkan
+    stopLoss = parseFloat((price - clampMainSlDistance(slRawSide, tp1DistanceSide)).toFixed(2));
     tp2 = parseFloat((targetPrice + atr * 0.5).toFixed(2));
     tp3 = parseFloat((price + atr * 2.0).toFixed(2));
   }
@@ -1451,13 +1471,15 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     const notEqual = Math.abs(rawTP1 - rawSL) >= atrVal * 0.5;
 
     let targetPrice = tp1Ok && notEqual ? rawTP1 : rbFinal.targetPrice;
-    const stopLoss    = slOk  && notEqual ? rawSL  : rbFinal.stopLoss;
+    let stopLoss      = slOk  && notEqual ? rawSL  : rbFinal.stopLoss;
     const entryLow    = rawEL < rawEH ? rawEL : rbFinal.entryLow;
     const entryHigh   = rawEL < rawEH ? rawEH : rbFinal.entryHigh;
 
     // Untuk prediksi UTAMA — clamp jarak TP1 ke $5–$20 (≈50–200 pip) dari entry,
     // tak peduli sumbernya rule-based atau AI. Jarak asal dipertahankan sebagai
     // sinyal analisis, hanya besarannya yang dibatasi ke rentang realistis.
+    // SL juga di-clamp proporsional terhadap TP1 baru supaya RR tidak jatuh
+    // (SL struktural lama bisa jauh lebih besar dari TP kecil yang baru).
     if (predType === "main") {
       const tp1Distance = Math.abs(targetPrice - entryMid);
       const clampedTp1Distance = clampMainTpDistance(tp1Distance);
@@ -1465,6 +1487,13 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
         targetPrice = finalDirection === "down"
           ? parseFloat((entryMid - clampedTp1Distance).toFixed(2))
           : parseFloat((entryMid + clampedTp1Distance).toFixed(2));
+      }
+      const slDistance = Math.abs(entryMid - stopLoss);
+      const clampedSlDistance = clampMainSlDistance(slDistance, clampedTp1Distance);
+      if (clampedSlDistance !== slDistance) {
+        stopLoss = finalDirection === "down"
+          ? parseFloat((entryMid + clampedSlDistance).toFixed(2))
+          : parseFloat((entryMid - clampedSlDistance).toFixed(2));
       }
     }
 
