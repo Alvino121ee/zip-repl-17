@@ -108,7 +108,7 @@ router.get("/members", requireAdmin, async (_req, res) => {
 
 // DELETE /admin/members/:id — hapus member (admin only)
 router.delete("/members/:id", requireAdmin, async (req, res) => {
-  const id = parseInt(req.params.id ?? "");
+  const id = parseInt(String(req.params.id ?? ""));
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
   try {
     await deleteMember(id);

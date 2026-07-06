@@ -49,7 +49,7 @@ function requireMemberMiddleware(
   getMemberFromReq(req).then((m) => {
     if (!m) return res.status(401).json({ error: "Login diperlukan" });
     (req as any).member = m;
-    next();
+    return next();
   }).catch(() => res.status(401).json({ error: "Login diperlukan" }));
 }
 
