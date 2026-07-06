@@ -55,8 +55,15 @@ pnpm --filter @workspace/db run push   # push schema ke database (PostgreSQL man
 | `OPENAI_API_KEY` | Opsional — untuk fitur AI report |
 | `DEEPSEEK_API_KEY` | Opsional — untuk analisis DeepSeek |
 | `AI_API_KEY` + `AI_API_BASE_URL` + `AI_MODEL` | Opsional — custom AI provider |
+| `SMTP_HOST` | Host SMTP (contoh: `smtp.gmail.com`) |
+| `SMTP_PORT` | Port SMTP (default: `587`) |
+| `SMTP_USER` | Username/email SMTP |
+| `SMTP_PASS` | Password atau App Password SMTP |
+| `SMTP_FROM` | Alamat pengirim (default: `noreply@radargold`) |
 
 Tanpa API key AI, aplikasi tetap berjalan dengan template berbasis data.
+
+> **SMTP**: Kredensial SMTP bisa diset via env di atas **atau** langsung dari Admin panel → SMTP Settings (disimpan di database). Nilai di database lebih diprioritaskan daripada env.
 
 ## Setelah Ubah Schema Database
 
