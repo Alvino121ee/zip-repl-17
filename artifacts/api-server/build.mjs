@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm, copyFile } from "node:fs/promises";
+import { rm, copyFile, cp, mkdir } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -127,6 +127,17 @@ async function copySqlWasm() {
   const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "dist");
   await copyFile(wasmSrc, path.join(distDir, "sql-wasm.wasm"));
   console.log("  sql-wasm.wasm → dist/");
+
+  // Copy public/ folder (file download EA, dll.)
+  const publicSrc = path.resolve(artifactDir, "public");
+  const publicDst = path.resolve(distDir, "../public");
+  try {
+    await mkdir(publicDst, { recursive: true });
+    await cp(publicSrc, publicDst, { recursive: true });
+    console.log("  public/ → dist/../public/");
+  } catch {
+    // public/ mungkin belum ada — skip
+  }
 }
 
 buildAll()

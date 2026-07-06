@@ -47,6 +47,7 @@ import {
   VALID_TIMEFRAMES,
   isXauusdBrainEnabled,
   setXauusdBrainEnabled,
+  validateEaApiKey,
 } from "../lib/xauusd-settings.js";
 import { sendTestWhatsappMessage } from "../lib/xauusd-whatsapp.js";
 
@@ -1061,6 +1062,130 @@ ${topInsights.map((ins) => `[${ins.category}] ${ins.title}\n  → ${ins.content.
     return res.json(reply);
   } catch (err) {
     console.error("[XAUUSD] /chat error:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── GET /xauusd/ea-signal — Mentor Mode endpoint for MetaTrader EA ──────────
+// Auth: ?key=<ea_api_key> atau header Authorization: Bearer <key>
+// Format JSON (default) atau ?format=plain → "COMMAND|PRICE|TP|SL|CONFIDENCE"
+// Command: BUY | SELL | HOLD  (SELL = SHORT, disesuaikan untuk MT4/MT5)
+xauusdRouter.get("/ea-signal", async (req, res) => {
+  try {
+    // ── Auth EA key ─────────────────────────────────────────────────────────
+    const authHeader = (req.headers.authorization as string | undefined) ?? "";
+    const providedKey =
+      (req.query.key as string | undefined) ??
+      authHeader.replace(/^Bearer\s+/i, "");
+
+    if (!providedKey) {
+      return res.status(401).json({ error: "EA API key diperlukan (?key=... atau Authorization: Bearer ...)" });
+    }
+    const keyValid = await validateEaApiKey(providedKey);
+    if (!keyValid) {
+      return res.status(403).json({ error: "EA API key tidak valid" });
+    }
+
+    // ── Reuse mentor-signal logic ────────────────────────────────────────────
+    const sensitivity = (["aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
+      ? req.query.sensitivity
+      : "normal") as "aggressive" | "normal" | "conservative";
+
+    const livePrice = getLatestLivePrice();
+    const price = livePrice?.price ?? null;
+
+    const cached = getLatestMentorIndicators();
+    const useLiveCache = cached.indicators !== null && !cached.stale;
+    let snap: typeof cached.indicators | null = useLiveCache ? cached.indicators : null;
+    let dataSource: "live" | "snapshot" = "live";
+
+    if (!snap) {
+      const snapRows = await db.select().from(xauusdSnapshotsTable).orderBy(desc(xauusdSnapshotsTable.snapshotAt)).limit(1);
+      if (!snapRows.length) {
+        const noDataResp = { command: "HOLD", price, tp: null, sl: null, confidence: 0, dataSource: "snapshot", timestamp: new Date().toISOString(), sensitivity };
+        if (req.query.format === "plain") return res.type("text/plain").send(`HOLD|${price ?? 0}|0|0|0`);
+        return res.json(noDataResp);
+      }
+      const row = snapRows[0];
+      const bbW = row.bbUpper != null && row.bbLower != null && row.bbMiddle != null && row.bbMiddle !== 0
+        ? parseFloat(((row.bbUpper - row.bbLower) / row.bbMiddle * 100).toFixed(3)) : null;
+      snap = {
+        price: row.price, open: row.price, high: row.price, low: row.price, volume: row.volume ?? 0,
+        rsi14: row.rsi14, ema9: row.ema9, ema21: row.ema21, ema50: row.ema50, ema200: row.ema200,
+        macdLine: row.macdLine, macdSignal: row.macdSignal, macdHistogram: row.macdHistogram,
+        bbUpper: row.bbUpper, bbMiddle: row.bbMiddle, bbLower: row.bbLower, bbWidth: bbW, atr14: row.atr14,
+        trend: (row.trend as "bullish" | "bearish" | "sideways") ?? "sideways",
+        rsiSignal: (row.rsiSignal as "overbought" | "oversold" | "neutral") ?? "neutral",
+        macdSignalType: (row.macdSignalType as "bullish_cross" | "bearish_cross" | "neutral") ?? "neutral",
+        emaAlignment: (row.emaAlignment as "bullish_stack" | "bearish_stack" | "mixed") ?? "mixed",
+        supportLevel: row.supportLevel, resistanceLevel: row.resistanceLevel,
+      };
+      dataSource = "snapshot";
+    }
+
+    const p = price ?? snap.price ?? 0;
+    let bullishScore = 0, bearishScore = 0;
+    if (snap.emaAlignment === "bullish_stack") bullishScore++; else if (snap.emaAlignment === "bearish_stack") bearishScore++;
+    if (snap.rsi14 != null) {
+      if (snap.rsi14 <= 30) bullishScore++; else if (snap.rsi14 <= 50) bearishScore++;
+      else if (snap.rsi14 < 70) bullishScore++; else bearishScore++;
+    }
+    if (snap.macdSignalType === "bullish_cross") bullishScore++; else if (snap.macdSignalType === "bearish_cross") bearishScore++;
+    if (snap.macdHistogram != null) { if (snap.macdHistogram > 0) bullishScore++; else if (snap.macdHistogram < 0) bearishScore++; }
+    if (snap.ema50 != null) { if (p > snap.ema50) bullishScore++; else bearishScore++; }
+    if (snap.trend === "bullish") bullishScore++; else if (snap.trend === "bearish") bearishScore++;
+    if (snap.bbLower != null && snap.bbUpper != null && snap.bbMiddle != null) {
+      if (p < snap.bbLower) bullishScore++; else if (p > snap.bbUpper) bearishScore++;
+      else if (p < snap.bbMiddle) bearishScore += 0.5; else bullishScore += 0.5;
+    }
+    if (snap.supportLevel != null && snap.resistanceLevel != null) {
+      const mid = (snap.supportLevel + snap.resistanceLevel) / 2;
+      if (p > mid) bullishScore++; else bearishScore++;
+    }
+
+    const thresholds = { aggressive: 2, normal: 3, conservative: 4 };
+    const threshold = thresholds[sensitivity];
+    const maxPossible = 8.5;
+    let rawCommand: "BUY" | "SELL" | "HOLD";
+    let confidence: number;
+    if (bullishScore >= threshold && bullishScore > bearishScore) {
+      rawCommand = "BUY"; confidence = parseFloat(Math.min(0.95, bullishScore / maxPossible).toFixed(2));
+    } else if (bearishScore >= threshold && bearishScore > bullishScore) {
+      rawCommand = "SELL"; confidence = parseFloat(Math.min(0.95, bearishScore / maxPossible).toFixed(2)); // SELL = SHORT untuk EA
+    } else {
+      rawCommand = "HOLD"; confidence = parseFloat(Math.min(0.4, Math.max(bullishScore, bearishScore) / maxPossible).toFixed(2));
+    }
+
+    const atr = snap.atr14 ?? 5;
+    const tpDist = parseFloat((atr * 0.45).toFixed(2));
+    const slDist = parseFloat((tpDist * 0.8).toFixed(2));
+    const tp = rawCommand === "BUY" ? parseFloat((p + tpDist).toFixed(2))
+      : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
+    const sl = rawCommand === "BUY" ? parseFloat((p - slDist).toFixed(2))
+      : rawCommand === "SELL" ? parseFloat((p + slDist).toFixed(2)) : null;
+
+    const timestamp = new Date().toISOString();
+
+    if (req.query.format === "plain") {
+      // Format: COMMAND|PRICE|TP|SL|CONFIDENCE  — mudah di-parse MQL4/5 StringSplit
+      return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp ?? 0}|${sl ?? 0}|${confidence}`);
+    }
+
+    return res.json({
+      command: rawCommand,
+      price: p,
+      tp,
+      sl,
+      tpDistance: tp !== null ? parseFloat(Math.abs(tp - p).toFixed(2)) : null,
+      confidence,
+      bullishScore: parseFloat(bullishScore.toFixed(1)),
+      bearishScore: parseFloat(bearishScore.toFixed(1)),
+      sensitivity,
+      dataSource,
+      timestamp,
+    });
+  } catch (err) {
+    console.error("[XAUUSD] /ea-signal error:", err);
     return res.status(500).json({ error: String(err) });
   }
 });

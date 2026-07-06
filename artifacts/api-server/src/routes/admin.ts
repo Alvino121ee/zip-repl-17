@@ -17,6 +17,9 @@ import {
   setAiModel,
   getSmtpSettings,
   setSmtpSettings,
+  getEaApiKey,
+  generateEaApiKey,
+  clearEaApiKey,
 } from "../lib/xauusd-settings.js";
 import { getAllMembers, deleteMember } from "../lib/members-db.js";
 import { testSmtpConnection } from "../lib/email-smtp.js";
@@ -221,6 +224,40 @@ router.get("/brain-backup/download", requireAdmin, async (_req, res) => {
     res.download(BACKUP_PATH, "goldradar-brain.sqlite");
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// ─── EA API key management ────────────────────────────────────────────────────
+
+// GET /admin/ea-key — status kunci EA (key di-mask, hanya tampilkan awalan)
+router.get("/ea-key", requireAdmin, async (_req, res) => {
+  try {
+    const key = await getEaApiKey();
+    if (!key) return res.json({ ok: true, hasKey: false, keyPreview: null });
+    const preview = key.slice(0, 12) + "..." + key.slice(-6);
+    return res.json({ ok: true, hasKey: true, keyPreview: preview });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// POST /admin/ea-key/generate — buat kunci EA baru (kunci lama tidak bisa dipakai lagi)
+router.post("/ea-key/generate", requireAdmin, async (_req, res) => {
+  try {
+    const key = await generateEaApiKey();
+    return res.json({ ok: true, key });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// DELETE /admin/ea-key — hapus kunci EA (nonaktifkan semua EA yang terhubung)
+router.delete("/ea-key", requireAdmin, async (_req, res) => {
+  try {
+    await clearEaApiKey();
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
   }
 });
 

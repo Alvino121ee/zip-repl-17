@@ -1,77 +1,71 @@
-# GoldRadar.ai — XAUUSD AI Trading Intelligence
+# Saham Radar — GoldRadar.ai
 
-Platform trading emas (XAUUSD) berbasis AI yang belajar mandiri 24/7.
-
-## Cara Menjalankan
-
-Dua workflow harus berjalan bersamaan:
-
-| Workflow | Perintah | Port |
-|---|---|---|
-| `artifacts/saham-radar: web` | `cd artifacts/saham-radar && pnpm run dev` | 5000 |
-| `artifacts/api-server: API Server` | `cd artifacts/api-server && pnpm run dev` | 8080 |
-
-Buka preview di port **5000**.
+Platform AI trading XAUUSD (dan BTCUSD) yang belajar mandiri 24/7. Menyediakan prediksi arah pasar, analisis multi-timeframe, mentor signal, dan chat dengan AI expert gold.
 
 ## Stack
 
-- **Frontend**: React 19 + Vite, Tailwind CSS 4, Shadcn UI, TanStack Query, Wouter
-- **Backend**: Express.js + TypeScript, Pino logging
-- **Database**: PostgreSQL (Replit managed) + Drizzle ORM
-- **AI**: OpenAI / DeepSeek / AI_API_KEY (opsional — ada fallback template jika tidak ada key)
-- **Data**: TradingView Scanner API untuk harga live XAUUSD
-- **Package Manager**: pnpm (monorepo)
+- **Monorepo:** PNPM Workspaces (semua package di bawah `artifacts/` dan `lib/`)
+- **Frontend:** React 19 + Vite + Tailwind CSS 4 (`artifacts/saham-radar`)
+- **Backend:** Express 5 + TypeScript + Drizzle ORM + PostgreSQL (`artifacts/api-server`)
+- **Shared:** `lib/db` (schema + migrasi), `lib/api-spec`, `lib/api-zod`, `lib/api-client-react`
+- **WhatsApp:** `@whiskeysockets/baileys`
 
-## Struktur Monorepo
-
-```
-artifacts/
-  api-server/   — Express API server (port 8080)
-  saham-radar/  — React frontend (port 5000)
-lib/
-  db/           — Schema Drizzle ORM + shared DB client
-  api-spec/     — OpenAPI spec
-  api-client-react/ — Generated API client (React Query)
-scripts/        — Utility scripts (seed, dll)
-```
-
-## Setup Awal
-
-Script `scripts/post-merge.sh` dijalankan otomatis setelah merge atau clone baru. Perintah ekuivalennya:
+## Cara Menjalankan
 
 ```bash
-pnpm install --frozen-lockfile         # install semua dependensi
-pnpm --filter @workspace/db run push   # push schema ke database (PostgreSQL managed Replit)
+# Install semua dependensi (dari root)
+pnpm install
+
+# Jalankan migrasi database
+DATABASE_URL="$DATABASE_URL" pnpm --filter @workspace/db run push
+
+# Start frontend (port 19024)
+pnpm --filter @workspace/saham-radar dev
+
+# Start API server (port 8080)
+pnpm --filter @workspace/api-server dev
 ```
 
-> **Catatan**: Proyek ini menggunakan **PostgreSQL managed Replit** via `DATABASE_URL`. Tidak perlu modul `postgresql-16` di `.replit` — database sudah tersedia otomatis di environment Replit.
+Workflows sudah dikonfigurasi di Replit — klik Run untuk memulai.
 
-## Environment Variables
+## Environment Variables Wajib
 
-| Key | Keterangan |
+| Variabel | Keterangan |
 |---|---|
-| `DATABASE_URL` | Dikelola otomatis oleh Replit |
-| `SESSION_SECRET` | Secret session (sudah diset) |
-| `OPENAI_API_KEY` | Opsional — untuk fitur AI report |
-| `DEEPSEEK_API_KEY` | Opsional — untuk analisis DeepSeek |
-| `AI_API_KEY` + `AI_API_BASE_URL` + `AI_MODEL` | Opsional — custom AI provider |
-| `SMTP_HOST` | Host SMTP (contoh: `smtp.gmail.com`) |
-| `SMTP_PORT` | Port SMTP (default: `587`) |
-| `SMTP_USER` | Username/email SMTP |
-| `SMTP_PASS` | Password atau App Password SMTP |
-| `SMTP_FROM` | Alamat pengirim (default: `noreply@radargold`) |
+| `DATABASE_URL` | Otomatis oleh Replit (runtime-managed) |
+| `SESSION_SECRET` | Token admin — sudah ada di Secrets |
+| `OPENAI_API_KEY` / `AI_API_KEY` | Untuk AI chat & prediksi (opsional, bisa diset dari admin panel) |
+| `DEEPSEEK_API_KEY` | Untuk DeepSeek analyst (opsional) |
 
-Tanpa API key AI, aplikasi tetap berjalan dengan template berbasis data.
+Variabel opsional lain (SMTP, WhatsApp, Pakasir) bisa diset dari Admin Panel setelah login.
 
-> **SMTP**: Kredensial SMTP bisa diset via env di atas **atau** langsung dari Admin panel → SMTP Settings (disimpan di database). Nilai di database lebih diprioritaskan daripada env.
+## Struktur Route API
 
-## Setelah Ubah Schema Database
+- `GET /api/xauusd/live-price` — harga live XAUUSD
+- `GET /api/xauusd/mentor-signal` — sinyal BUY/SHORT/HOLD untuk Mentor Mode
+- `GET /api/xauusd/ea-signal` — sinyal khusus untuk MetaTrader EA (butuh EA API key)
+- `GET /api/static/SahamRadarMentorEA.mq5` — download file Expert Advisor MT5
+- `POST /api/xauusd/predict` — prediksi AI (member only)
+- `POST /api/xauusd/chat` — chat dengan AI (member only)
+- `GET /api/admin/*` — admin routes (butuh SESSION_SECRET token)
 
+## Fitur Mentor Mode EA (MetaTrader)
+
+1. Di Admin Panel, buat EA API Key (menu "Koneksi Expert Advisor")
+2. Download file `SahamRadarMentorEA.mq5`
+3. Di MT5: Tools > Options > Expert Advisors > Allow WebRequest → tambahkan URL Replit
+4. Pasang EA di chart XAUUSD, isi ApiUrl dan EaApiKey
+5. Set AutoTrade = true untuk trading otomatis
+
+## Database
+
+Pakai PostgreSQL Replit (sudah provisioned). Jalankan migrasi dengan:
 ```bash
-pnpm --filter @workspace/db run push   # sinkronkan schema ke DB
-tsc --build                            # rebuild type definitions
+DATABASE_URL="$DATABASE_URL" pnpm --filter @workspace/db run push
 ```
+
+Schema ada di `lib/db/src/schema/`.
 
 ## User Preferences
 
-- Gunakan Bahasa Indonesia dalam komunikasi
+- Gunakan Bahasa Indonesia dalam semua komunikasi

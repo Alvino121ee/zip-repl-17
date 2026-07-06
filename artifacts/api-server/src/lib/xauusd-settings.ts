@@ -315,3 +315,32 @@ export async function setSmtpSettings(cfg: Partial<SmtpConfig>): Promise<void> {
   if (cfg.from !== undefined) ops.push(setValue(KEY_SMTP_FROM, cfg.from));
   await Promise.all(ops);
 }
+
+// ─── EA (Expert Advisor) API key ──────────────────────────────────────────────
+
+const KEY_EA_API_KEY = "ea_api_key";
+
+import { randomBytes } from "crypto";
+
+export async function getEaApiKey(): Promise<string | null> {
+  const val = await getValue(KEY_EA_API_KEY);
+  return val?.trim() || null;
+}
+
+export async function generateEaApiKey(): Promise<string> {
+  const key = "sr_ea_" + randomBytes(24).toString("hex");
+  await setValue(KEY_EA_API_KEY, key);
+  return key;
+}
+
+export async function clearEaApiKey(): Promise<void> {
+  await db.delete(xauusdSettingsTable).where(eq(xauusdSettingsTable.key, KEY_EA_API_KEY));
+  cache = null;
+}
+
+export async function validateEaApiKey(key: string): Promise<boolean> {
+  if (!key || key.trim().length === 0) return false;
+  const stored = await getEaApiKey();
+  if (!stored) return false;
+  return stored === key.trim();
+}

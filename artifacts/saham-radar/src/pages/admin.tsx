@@ -14,7 +14,7 @@ import {
   Target, Bell, Loader2, Eye, EyeOff, Flame, StopCircle,
   BarChart2, TrendingUp, Power, Bitcoin, Mail, Trash2, Send,
   Crown, Plus, Pencil, CreditCard, ReceiptText, ToggleLeft, ToggleRight,
-  Save, X,
+  Save, X, Bot, Download, Copy, AlertTriangle, RefreshCcw,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { getAdminToken, clearAdminToken, authFetch } from "@/lib/auth";
@@ -1133,6 +1133,15 @@ export default function AdminPanel() {
             <MembersPanel />
           </div>
 
+          {/* EA Integration */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <Bot className="w-5 h-5 text-cyan-400" />
+              <h2 className="text-lg font-semibold">Koneksi Expert Advisor (MT5)</h2>
+            </div>
+            <EaPanel />
+          </div>
+
           {/* Settings */}
           <div>
             <div className="flex items-center gap-2 mb-4">
@@ -1143,6 +1152,221 @@ export default function AdminPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── EA (Expert Advisor) Panel ────────────────────────────────────────────────
+function EaPanel() {
+  const { toast } = useToast();
+  const [showKey, setShowKey] = useState(false);
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["admin-ea-key"],
+    queryFn: async () => {
+      const res = await adminFetch("/api/admin/ea-key");
+      if (!res.ok) throw new Error("Gagal ambil status EA key");
+      return res.json() as Promise<{ ok: boolean; hasKey: boolean; keyPreview: string | null }>;
+    },
+  });
+
+  const generateMut = useMutation({
+    mutationFn: async () => {
+      const res = await adminFetch("/api/admin/ea-key/generate", { method: "POST" });
+      if (!res.ok) throw new Error("Gagal generate EA key");
+      return res.json() as Promise<{ ok: boolean; key: string }>;
+    },
+    onSuccess: (d) => {
+      setGeneratedKey(d.key);
+      setShowKey(true);
+      void refetch();
+      toast({ title: "✅ EA API Key baru dibuat", description: "Salin key sebelum menutup halaman." });
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async () => {
+      const res = await adminFetch("/api/admin/ea-key", { method: "DELETE" });
+      if (!res.ok) throw new Error("Gagal hapus EA key");
+      return res.json();
+    },
+    onSuccess: () => {
+      setGeneratedKey(null);
+      void refetch();
+      toast({ title: "🗑 EA Key dihapus", description: "Semua EA yang terhubung tidak bisa lagi terhubung." });
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() =>
+      toast({ title: "📋 Disalin ke clipboard" })
+    );
+  };
+
+  const apiBase = window.location.origin;
+
+  return (
+    <div className="space-y-4">
+      {/* Status & Key Management */}
+      <Card className="border-border/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Bot className="w-5 h-5 text-cyan-400" />
+            EA API Key
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {isLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin" /> Memuat...
+            </div>
+          ) : (
+            <>
+              {/* Status badge */}
+              <div className="flex items-center gap-2">
+                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${data?.hasKey ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400" : "bg-zinc-800 border-zinc-700 text-zinc-400"}`}>
+                  {data?.hasKey ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                  {data?.hasKey ? "Key aktif" : "Belum ada key"}
+                </div>
+                {data?.keyPreview && (
+                  <span className="text-xs font-mono text-muted-foreground">{data.keyPreview}</span>
+                )}
+              </div>
+
+              {/* Generated key display (sekali tampil setelah generate) */}
+              {generatedKey && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-amber-400 font-medium">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Salin key ini sekarang — tidak akan ditampilkan lagi!
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 text-xs font-mono bg-black/30 rounded px-2 py-1.5 select-all break-all">
+                      {showKey ? generatedKey : "•".repeat(Math.min(generatedKey.length, 40))}
+                    </code>
+                    <button onClick={() => setShowKey(v => !v)} className="p-1.5 text-zinc-400 hover:text-white">
+                      {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                    <button onClick={() => copyToClipboard(generatedKey)} className="p-1.5 text-zinc-400 hover:text-cyan-400">
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  onClick={() => generateMut.mutate()}
+                  disabled={generateMut.isPending}
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white"
+                >
+                  {generateMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <RefreshCcw className="w-3.5 h-3.5 mr-1.5" />}
+                  {data?.hasKey ? "Buat Ulang Key" : "Buat Key Baru"}
+                </Button>
+                {data?.hasKey && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => deleteMut.mutate()}
+                    disabled={deleteMut.isPending}
+                    className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  >
+                    {deleteMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Trash2 className="w-3.5 h-3.5 mr-1.5" />}
+                    Hapus Key
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Endpoint info */}
+      <Card className="border-border/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Zap className="w-5 h-5 text-yellow-400" />
+            Endpoint EA Signal
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            EA MetaTrader bisa poll endpoint ini secara berkala untuk mendapatkan sinyal mentor.
+          </p>
+
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-medium text-zinc-400">URL JSON (lengkap):</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-[10px] font-mono bg-black/30 rounded px-2 py-1.5 text-cyan-300 break-all">
+                {apiBase}/api/xauusd/ea-signal?key={"<EA_API_KEY>"}&sensitivity=normal
+              </code>
+              <button onClick={() => copyToClipboard(`${apiBase}/api/xauusd/ea-signal?key=YOUR_KEY&sensitivity=normal`)} className="p-1.5 text-zinc-400 hover:text-cyan-400 shrink-0">
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-medium text-zinc-400">Format plain (MT4/MT5 StringSplit):</p>
+            <code className="block text-[10px] font-mono bg-black/30 rounded px-2 py-1.5 text-emerald-300">
+              {apiBase}/api/xauusd/ea-signal?key={"<KEY>"}&format=plain
+            </code>
+            <p className="text-[10px] text-muted-foreground">
+              Respons: <span className="font-mono text-white">BUY|2350.50|2353.00|2348.50|0.75</span>
+              <span className="ml-1">(COMMAND|PRICE|TP|SL|CONFIDENCE)</span>
+            </p>
+          </div>
+
+          <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1">
+            <p className="text-[11px] font-semibold text-zinc-300">Parameter sensitivity:</p>
+            <div className="grid grid-cols-3 gap-2 text-[10px] text-muted-foreground">
+              <div><span className="text-red-400 font-mono">aggressive</span> — sinyal mudah terpicu</div>
+              <div><span className="text-amber-400 font-mono">normal</span> — seimbang (default)</div>
+              <div><span className="text-blue-400 font-mono">conservative</span> — hanya sinyal kuat</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Download MQL5 */}
+      <Card className="border-border/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Download className="w-5 h-5 text-violet-400" />
+            Download File EA
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            File Expert Advisor siap pakai untuk MetaTrader 5. Isi parameter <code className="text-[10px] font-mono text-cyan-300">ApiUrl</code> dan <code className="text-[10px] font-mono text-cyan-300">EaApiKey</code> di input EA.
+          </p>
+          <div className="space-y-2">
+            <a
+              href="/api/static/SahamRadarMentorEA.mq5"
+              download="SahamRadarMentorEA.mq5"
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-600/15 border border-violet-500/30 text-violet-300 hover:bg-violet-600/25 transition-colors text-sm font-medium"
+            >
+              <Download className="w-4 h-4" />
+              SahamRadarMentorEA.mq5
+            </a>
+          </div>
+          <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1.5 text-[11px] text-muted-foreground">
+            <p className="font-semibold text-zinc-300 mb-1">Cara pasang EA di MT5:</p>
+            <p>1. Buka MetaTrader 5 → <span className="text-white">Tools &gt; Options &gt; Expert Advisors</span></p>
+            <p>2. Centang <span className="text-white">Allow WebRequest for listed URLs</span></p>
+            <p>3. Tambahkan URL API ini: <code className="font-mono text-cyan-300">{apiBase}</code></p>
+            <p>4. Drag EA ke chart <span className="text-white">XAUUSD</span></p>
+            <p>5. Isi <span className="text-white">ApiUrl</span> = <code className="font-mono text-cyan-300">{apiBase}</code></p>
+            <p>6. Isi <span className="text-white">EaApiKey</span> dengan key yang sudah dibuat di atas</p>
+            <p>7. Aktifkan <span className="text-white">AutoTrade = true</span> jika ingin trading otomatis</p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
