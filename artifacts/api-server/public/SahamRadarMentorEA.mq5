@@ -1,399 +1,439 @@
 //+------------------------------------------------------------------+
 //|                                        SahamRadarMentorEA.mq5   |
-//|                          Saham Radar — Mentor Mode Expert Advisor|
+//|                         Saham Radar - Mentor Mode Expert Advisor |
 //|                                                                  |
 //| Polling sinyal & push data akun setiap 2 detik                  |
 //| (sinkron dengan Mentor Mode widget di dashboard)                 |
-//|                                                                  |
-//| Cara pakai:                                                      |
-//| 1. Isi ApiUrl dengan URL Replit kamu                             |
-//| 2. Isi EaApiKey dengan kunci dari Admin Panel                    |
-//| 3. MT5: Tools > Options > Expert Advisors >                      |
-//|    centang "Allow WebRequest for listed URLs"                    |
-//|    → tambahkan URL API kamu                                      |
-//| 4. Pasang EA di chart XAUUSD                                     |
 //+------------------------------------------------------------------+
 #property copyright "Saham Radar"
-#property version   "2.00"
-#property description "Mentor Mode EA — sinkron 2 detik dengan dashboard Saham Radar"
-#property strict
+#property version   "2.10"
+#property description "Mentor Mode EA - Saham Radar AI Trading"
 
 #include <Trade\Trade.mqh>
 
-//─── Input Parameters ─────────────────────────────────────────────────────────
+//--- Input Parameters
 input group "=== Koneksi API ==="
-input string   InpApiUrl      = "https://8ae1aa97-4c85-4df7-a5c8-a0a0d4f6f453-00-112mi78mouw69.pike.replit.dev"; // URL API
-input string   InpEaApiKey    = "sr_ea_79c5d01e86372a5dcf112d0b9ddfdd78ea851deb7400277c";                        // EA API Key
-input string   InpSensitivity = "normal";                           // Sensitivitas: aggressive/normal/conservative
+input string InpApiUrl      = "https://8ae1aa97-4c85-4df7-a5c8-a0a0d4f6f453-00-112mi78mouw69.pike.replit.dev";
+input string InpEaApiKey    = "sr_ea_79c5d01e86372a5dcf112d0b9ddfdd78ea851deb7400277c";
+input string InpSensitivity = "normal"; // aggressive / normal / conservative
 
 input group "=== Trading ==="
-input double   InpLotSize     = 0.01;   // Ukuran lot
-input bool     InpAutoTrade   = false;  // Aktifkan auto-trading otomatis
-input int      InpMagicNumber = 202607; // Magic number (unik per EA)
+input double InpLotSize     = 0.01;
+input bool   InpAutoTrade   = false;
+input int    InpMagicNumber = 202607;
 
 input group "=== Tampilan ==="
-input bool     InpShowPanel   = true;   // Tampilkan panel sinyal di chart
+input bool   InpShowPanel   = true;
 
-//─── Konstanta ────────────────────────────────────────────────────────────────
-// Polling setiap 2 detik — sinkron dengan Mentor Mode widget
+//--- Constants
 #define POLL_INTERVAL_SEC 2
 
-//─── Global State ─────────────────────────────────────────────────────────────
-CTrade   trade;
+//--- Label names
+#define LBL_BG     "SR_BG"
+#define LBL_TITLE  "SR_TITLE"
+#define LBL_STATUS "SR_STATUS"
+#define LBL_CMD    "SR_CMD"
+#define LBL_PRICE  "SR_PRICE"
+#define LBL_TPSL   "SR_TPSL"
+#define LBL_CONF   "SR_CONF"
+#define LBL_SEP    "SR_SEP"
+#define LBL_BAL    "SR_BAL"
+#define LBL_EQ     "SR_EQ"
+#define LBL_PNL    "SR_PNL"
+#define LBL_POS    "SR_POS"
+#define LBL_TIME   "SR_TIME"
+
+//--- Global variables
+CTrade   g_trade;
 datetime g_lastPoll    = 0;
 string   g_lastCommand = "HOLD";
-bool     g_connected   = false;
-int      g_errCount    = 0;
 
-// Data panel
-double   g_price       = 0;
-double   g_tp          = 0;
-double   g_sl          = 0;
-double   g_conf        = 0;
-
-//─── Label names ──────────────────────────────────────────────────────────────
-#define LBL_BG      "SR_BG"
-#define LBL_TITLE   "SR_TITLE"
-#define LBL_STATUS  "SR_STATUS"
-#define LBL_CMD     "SR_CMD"
-#define LBL_PRICE   "SR_PRICE"
-#define LBL_TPSL    "SR_TPSL"
-#define LBL_CONF    "SR_CONF"
-#define LBL_SEP     "SR_SEP"
-#define LBL_BAL     "SR_BAL"
-#define LBL_EQ      "SR_EQ"
-#define LBL_PNL     "SR_PNL"
-#define LBL_POS     "SR_POS"
-#define LBL_TIME    "SR_TIME"
+double   g_price = 0;
+double   g_tp    = 0;
+double   g_sl    = 0;
+double   g_conf  = 0;
 
 //+------------------------------------------------------------------+
-int OnInit() {
-   if (InpEaApiKey == "") {
-      Alert("❌ Saham Radar EA: EaApiKey kosong — hubungi admin!");
+int OnInit()
+{
+   if(InpEaApiKey == "")
+   {
+      Alert("Saham Radar EA: EaApiKey kosong!");
       return INIT_PARAMETERS_INCORRECT;
    }
-   trade.SetExpertMagicNumber(InpMagicNumber);
-   trade.SetDeviationInPoints(20);
 
-   if (InpShowPanel) {
-      CreatePanel();
-      UpdatePanelStatus("Menghubungkan...", clrGray);
-   }
+   g_trade.SetExpertMagicNumber(InpMagicNumber);
+   g_trade.SetDeviationInPoints(20);
 
-   Print("✅ Saham Radar Mentor EA v2.00 aktif — polling setiap ", POLL_INTERVAL_SEC, " detik");
-   Print("   URL  : ", InpApiUrl);
-   Print("   Mode : AutoTrade=", InpAutoTrade, " | Lot=", InpLotSize);
+   if(InpShowPanel) CreatePanel();
 
-   FetchAndProcess(); // poll langsung saat start
+   Print("Saham Radar Mentor EA v2.10 aktif - polling ", POLL_INTERVAL_SEC, "s");
+   Print("URL: ", InpApiUrl);
+
+   FetchAndProcess();
    return INIT_SUCCEEDED;
 }
 
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason) {
-   if (InpShowPanel) DeletePanel();
+void OnDeinit(const int reason)
+{
+   if(InpShowPanel) DeletePanel();
    Print("Saham Radar Mentor EA dihentikan.");
 }
 
 //+------------------------------------------------------------------+
-void OnTick() {
-   if (TimeCurrent() - g_lastPoll < POLL_INTERVAL_SEC) return;
+void OnTick()
+{
+   if(TimeCurrent() - g_lastPoll < POLL_INTERVAL_SEC) return;
    g_lastPoll = TimeCurrent();
-   PushAccountData(); // push dulu agar dashboard selalu fresh
-   FetchAndProcess(); // lalu ambil sinyal
+   PushAccountData();
+   FetchAndProcess();
 }
 
 //+------------------------------------------------------------------+
-// Push data akun MT5 ke server agar tampil di Mentor Mode widget
-void PushAccountData() {
+void PushAccountData()
+{
    string url = InpApiUrl + "/api/xauusd/ea-account?key=" + InpEaApiKey;
 
-   // Kumpulkan posisi terbuka
-   string posJson = "[";
-   double totalPnl = 0;
-   for (int i = 0; i < PositionsTotal(); i++) {
+   //--- Build positions JSON
+   string posJson  = "[";
+   double totalPnl = 0.0;
+   int    total    = PositionsTotal();
+
+   for(int i = 0; i < total; i++)
+   {
       ulong ticket = PositionGetTicket(i);
-      if (!PositionSelectByTicket(ticket)) continue;
-      double pnl   = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      totalPnl    += pnl;
-      string ptype = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? "BUY" : "SELL";
-      if (i > 0) posJson += ",";
-      posJson += StringFormat(
-         "{\"ticket\":%llu,\"type\":\"%s\",\"symbol\":\"%s\","
-         "\"volume\":%.2f,\"openPrice\":%.5f,\"currentPrice\":%.5f,"
-         "\"tp\":%.5f,\"sl\":%.5f,\"pnl\":%.2f,\"swap\":%.2f,"
-         "\"openTime\":\"%s\"}",
-         ticket,
-         ptype,
-         PositionGetString(POSITION_SYMBOL),
-         PositionGetDouble(POSITION_VOLUME),
-         PositionGetDouble(POSITION_PRICE_OPEN),
-         PositionGetDouble(POSITION_PRICE_CURRENT),
-         PositionGetDouble(POSITION_TP),
-         PositionGetDouble(POSITION_SL),
-         pnl,
-         PositionGetDouble(POSITION_SWAP),
-         TimeToString(PositionGetInteger(POSITION_TIME), TIME_DATE|TIME_MINUTES)
-      );
+      if(!PositionSelectByTicket(ticket)) continue;
+
+      double pnl  = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      totalPnl   += pnl;
+
+      ENUM_POSITION_TYPE pt   = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      string             ptype = (pt == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+
+      if(i > 0) posJson += ",";
+
+      posJson += "{\"ticket\":" + IntegerToString((long)ticket)
+              + ",\"type\":\"" + ptype + "\""
+              + ",\"symbol\":\"" + PositionGetString(POSITION_SYMBOL) + "\""
+              + ",\"volume\":" + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2)
+              + ",\"openPrice\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), 5)
+              + ",\"currentPrice\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), 5)
+              + ",\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), 5)
+              + ",\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), 5)
+              + ",\"pnl\":" + DoubleToString(pnl, 2)
+              + ",\"swap\":" + DoubleToString(PositionGetDouble(POSITION_SWAP), 2)
+              + ",\"openTime\":\"" + TimeToString(PositionGetInteger(POSITION_TIME), TIME_DATE|TIME_MINUTES) + "\""
+              + "}";
    }
    posJson += "]";
 
-   string body = StringFormat(
-      "{\"balance\":%.2f,\"equity\":%.2f,\"freeMargin\":%.2f,"
-      "\"margin\":%.2f,\"pnl\":%.2f,\"positions\":%s,"
-      "\"accountName\":\"%s\",\"accountNumber\":%d,"
-      "\"broker\":\"%s\",\"leverage\":%d,\"currency\":\"%s\"}",
-      AccountInfoDouble(ACCOUNT_BALANCE),
-      AccountInfoDouble(ACCOUNT_EQUITY),
-      AccountInfoDouble(ACCOUNT_FREEMARGIN),
-      AccountInfoDouble(ACCOUNT_MARGIN),
-      totalPnl,
-      posJson,
-      AccountInfoString(ACCOUNT_NAME),
-      (int)AccountInfoInteger(ACCOUNT_LOGIN),
-      AccountInfoString(ACCOUNT_COMPANY),
-      (int)AccountInfoInteger(ACCOUNT_LEVERAGE),
-      AccountInfoString(ACCOUNT_CURRENCY)
-   );
+   //--- Build JSON body
+   string body = "{"
+      + "\"balance\":"       + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),   2)
+      + ",\"equity\":"       + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY),    2)
+      + ",\"freeMargin\":"   + DoubleToString(AccountInfoDouble(ACCOUNT_FREEMARGIN),2)
+      + ",\"margin\":"       + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN),    2)
+      + ",\"pnl\":"          + DoubleToString(totalPnl, 2)
+      + ",\"positions\":"    + posJson
+      + ",\"accountName\":\"" + AccountInfoString(ACCOUNT_NAME) + "\""
+      + ",\"accountNumber\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+      + ",\"broker\":\"" + AccountInfoString(ACCOUNT_COMPANY) + "\""
+      + ",\"leverage\":"     + IntegerToString(AccountInfoInteger(ACCOUNT_LEVERAGE))
+      + ",\"currency\":\"" + AccountInfoString(ACCOUNT_CURRENCY) + "\""
+      + "}";
 
    char   postData[];
    char   result[];
-   string reqHeaders  = "Content-Type: application/json\r\n";
    string respHeaders = "";
+   string reqHeaders  = "Content-Type: application/json\r\n";
    StringToCharArray(body, postData, 0, StringLen(body));
 
-   // 8-parameter version: (method, url, headers, timeout, data, data_size, result, result_headers)
    WebRequest("POST", url, reqHeaders, 3000, postData, ArraySize(postData)-1, result, respHeaders);
-   // Ignore error — push adalah best-effort
+   //--- Ignore result - push is best-effort
 }
 
 //+------------------------------------------------------------------+
-void FetchAndProcess() {
+void FetchAndProcess()
+{
    string url = InpApiUrl + "/api/xauusd/ea-signal"
-                + "?key="         + InpEaApiKey
-                + "&sensitivity=" + InpSensitivity
-                + "&format=plain";
+              + "?key=" + InpEaApiKey
+              + "&sensitivity=" + InpSensitivity
+              + "&format=plain";
 
-   char   post[];
+   char   postData[];
    char   result[];
-   string respHeaders;
+   string respHeaders = "";
 
    ResetLastError();
-   // 8-parameter version: (method, url, headers, timeout, data, data_size, result, result_headers)
-   int code = WebRequest("GET", url, "Accept: text/plain\r\n", 3000, post, 0, result, respHeaders);
+   int code = WebRequest("GET", url, "Accept: text/plain\r\n", 3000, postData, 0, result, respHeaders);
 
-   if (code == -1) {
-      g_errCount++;
-      g_connected = false;
+   if(code == -1)
+   {
       int err = GetLastError();
-      string msg = (err == 5203)
-         ? "URL belum diizinkan di Tools > Options > Expert Advisors > Allow WebRequest"
-         : "WebRequest error " + IntegerToString(err);
-      Print("❌ ", msg);
-      if (InpShowPanel) UpdatePanelStatus("❌ " + msg, clrRed);
+      string msg;
+      if(err == 5203)
+         msg = "Tambahkan URL di: Tools > Options > Expert Advisors > Allow WebRequest";
+      else
+         msg = "Koneksi error: " + IntegerToString(err);
+      Print("ERROR: ", msg);
+      if(InpShowPanel) SetLabelText(LBL_STATUS, "ERROR: " + IntegerToString(err), clrRed);
       return;
    }
-   if (code != 200) {
-      g_errCount++;
-      g_connected = false;
+
+   if(code != 200)
+   {
       string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-      Print("❌ API error HTTP ", code, ": ", body);
-      if (InpShowPanel) UpdatePanelStatus("❌ HTTP " + IntegerToString(code), clrRed);
+      Print("API error HTTP ", code, ": ", body);
+      if(InpShowPanel) SetLabelText(LBL_STATUS, "HTTP " + IntegerToString(code), clrRed);
       return;
    }
 
-   g_errCount  = 0;
-   g_connected = true;
-
+   //--- Parse response: COMMAND|PRICE|TP|SL|CONFIDENCE
    string resp = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
    StringTrimRight(resp);
    StringTrimLeft(resp);
 
-   // Format: COMMAND|PRICE|TP|SL|CONFIDENCE
    string parts[];
-   int n = StringSplit(resp, '|', parts);
-   if (n < 5) {
-      Print("❌ Format respons tidak valid: '", resp, "'");
-      if (InpShowPanel) UpdatePanelStatus("❌ Respons tidak valid", clrRed);
+   if(StringSplit(resp, '|', parts) < 5)
+   {
+      Print("Respons tidak valid: ", resp);
+      if(InpShowPanel) SetLabelText(LBL_STATUS, "Respons tidak valid", clrRed);
       return;
    }
 
-   string cmd  = parts[0];
-   g_price     = StringToDouble(parts[1]);
-   g_tp        = StringToDouble(parts[2]);
-   g_sl        = StringToDouble(parts[3]);
-   g_conf      = StringToDouble(parts[4]);
+   string cmd = parts[0];
+   g_price    = StringToDouble(parts[1]);
+   g_tp       = StringToDouble(parts[2]);
+   g_sl       = StringToDouble(parts[3]);
+   g_conf     = StringToDouble(parts[4]);
 
-   Print("📡 Sinyal: ", cmd,
-         " | Harga: ",   DoubleToString(g_price, 2),
-         " | TP: ",      DoubleToString(g_tp,    2),
-         " | SL: ",      DoubleToString(g_sl,    2),
-         " | Conf: ",    DoubleToString(g_conf*100, 0), "%");
+   Print("Sinyal: ", cmd,
+         " | Harga: ", DoubleToString(g_price, 2),
+         " | TP: ",    DoubleToString(g_tp, 2),
+         " | SL: ",    DoubleToString(g_sl, 2),
+         " | Conf: ",  DoubleToString(g_conf*100, 0), "%");
 
-   if (InpShowPanel) UpdatePanelSignal(cmd);
+   if(InpShowPanel) UpdatePanel(cmd);
 
-   if (InpAutoTrade) {
+   //--- Auto trading
+   if(InpAutoTrade)
+   {
       string prevCmd = g_lastCommand;
       g_lastCommand  = cmd;
 
-      if (cmd != prevCmd || !PositionExistsForSymbol()) {
-         if (cmd == "BUY") {
-            ClosePositionsByType(POSITION_TYPE_SELL);
-            if (!PositionExistsForSymbol(POSITION_TYPE_BUY))
-               OpenPosition(ORDER_TYPE_BUY, g_tp, g_sl, g_conf);
-         } else if (cmd == "SELL") {
-            ClosePositionsByType(POSITION_TYPE_BUY);
-            if (!PositionExistsForSymbol(POSITION_TYPE_SELL))
-               OpenPosition(ORDER_TYPE_SELL, g_tp, g_sl, g_conf);
-         } else { // HOLD
-            ClosePositionsByType(-1);
+      bool signalChanged = (cmd != prevCmd);
+      bool noPosition    = !HasPosition(-1);
+
+      if(signalChanged || noPosition)
+      {
+         if(cmd == "BUY")
+         {
+            CloseByType(POSITION_TYPE_SELL);
+            if(!HasPosition(POSITION_TYPE_BUY))
+               OpenOrder(ORDER_TYPE_BUY);
+         }
+         else if(cmd == "SELL")
+         {
+            CloseByType(POSITION_TYPE_BUY);
+            if(!HasPosition(POSITION_TYPE_SELL))
+               OpenOrder(ORDER_TYPE_SELL);
+         }
+         else // HOLD
+         {
+            CloseByType(-1);
          }
       }
-   } else {
+   }
+   else
+   {
       g_lastCommand = cmd;
    }
 }
 
 //+------------------------------------------------------------------+
-void OpenPosition(ENUM_ORDER_TYPE type, double tp, double sl, double conf) {
-   double price = (type == ORDER_TYPE_BUY)
-      ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
-      : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+void OpenOrder(ENUM_ORDER_TYPE type)
+{
+   double price   = (type == ORDER_TYPE_BUY)
+                  ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                  : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double tpNorm  = NormalizeDouble(g_tp, _Digits);
+   double slNorm  = NormalizeDouble(g_sl, _Digits);
+   string comment = "SahamRadar " + DoubleToString(g_conf*100, 0) + "%";
 
-   string comment = "SahamRadar " + DoubleToString(conf*100, 0) + "%";
-   bool ok = (type == ORDER_TYPE_BUY)
-      ? trade.Buy(InpLotSize,  Symbol(), price, NormalizeDouble(sl,_Digits), NormalizeDouble(tp,_Digits), comment)
-      : trade.Sell(InpLotSize, Symbol(), price, NormalizeDouble(sl,_Digits), NormalizeDouble(tp,_Digits), comment);
+   bool ok;
+   if(type == ORDER_TYPE_BUY)
+      ok = g_trade.Buy(InpLotSize, Symbol(), price, slNorm, tpNorm, comment);
+   else
+      ok = g_trade.Sell(InpLotSize, Symbol(), price, slNorm, tpNorm, comment);
 
-   if (ok) Print("✅ Order: ", EnumToString(type), " | Tiket: ", trade.ResultOrder());
-   else    Print("❌ Order gagal: retcode=", trade.ResultRetcode(), " | ", trade.ResultComment());
+   if(ok)
+      Print("Order OK: ", EnumToString(type), " tiket=", g_trade.ResultOrder());
+   else
+      Print("Order GAGAL: retcode=", g_trade.ResultRetcode(), " ", g_trade.ResultComment());
 }
 
 //+------------------------------------------------------------------+
-void ClosePositionsByType(int filterType) {
-   for (int i = PositionsTotal()-1; i >= 0; i--) {
+bool HasPosition(int typeFilter)
+{
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
       ulong ticket = PositionGetTicket(i);
-      if (!PositionSelectByTicket(ticket)) continue;
-      if (PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
-      if ((long)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
-      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      if (filterType != -1 && (int)pt != filterType) continue;
-      trade.PositionClose(ticket);
-   }
-}
-
-bool PositionExistsForSymbol(int filterType = -1) {
-   for (int i = 0; i < PositionsTotal(); i++) {
-      ulong ticket = PositionGetTicket(i);
-      if (!PositionSelectByTicket(ticket)) continue;
-      if (PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
-      if ((long)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
-      if (filterType != -1 && (int)PositionGetInteger(POSITION_TYPE) != filterType) continue;
-      return true;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(typeFilter == -1) return true;
+      if((int)PositionGetInteger(POSITION_TYPE) == typeFilter) return true;
    }
    return false;
 }
 
-//─── Panel helpers ─────────────────────────────────────────────────────────────
-void CreatePanel() {
-   int x = 10, y = 25, w = 280, h = 190;
+//+------------------------------------------------------------------+
+void CloseByType(int typeFilter)
+{
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(typeFilter != -1 && (int)PositionGetInteger(POSITION_TYPE) != typeFilter) continue;
+      g_trade.PositionClose(ticket);
+   }
+}
+
+//+------------------------------------------------------------------+
+//--- Panel functions
+//+------------------------------------------------------------------+
+void CreatePanel()
+{
+   int x = 10, y = 25, w = 280, h = 195;
+
+   if(ObjectFind(0, LBL_BG) >= 0) DeletePanel();
 
    ObjectCreate(0, LBL_BG, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_XSIZE, w);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_YSIZE, h);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_BGCOLOR, C'15,15,25');
-   ObjectSetInteger(0, LBL_BG, OBJPROP_BORDER_COLOR, C'50,50,75');
-   ObjectSetInteger(0, LBL_BG, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_BACK, false);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_XDISTANCE,   x);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_YDISTANCE,   y);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_XSIZE,        w);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_YSIZE,        h);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_BGCOLOR,      C'15,15,25');
+   ObjectSetInteger(0, LBL_BG, OBJPROP_BORDER_COLOR, C'60,60,90');
+   ObjectSetInteger(0, LBL_BG, OBJPROP_CORNER,       CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_BACK,         false);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_SELECTABLE,   false);
 
-   CreateLabel(LBL_TITLE,  x+8, y+7,   "🎓 SAHAM RADAR MENTOR",   clrWhite,    9);
-   CreateLabel(LBL_STATUS, x+8, y+23,  "Menghubungkan...",          clrGray,     8);
-   CreateLabel(LBL_CMD,    x+8, y+45,  "—",                         clrGray,    18);
-   CreateLabel(LBL_PRICE,  x+8, y+73,  "Harga: —",                  clrSilver,   8);
-   CreateLabel(LBL_TPSL,   x+8, y+87,  "TP: — | SL: —",            clrSilver,   8);
-   CreateLabel(LBL_CONF,   x+8, y+101, "Confidence: —",             clrSilver,   8);
-   // Separator
-   CreateLabel(LBL_SEP,    x+8, y+115, "────────────────────",      C'50,50,75', 7);
-   // Akun MT5
-   CreateLabel(LBL_BAL,    x+8, y+127, "Balance: —",                clrSilver,   8);
-   CreateLabel(LBL_EQ,     x+8, y+141, "Equity:  —",                clrSilver,   8);
-   CreateLabel(LBL_PNL,    x+8, y+155, "PnL:     —",                clrSilver,   8);
-   CreateLabel(LBL_POS,    x+8, y+169, "Posisi:  —",                clrSilver,   8);
-   CreateLabel(LBL_TIME,   x+8, y+181, "—",                         C'60,60,80', 7);
+   MakeLabel(LBL_TITLE,  x+8, y+6,   "SAHAM RADAR MENTOR",  clrWhite,   9);
+   MakeLabel(LBL_STATUS, x+8, y+22,  "Menghubungkan...",     clrGray,    8);
+   MakeLabel(LBL_CMD,    x+8, y+44,  "---",                  clrGray,   18);
+   MakeLabel(LBL_PRICE,  x+8, y+72,  "Harga: ---",           clrSilver,  8);
+   MakeLabel(LBL_TPSL,   x+8, y+86,  "TP: --- | SL: ---",   clrSilver,  8);
+   MakeLabel(LBL_CONF,   x+8, y+100, "Conf: ---",            clrSilver,  8);
+   MakeLabel(LBL_SEP,    x+8, y+114, "------------------------", C'55,55,80', 7);
+   MakeLabel(LBL_BAL,    x+8, y+126, "Balance: ---",         clrSilver,  8);
+   MakeLabel(LBL_EQ,     x+8, y+140, "Equity:  ---",         clrSilver,  8);
+   MakeLabel(LBL_PNL,    x+8, y+154, "PnL:     ---",         clrSilver,  8);
+   MakeLabel(LBL_POS,    x+8, y+168, "Posisi:  ---",         clrSilver,  8);
+   MakeLabel(LBL_TIME,   x+8, y+182, "---",                  C'55,55,80', 7);
 
    ChartRedraw();
 }
 
-void CreateLabel(string name, int x, int y, string text, color clr, int sz) {
+//+------------------------------------------------------------------+
+void MakeLabel(string name, int x, int y, string text, color clr, int sz)
+{
    ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_CORNER,    CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetString(0,  name, OBJPROP_TEXT, text);
+   ObjectSetString( 0, name, OBJPROP_TEXT,      text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR,     clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE,  sz);
+   ObjectSetString( 0, name, OBJPROP_FONT,      "Arial");
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE,false);
+}
+
+//+------------------------------------------------------------------+
+void SetLabelText(string name, string text, color clr)
+{
+   ObjectSetString( 0, name, OBJPROP_TEXT,  text);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, sz);
-   ObjectSetString(0,  name, OBJPROP_FONT, "Segoe UI");
 }
 
-void UpdatePanelStatus(string msg, color clr) {
-   if (!InpShowPanel) return;
-   ObjectSetString(0,  LBL_STATUS, OBJPROP_TEXT,  msg);
-   ObjectSetInteger(0, LBL_STATUS, OBJPROP_COLOR, clr);
-   ChartRedraw();
-}
+//+------------------------------------------------------------------+
+void UpdatePanel(string cmd)
+{
+   color  cmdColor;
+   string cmdText;
 
-void UpdatePanelSignal(string cmd) {
-   if (!InpShowPanel) return;
+   if(cmd == "BUY")
+   {
+      cmdColor = clrLime;
+      cmdText  = "BUY  (NAIK)";
+   }
+   else if(cmd == "SELL")
+   {
+      cmdColor = clrRed;
+      cmdText  = "SELL (TURUN)";
+   }
+   else
+   {
+      cmdColor = clrGray;
+      cmdText  = "HOLD (TUNGGU)";
+   }
 
-   color  cmdColor = (cmd == "BUY") ? clrLime : (cmd == "SELL") ? clrRed : clrGray;
-   string emoji    = (cmd == "BUY") ? "▲ BUY" : (cmd == "SELL") ? "▼ SELL" : "— HOLD";
+   SetLabelText(LBL_CMD,    cmdText, cmdColor);
+   SetLabelText(LBL_STATUS, "Terhubung (2s)", clrLime);
+   SetLabelText(LBL_PRICE,  "Harga: " + DoubleToString(g_price, 2), clrSilver);
+   SetLabelText(LBL_TPSL,
+      "TP: " + DoubleToString(g_tp, 2) + " | SL: " + DoubleToString(g_sl, 2),
+      clrSilver);
+   SetLabelText(LBL_CONF,
+      "Conf: " + DoubleToString(g_conf*100, 0) + "% | Auto=" + (InpAutoTrade ? "ON" : "OFF"),
+      clrSilver);
 
-   ObjectSetString(0,  LBL_CMD,    OBJPROP_TEXT,  emoji);
-   ObjectSetInteger(0, LBL_CMD,    OBJPROP_COLOR, cmdColor);
-   ObjectSetString(0,  LBL_PRICE,  OBJPROP_TEXT,  "Harga: " + DoubleToString(g_price, 2));
-   ObjectSetString(0,  LBL_TPSL,   OBJPROP_TEXT,
-      "TP: " + DoubleToString(g_tp, 2) + " | SL: " + DoubleToString(g_sl, 2));
-   ObjectSetString(0,  LBL_CONF,   OBJPROP_TEXT,
-      "Confidence: " + DoubleToString(g_conf*100, 0) + "%");
-   ObjectSetString(0,  LBL_STATUS, OBJPROP_TEXT,  "✅ Terhubung (2s)");
-   ObjectSetInteger(0, LBL_STATUS, OBJPROP_COLOR, clrGreen);
-
-   // Update data akun real-time dari MT5 lokal
+   //--- Account info
    double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
-   double totalPnl = 0;
+   double totalPnl = 0.0;
    int    openPos  = 0;
-   for (int i = 0; i < PositionsTotal(); i++) {
+
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
       ulong ticket = PositionGetTicket(i);
-      if (!PositionSelectByTicket(ticket)) continue;
-      if (PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
-      if ((long)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
       totalPnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       openPos++;
    }
 
-   color pnlColor = (totalPnl >= 0) ? clrLime : clrRed;
-   ObjectSetString(0,  LBL_BAL,  OBJPROP_TEXT,  "Balance: " + DoubleToString(balance, 2) + " USD");
-   ObjectSetString(0,  LBL_EQ,   OBJPROP_TEXT,  "Equity:  " + DoubleToString(equity,  2) + " USD");
-   ObjectSetString(0,  LBL_PNL,  OBJPROP_TEXT,  "PnL:     " + (totalPnl >= 0 ? "+" : "") + DoubleToString(totalPnl, 2) + " USD");
-   ObjectSetInteger(0, LBL_PNL,  OBJPROP_COLOR, pnlColor);
-   ObjectSetString(0,  LBL_POS,  OBJPROP_TEXT,  "Posisi:  " + IntegerToString(openPos) + " terbuka | Auto=" + (InpAutoTrade ? "ON" : "OFF"));
+   string pnlSign = (totalPnl >= 0) ? "+" : "";
+   color  pnlClr  = (totalPnl >= 0) ? clrLime : clrRed;
+
+   SetLabelText(LBL_BAL, "Balance: " + DoubleToString(balance, 2) + " USD", clrSilver);
+   SetLabelText(LBL_EQ,  "Equity:  " + DoubleToString(equity,  2) + " USD", clrSilver);
+   SetLabelText(LBL_PNL, "PnL:     " + pnlSign + DoubleToString(totalPnl, 2) + " USD", pnlClr);
+   SetLabelText(LBL_POS, "Posisi:  " + IntegerToString(openPos) + " terbuka", clrSilver);
 
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   string ts = StringFormat("%02d:%02d:%02d", dt.hour, dt.min, dt.sec);
-   ObjectSetString(0, LBL_TIME, OBJPROP_TEXT, "Update: " + ts);
+   SetLabelText(LBL_TIME,
+      StringFormat("Update: %02d:%02d:%02d", dt.hour, dt.min, dt.sec),
+      C'55,55,80');
 
    ChartRedraw();
 }
 
-void DeletePanel() {
+//+------------------------------------------------------------------+
+void DeletePanel()
+{
    string labels[] = {
       LBL_BG, LBL_TITLE, LBL_STATUS, LBL_CMD,
       LBL_PRICE, LBL_TPSL, LBL_CONF, LBL_SEP,
       LBL_BAL, LBL_EQ, LBL_PNL, LBL_POS, LBL_TIME
    };
-   for (int i = 0; i < ArraySize(labels); i++) ObjectDelete(0, labels[i]);
+   for(int i = 0; i < ArraySize(labels); i++)
+      ObjectDelete(0, labels[i]);
    ChartRedraw();
 }
+//+------------------------------------------------------------------+
