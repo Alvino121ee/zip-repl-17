@@ -22,8 +22,8 @@
 
 //─── Input Parameters ─────────────────────────────────────────────────────────
 input group "=== Koneksi API ==="
-input string   InpApiUrl      = "https://YOUR-REPL-URL.replit.app"; // URL API (tanpa /api di belakang)
-input string   InpEaApiKey    = "";                                  // EA API Key (dari Admin Panel)
+input string   InpApiUrl      = "https://8ae1aa97-4c85-4df7-a5c8-a0a0d4f6f453-00-112mi78mouw69.pike.replit.dev"; // URL API
+input string   InpEaApiKey    = "sr_ea_79c5d01e86372a5dcf112d0b9ddfdd78ea851deb7400277c";                        // EA API Key
 input string   InpSensitivity = "normal";                           // Sensitivitas: aggressive/normal/conservative
 
 input group "=== Trading ==="
@@ -68,8 +68,8 @@ double   g_conf        = 0;
 
 //+------------------------------------------------------------------+
 int OnInit() {
-   if (InpApiUrl == "https://YOUR-REPL-URL.replit.app" || InpEaApiKey == "") {
-      Alert("❌ Saham Radar EA: Isi ApiUrl dan EaApiKey di input parameter!");
+   if (InpEaApiKey == "") {
+      Alert("❌ Saham Radar EA: EaApiKey kosong — hubungi admin!");
       return INIT_PARAMETERS_INCORRECT;
    }
    trade.SetExpertMagicNumber(InpMagicNumber);
