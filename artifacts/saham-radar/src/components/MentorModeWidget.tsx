@@ -1,12 +1,14 @@
 /**
  * MentorModeWidget — Floating draggable trading mentor
- * Analisis kondisi pasar tiap 2 detik, beri perintah BUY / SHORT / CLOSE / TUNGGU
- * dengan alasan teknikal dan TP minimal berbasis ATR.
  *
- * Desain state machine:
- *  - rawSignal  (BUY/SHORT/HOLD) — diperbarui dari API, dilindungi cooldown 15s
- *  - positionState (NONE/BUY/SHORT) — dikontrol user via tombol Konfirmasi
- *  - displayCmd — diturunkan langsung dari rawSignal + positionState (tanpa delay)
+ * State machine:
+ *  - stableCmd  — the command shown to user; only changes when:
+ *      • TUNGGU  : always immediate (no cooldown, never blocks UX)
+ *      • actionable (BUKA BUY/SHORT, CLOSE) : respects 15s cooldown
+ *  - positionState — tracked by user via Konfirmasi button
+ *
+ * Cooldown only resets when an ACTIONABLE command is accepted.
+ * Going to TUNGGU never triggers or restarts cooldown.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -34,7 +36,6 @@ interface MentorSignal {
   price: number | null;
   bullishScore: number;
   bearishScore: number;
-  sensitivity: Sensitivity;
   snapshotAgeMs: number | null;
 }
 
@@ -44,7 +45,7 @@ interface HistoryEntry {
   time: string;
 }
 
-// ─── Pure derivation — no state needed ───────────────────────────────────────
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 function resolveDisplay(raw: RawCommand, position: PositionState): DisplayCommand {
   if (position === "NONE") {
@@ -52,11 +53,12 @@ function resolveDisplay(raw: RawCommand, position: PositionState): DisplayComman
     if (raw === "SHORT") return "BUKA SHORT";
     return "TUNGGU";
   }
-  if (position === "BUY") {
-    return raw === "SHORT" ? "CLOSE BUY" : "TUNGGU";
-  }
-  // position === "SHORT"
-  return raw === "BUY" ? "CLOSE SHORT" : "TUNGGU";
+  if (position === "BUY")   return raw === "SHORT" ? "CLOSE BUY"   : "TUNGGU";
+  /* SHORT */               return raw === "BUY"   ? "CLOSE SHORT" : "TUNGGU";
+}
+
+function isActionable(cmd: DisplayCommand): boolean {
+  return cmd !== "TUNGGU";
 }
 
 function commandStyle(cmd: DisplayCommand) {
@@ -73,45 +75,35 @@ function commandStyle(cmd: DisplayCommand) {
   }
 }
 
-function isActionable(cmd: DisplayCommand): boolean {
-  return cmd !== "TUNGGU";
-}
-
-const COOLDOWN_MS = 15_000;
-
 function fmt(n: number | null | undefined) {
   return n != null ? n.toFixed(2) : "—";
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+const COOLDOWN_MS = 15_000;
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export function MentorModeWidget() {
-  // ── Widget UI state ────────────────────────────────────────────────────────
+  // ── Widget UI ──────────────────────────────────────────────────────────────
   const [isActive, setIsActive]       = useState(false);
   const [sensitivity, setSensitivity] = useState<Sensitivity>("normal");
   const [showHistory, setShowHistory] = useState(false);
   const [showReasons, setShowReasons] = useState(true);
   const [minimized, setMinimized]     = useState(false);
 
-  // ── Core state machine ─────────────────────────────────────────────────────
-  // rawSignal: the market direction from API, cooldown-gated
-  const [rawSignal, setRawSignal]           = useState<RawCommand>("HOLD");
-  const [positionState, setPositionState]   = useState<PositionState>("NONE");
-  const [lastSignalChange, setLastSignalChange] = useState(0);
-  const [cooldownLeft, setCooldownLeft]     = useState(0);
-  const [history, setHistory]               = useState<HistoryEntry[]>([]);
-
-  // displayCmd is purely derived — always up-to-date immediately
-  const displayCmd = resolveDisplay(rawSignal, positionState);
-
-  // Track prev raw signal to detect changes
-  const prevRawRef = useRef<RawCommand>("HOLD");
+  // ── Trading state ──────────────────────────────────────────────────────────
+  const [stableCmd, setStableCmd]         = useState<DisplayCommand>("TUNGGU");
+  const [positionState, setPositionState] = useState<PositionState>("NONE");
+  const [lastActionableTime, setLastActionableTime] = useState(0);
+  const [cooldownLeft, setCooldownLeft]   = useState(0);
+  const [history, setHistory]             = useState<HistoryEntry[]>([]);
+  const prevCmdRef                        = useRef<DisplayCommand>("TUNGGU");
 
   // ── Draggable ──────────────────────────────────────────────────────────────
-  const [pos, setPos]     = useState({ x: 24, y: 120 });
-  const dragging          = useRef(false);
-  const dragOffset        = useRef({ x: 0, y: 0 });
-  const widgetRef         = useRef<HTMLDivElement>(null);
+  const [pos, setPos]   = useState({ x: 24, y: 120 });
+  const dragging        = useRef(false);
+  const dragOffset      = useRef({ x: 0, y: 0 });
+  const widgetRef       = useRef<HTMLDivElement>(null);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest("[data-nodrag]")) return;
@@ -131,7 +123,7 @@ export function MentorModeWidget() {
 
   const onPointerUp = useCallback(() => { dragging.current = false; }, []);
 
-  // ── Data fetching ──────────────────────────────────────────────────────────
+  // ── Data fetch (every 2s when active) ─────────────────────────────────────
   const { data: signal, isError } = useQuery<MentorSignal>({
     queryKey: ["/api/xauusd/mentor-signal", sensitivity],
     queryFn: async () => {
@@ -145,64 +137,70 @@ export function MentorModeWidget() {
   });
 
   // ── Cooldown ticker ────────────────────────────────────────────────────────
+  // Only counts down from lastActionableTime; goes to 0 and stays there.
   useEffect(() => {
     if (!isActive) return;
     const id = setInterval(() => {
-      setCooldownLeft(Math.max(0, COOLDOWN_MS - (Date.now() - lastSignalChange)));
+      const remaining = Math.max(0, COOLDOWN_MS - (Date.now() - lastActionableTime));
+      setCooldownLeft(remaining);
     }, 250);
     return () => clearInterval(id);
-  }, [isActive, lastSignalChange]);
+  }, [isActive, lastActionableTime]);
 
-  // ── Process incoming signal (cooldown-gated raw signal updates only) ───────
+  // ── Command resolution — runs on new signal OR position change ────────────
   useEffect(() => {
-    if (!signal || !isActive) return;
-    const incoming = signal.command;
-    if (incoming === prevRawRef.current) return;               // no change
-    const onCooldown = Date.now() - lastSignalChange < COOLDOWN_MS;
-    if (onCooldown) return;                                    // wait cooldown
+    if (!isActive || !signal) return;
 
-    prevRawRef.current = incoming;
-    setRawSignal(incoming);
-    setLastSignalChange(Date.now());
-  }, [signal, isActive, lastSignalChange]);
+    const candidate = resolveDisplay(signal.command, positionState);
+    if (candidate === prevCmdRef.current) return; // nothing to do
 
-  // ── Confirm action — immediate, not blocked by cooldown ───────────────────
-  function handleConfirmAction() {
-    if (displayCmd === "BUKA BUY") {
-      setPositionState("BUY");
-      addHistoryEntry("BUKA BUY");
-    } else if (displayCmd === "BUKA SHORT") {
-      setPositionState("SHORT");
-      addHistoryEntry("BUKA SHORT");
-    } else if (displayCmd === "CLOSE BUY" || displayCmd === "CLOSE SHORT") {
-      addHistoryEntry(displayCmd);
-      setPositionState("NONE");
+    // TUNGGU is never actionable — allow immediately, no cooldown restart
+    if (candidate === "TUNGGU") {
+      prevCmdRef.current = "TUNGGU";
+      setStableCmd("TUNGGU");
+      return;
     }
-  }
 
-  function addHistoryEntry(cmd: DisplayCommand) {
-    const price = signal?.price ?? 0;
-    if (!price) return;
-    setHistory(prev => [{
-      command: cmd,
-      price,
-      time: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-    }, ...prev].slice(0, 10));
-  }
+    // Actionable command — respect cooldown
+    const onCooldown = Date.now() - lastActionableTime < COOLDOWN_MS;
+    if (onCooldown) return; // blocked; keep showing current stableCmd
 
-  // ── Reset on deactivate ────────────────────────────────────────────────────
+    prevCmdRef.current = candidate;
+    setStableCmd(candidate);
+    setLastActionableTime(Date.now());
+  }, [signal, positionState, isActive, lastActionableTime]);
+
+  // ── Reset when deactivated ─────────────────────────────────────────────────
   useEffect(() => {
     if (!isActive) {
-      setRawSignal("HOLD");
+      setStableCmd("TUNGGU");
       setPositionState("NONE");
-      prevRawRef.current = "HOLD";
-      setLastSignalChange(0);
+      setLastActionableTime(0);
       setCooldownLeft(0);
+      prevCmdRef.current = "TUNGGU";
     }
   }, [isActive]);
 
-  // ── Derived display values ─────────────────────────────────────────────────
-  const style       = commandStyle(displayCmd);
+  // ── Confirm action (immediate — not blocked by cooldown) ───────────────────
+  function handleConfirmAction() {
+    const cmd = stableCmd;
+    // Add to history before changing state
+    if (signal?.price) {
+      const entry: HistoryEntry = {
+        command: cmd,
+        price: signal.price,
+        time: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      };
+      setHistory(prev => [entry, ...prev].slice(0, 10));
+    }
+    // Update position — stableCmd will recalculate via effect immediately to TUNGGU
+    if (cmd === "BUKA BUY")    setPositionState("BUY");
+    else if (cmd === "BUKA SHORT") setPositionState("SHORT");
+    else if (cmd === "CLOSE BUY" || cmd === "CLOSE SHORT") setPositionState("NONE");
+  }
+
+  // ── Derived display ────────────────────────────────────────────────────────
+  const style       = commandStyle(stableCmd);
   const cooldownPct = Math.round((cooldownLeft / COOLDOWN_MS) * 100);
   const snapshotOld = (signal?.snapshotAgeMs ?? 0) > 10 * 60 * 1000;
 
@@ -215,13 +213,12 @@ export function MentorModeWidget() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
-      {/* ── Header / drag handle ── */}
+      {/* ── Header ── */}
       <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/60 border-b border-border/40 cursor-grab active:cursor-grabbing">
         <GripVertical className="w-4 h-4 text-zinc-500 shrink-0" />
         <GraduationCap className="w-4 h-4 text-amber-400 shrink-0" />
         <span className="text-xs font-semibold text-foreground flex-1">Mentor Mode</span>
 
-        {/* Sensitivity */}
         <select
           data-nodrag
           value={sensitivity}
@@ -233,7 +230,6 @@ export function MentorModeWidget() {
           <option value="conservative">Konservatif</option>
         </select>
 
-        {/* Minimize */}
         <button
           data-nodrag
           onClick={() => setMinimized(v => !v)}
@@ -242,7 +238,6 @@ export function MentorModeWidget() {
           {minimized ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
         </button>
 
-        {/* ON/OFF */}
         <button
           data-nodrag
           onClick={() => setIsActive(v => !v)}
@@ -265,11 +260,11 @@ export function MentorModeWidget() {
             </div>
           ) : (
             <>
-              {/* ── Main command ── */}
+              {/* ── Command display ── */}
               <div className={`rounded-xl border p-3 ${style.bg} flex items-center gap-3`}>
                 <div className={style.text}>{style.icon}</div>
                 <div className="flex-1 min-w-0">
-                  <div className={`text-xl font-black tracking-wide ${style.text}`}>{displayCmd}</div>
+                  <div className={`text-xl font-black tracking-wide ${style.text}`}>{stableCmd}</div>
                   {signal?.price && (
                     <div className="text-[10px] text-zinc-400 mt-0.5">
                       Harga: <span className="text-zinc-300 font-mono">{fmt(signal.price)}</span>
@@ -286,30 +281,30 @@ export function MentorModeWidget() {
                 </div>
               </div>
 
-              {/* ── Cooldown bar ── */}
+              {/* ── Cooldown — HANYA tampil saat benar-benar aktif ── */}
               {cooldownLeft > 0 && (
                 <div>
                   <div className="flex justify-between text-[10px] text-zinc-500 mb-1">
-                    <span>Cooldown sinyal</span>
+                    <span>Cooldown sinyal berikutnya</span>
                     <span>{(cooldownLeft / 1000).toFixed(1)}s</span>
                   </div>
                   <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-amber-500/60 rounded-full transition-all duration-250"
-                      style={{ width: `${cooldownPct}%` }}
+                      className="h-full bg-amber-500/60 rounded-full"
+                      style={{ width: `${cooldownPct}%`, transition: "width 0.25s linear" }}
                     />
                   </div>
                 </div>
               )}
 
-              {/* ── TP / SL minimal ── */}
-              {signal && rawSignal !== "HOLD" && (
+              {/* ── TP / SL ── */}
+              {signal && signal.command !== "HOLD" && (
                 <div className="grid grid-cols-2 gap-2">
                   <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
                     <div className="text-[10px] text-zinc-500 mb-0.5">TP Minimal</div>
                     <div className="text-xs font-bold text-emerald-400 font-mono">{fmt(signal.minTP)}</div>
                     {signal.minTPDistance && (
-                      <div className="text-[9px] text-zinc-600">±{fmt(signal.minTPDistance)}</div>
+                      <div className="text-[9px] text-zinc-600">+{fmt(signal.minTPDistance)}</div>
                     )}
                   </div>
                   <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
@@ -319,7 +314,7 @@ export function MentorModeWidget() {
                 </div>
               )}
 
-              {/* ── Position tracker + confirm ── */}
+              {/* ── Posisi aktif ── */}
               <div className="flex items-center gap-2">
                 <div className={`flex-1 text-[10px] rounded-lg px-2 py-1.5 border text-center font-semibold ${
                   positionState === "BUY"
@@ -331,12 +326,12 @@ export function MentorModeWidget() {
                   Posisi: {positionState}
                 </div>
 
-                {isActionable(displayCmd) && (
+                {isActionable(stableCmd) && (
                   <button
                     data-nodrag
                     onClick={handleConfirmAction}
                     className={`text-[10px] px-2 py-1.5 rounded-lg font-semibold transition-colors border ${
-                      displayCmd.startsWith("CLOSE")
+                      stableCmd.startsWith("CLOSE")
                         ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border-amber-500/30"
                         : "bg-zinc-700 text-zinc-200 hover:bg-zinc-600 border-zinc-600"
                     }`}
@@ -355,7 +350,7 @@ export function MentorModeWidget() {
                     className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 mb-1 w-full"
                   >
                     <AlertCircle className="w-3 h-3" />
-                    Alasan sinyal ({signal.reasons.length})
+                    Alasan ({signal.reasons.length})
                     {showReasons
                       ? <ChevronUp className="w-3 h-3 ml-auto" />
                       : <ChevronDown className="w-3 h-3 ml-auto" />}
@@ -373,14 +368,13 @@ export function MentorModeWidget() {
                 </div>
               )}
 
-              {/* ── Peringatan snapshot lama ── */}
+              {/* ── Peringatan data lama ── */}
               {snapshotOld && (
                 <div className="text-[10px] text-amber-500/80 bg-amber-500/10 rounded-lg px-2 py-1.5 border border-amber-500/20">
-                  ⚠ Data snapshot &gt;10 menit — tunggu siklus berikutnya
+                  ⚠ Snapshot &gt;10 mnt — menunggu siklus berikutnya
                 </div>
               )}
 
-              {/* ── Error ── */}
               {isError && (
                 <div className="text-[10px] text-red-400 bg-red-500/10 rounded-lg px-2 py-1.5 border border-red-500/20">
                   Gagal ambil sinyal — periksa koneksi server
@@ -389,7 +383,7 @@ export function MentorModeWidget() {
             </>
           )}
 
-          {/* ── Riwayat sinyal ── */}
+          {/* ── Riwayat ── */}
           {history.length > 0 && (
             <div>
               <button
