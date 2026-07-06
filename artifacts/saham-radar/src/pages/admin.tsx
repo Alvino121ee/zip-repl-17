@@ -13,7 +13,10 @@ import {
   XCircle, RefreshCw, LogOut, ShieldCheck, Users, KeyRound,
   Target, Bell, Loader2, Eye, EyeOff, Flame, StopCircle,
   BarChart2, TrendingUp, Power, Bitcoin, Mail, Trash2, Send,
+  Crown, Plus, Pencil, CreditCard, ReceiptText, ToggleLeft, ToggleRight,
+  Save, X,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { getAdminToken, clearAdminToken, authFetch } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 
@@ -1094,6 +1097,33 @@ export default function AdminPanel() {
             <ExtremeModePanel data={data} onRefetch={() => refetch()} />
           </div>
 
+          {/* VIP Plans Management */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <Crown className="w-5 h-5 text-amber-400" />
+              <h2 className="text-lg font-semibold">Paket VIP</h2>
+            </div>
+            <VipPlansPanel />
+          </div>
+
+          {/* Pakasir Settings */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <CreditCard className="w-5 h-5 text-violet-400" />
+              <h2 className="text-lg font-semibold">Pengaturan Pakasir</h2>
+            </div>
+            <PakasirSettingsPanel />
+          </div>
+
+          {/* Payment History */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <ReceiptText className="w-5 h-5 text-emerald-400" />
+              <h2 className="text-lg font-semibold">Riwayat Pembayaran</h2>
+            </div>
+            <PaymentsPanel />
+          </div>
+
           {/* Members */}
           <div>
             <div className="flex items-center gap-2 mb-4">
@@ -1114,6 +1144,373 @@ export default function AdminPanel() {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── VIP Plans Panel ──────────────────────────────────────────────────────────
+interface VipPlanData {
+  id: number; slug: string; name: string; description: string;
+  price: number; durationDays: number; features: string[];
+  isActive: boolean; sortOrder: number;
+}
+
+function formatRp(n: number) {
+  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+}
+
+function VipPlansPanel() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [showForm, setShowForm] = useState(false);
+  const [editPlan, setEditPlan] = useState<VipPlanData | null>(null);
+  const [form, setForm] = useState({
+    slug: "", name: "", description: "", price: "", durationDays: "30",
+    features: "", sortOrder: "0",
+  });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin-plans"],
+    queryFn: () => adminFetch("/api/admin/plans").then(r => r.json()) as Promise<{ ok: boolean; plans: VipPlanData[] }>,
+  });
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      const body = {
+        slug:        form.slug.trim(),
+        name:        form.name.trim(),
+        description: form.description.trim(),
+        price:       parseInt(form.price),
+        durationDays:parseInt(form.durationDays),
+        features:    form.features.split("\n").map(f => f.trim()).filter(Boolean),
+        sortOrder:   parseInt(form.sortOrder) || 0,
+      };
+      if (editPlan) {
+        const res = await adminFetch(`/api/admin/plans/${editPlan.id}`, { method: "PUT", body: JSON.stringify(body) });
+        return res.json();
+      }
+      const res = await adminFetch("/api/admin/plans", { method: "POST", body: JSON.stringify(body) });
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (!d.ok) { toast({ title: "Error", description: d.error, variant: "destructive" }); return; }
+      toast({ title: editPlan ? "Plan diperbarui" : "Plan dibuat" });
+      void qc.invalidateQueries({ queryKey: ["admin-plans"] });
+      setShowForm(false); setEditPlan(null);
+      setForm({ slug: "", name: "", description: "", price: "", durationDays: "30", features: "", sortOrder: "0" });
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
+      adminFetch(`/api/admin/plans/${id}`, { method: "PUT", body: JSON.stringify({ isActive }) }).then(r => r.json()),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["admin-plans"] }); },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => adminFetch(`/api/admin/plans/${id}`, { method: "DELETE" }).then(r => r.json()),
+    onSuccess: () => { toast({ title: "Plan dihapus" }); void qc.invalidateQueries({ queryKey: ["admin-plans"] }); },
+  });
+
+  function openEdit(p: VipPlanData) {
+    setEditPlan(p);
+    setForm({
+      slug: p.slug, name: p.name, description: p.description,
+      price: String(p.price), durationDays: String(p.durationDays),
+      features: (p.features as string[]).join("\n"), sortOrder: String(p.sortOrder),
+    });
+    setShowForm(true);
+  }
+
+  function openNew() {
+    setEditPlan(null);
+    setForm({ slug: "", name: "", description: "", price: "", durationDays: "30", features: "", sortOrder: "0" });
+    setShowForm(true);
+  }
+
+  const plans = data?.plans ?? [];
+
+  return (
+    <div className="space-y-4">
+      {/* Form */}
+      {showForm && (
+        <Card className="border-amber-500/30 bg-amber-500/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center justify-between">
+              <span>{editPlan ? "Edit Plan" : "Tambah Plan Baru"}</span>
+              <button onClick={() => setShowForm(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Slug (ID unik)</label>
+                <Input placeholder="vip_basic" value={form.slug} onChange={e => setForm(f => ({ ...f, slug: e.target.value }))}
+                  disabled={!!editPlan} className="h-8 text-sm" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Nama Paket</label>
+                <Input placeholder="VIP Basic" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  className="h-8 text-sm" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Deskripsi singkat</label>
+              <Input placeholder="Cocok untuk trader pemula" value={form.description}
+                onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="h-8 text-sm" />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Harga (Rupiah)</label>
+                <Input type="number" placeholder="99000" value={form.price}
+                  onChange={e => setForm(f => ({ ...f, price: e.target.value }))} className="h-8 text-sm" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Durasi (hari)</label>
+                <Input type="number" value={form.durationDays}
+                  onChange={e => setForm(f => ({ ...f, durationDays: e.target.value }))} className="h-8 text-sm" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Urutan</label>
+                <Input type="number" value={form.sortOrder}
+                  onChange={e => setForm(f => ({ ...f, sortOrder: e.target.value }))} className="h-8 text-sm" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Fitur (1 baris = 1 fitur)</label>
+              <Textarea placeholder={"Prediksi real-time dengan Entry/TP/SL\nAI Chat unlimited\nNotifikasi sinyal baru"} value={form.features}
+                onChange={e => setForm(f => ({ ...f, features: e.target.value }))}
+                className="text-sm min-h-[90px] resize-none" />
+            </div>
+            <Button size="sm" disabled={saveMut.isPending || !form.name || !form.price}
+              onClick={() => saveMut.mutate()} className="gap-2">
+              {saveMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              {editPlan ? "Simpan Perubahan" : "Buat Plan"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* List */}
+      <Card className="border-border/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center justify-between">
+            <span className="flex items-center gap-2"><Crown className="w-4 h-4 text-amber-400" /> Daftar Paket ({plans.length})</span>
+            <Button size="sm" variant="outline" onClick={openNew} className="h-7 text-xs gap-1.5">
+              <Plus className="w-3 h-3" /> Tambah Plan
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin" /> Memuat...</div>}
+          {!isLoading && plans.length === 0 && (
+            <div className="text-center py-6 text-muted-foreground text-sm">
+              <Crown className="w-8 h-8 mx-auto mb-2 opacity-20" />
+              Belum ada paket VIP. Klik "Tambah Plan" untuk mulai.
+            </div>
+          )}
+          {plans.length > 0 && (
+            <div className="space-y-3">
+              {plans.map(p => (
+                <div key={p.id} className={`border rounded-lg p-3 ${p.isActive ? "border-border/40" : "border-border/20 opacity-60"}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{p.name}</span>
+                        <span className="text-xs text-muted-foreground font-mono bg-muted/30 px-1.5 py-0.5 rounded">{p.slug}</span>
+                        {!p.isActive && <span className="text-xs text-red-400">Nonaktif</span>}
+                      </div>
+                      <p className="text-lg font-bold text-amber-400 mt-0.5">{formatRp(p.price)}<span className="text-xs text-muted-foreground font-normal"> / {p.durationDays}h</span></p>
+                      {(p.features as string[]).length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {(p.features as string[]).slice(0, 3).map((f, i) => (
+                            <li key={i} className="text-xs text-muted-foreground flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" /> {f}
+                            </li>
+                          ))}
+                          {(p.features as string[]).length > 3 && <li className="text-xs text-muted-foreground pl-4">+{(p.features as string[]).length - 3} lainnya</li>}
+                        </ul>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button onClick={() => toggleMut.mutate({ id: p.id, isActive: !p.isActive })}
+                        className="p-1 text-muted-foreground/60 hover:text-foreground transition-colors" title={p.isActive ? "Nonaktifkan" : "Aktifkan"}>
+                        {p.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4" />}
+                      </button>
+                      <button onClick={() => openEdit(p)} className="p-1 text-muted-foreground/60 hover:text-foreground transition-colors" title="Edit">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => { if (confirm("Hapus plan ini?")) deleteMut.mutate(p.id); }}
+                        className="p-1 text-muted-foreground/40 hover:text-red-400 transition-colors" title="Hapus">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Pakasir Settings Panel ───────────────────────────────────────────────────
+function PakasirSettingsPanel() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [project, setProject] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+
+  const { data } = useQuery<{ ok: boolean; project: string; hasApiKey: boolean }>({
+    queryKey: ["admin-pakasir"],
+    queryFn: () => adminFetch("/api/admin/settings/pakasir").then(r => r.json()),
+  });
+
+  // Sync project slug dari server ke form input saat data pertama kali dimuat
+  useEffect(() => {
+    if (data?.project) setProject(data.project);
+  }, [data?.project]);
+
+  const saveMut = useMutation({
+    mutationFn: () => adminFetch("/api/admin/settings/pakasir", {
+      method: "POST", body: JSON.stringify({ project: project.trim(), apiKey: apiKey.trim() }),
+    }).then(r => r.json()),
+    onSuccess: (d) => {
+      if (!d.ok) { toast({ title: "Error", description: d.error, variant: "destructive" }); return; }
+      toast({ title: "✅ Konfigurasi Pakasir disimpan" });
+      setApiKey("");
+      void qc.invalidateQueries({ queryKey: ["admin-pakasir"] });
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <CreditCard className="w-4 h-4 text-violet-400" />
+          Pakasir Payment Gateway
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Daftar di <a href="https://app.pakasir.com" target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">app.pakasir.com</a>, buat Proyek, lalu masukkan Slug dan API Key-nya di sini.
+        </p>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Project Slug</label>
+          <Input placeholder="my-project-slug" value={project}
+            onChange={e => setProject(e.target.value)} className="h-8 text-sm font-mono" />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">
+            API Key {data?.hasApiKey && <span className="text-emerald-400 ml-1">✓ sudah tersimpan</span>}
+          </label>
+          <div className="flex gap-2">
+            <Input type={showKey ? "text" : "password"} placeholder={data?.hasApiKey ? "••••••••••• (kosongkan jika tidak ingin ubah)" : "pk_live_..."}
+              value={apiKey} onChange={e => setApiKey(e.target.value)} className="h-8 text-sm font-mono flex-1" />
+            <button onClick={() => setShowKey(s => !s)} className="text-muted-foreground hover:text-foreground px-2">
+              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Webhook URL (daftarkan di dashboard Pakasir)</label>
+          <div className="flex items-center gap-2 bg-muted/20 rounded px-3 py-2">
+            <code className="text-xs font-mono text-violet-300 flex-1 break-all">
+              {window.location.origin}/api/payment/webhook
+            </code>
+            <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/payment/webhook`); toast({ title: "Disalin!" }); }}
+              className="text-muted-foreground hover:text-foreground shrink-0">
+              <ReceiptText className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+        <Button size="sm" disabled={saveMut.isPending || !project || (!apiKey && !data?.hasApiKey)}
+          onClick={() => saveMut.mutate()} className="gap-2">
+          {saveMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Simpan Konfigurasi
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Payments Panel ───────────────────────────────────────────────────────────
+interface PaymentRow {
+  id: number; orderId: string; memberId: number; amount: number;
+  planName: string; status: string; paymentMethod: string | null;
+  createdAt: string; completedAt: string | null;
+}
+
+function PaymentsPanel() {
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["admin-payments"],
+    queryFn: () => adminFetch("/api/admin/payments").then(r => r.json()) as Promise<{ ok: boolean; payments: PaymentRow[] }>,
+    refetchInterval: 30_000,
+  });
+
+  const payments = data?.payments ?? [];
+  const completed = payments.filter(p => p.status === "completed").length;
+  const totalRevenue = payments.filter(p => p.status === "completed").reduce((s, p) => s + p.amount, 0);
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center justify-between">
+          <span className="flex items-center gap-2"><ReceiptText className="w-4 h-4 text-emerald-400" /> Riwayat Pembayaran</span>
+          <button onClick={() => refetch()} className="text-muted-foreground hover:text-foreground">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {/* Summary */}
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="bg-muted/20 rounded-lg p-2.5 text-center">
+            <p className="text-xl font-bold">{payments.length}</p>
+            <p className="text-xs text-muted-foreground">Total Transaksi</p>
+          </div>
+          <div className="bg-emerald-500/10 rounded-lg p-2.5 text-center">
+            <p className="text-xl font-bold text-emerald-400">{completed}</p>
+            <p className="text-xs text-muted-foreground">Berhasil</p>
+          </div>
+          <div className="bg-amber-500/10 rounded-lg p-2.5 text-center">
+            <p className="text-base font-bold text-amber-400">{formatRp(totalRevenue)}</p>
+            <p className="text-xs text-muted-foreground">Total Revenue</p>
+          </div>
+        </div>
+
+        {isLoading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin" /> Memuat...</div>}
+        {!isLoading && payments.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-4">Belum ada transaksi</p>
+        )}
+        {payments.length > 0 && (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {payments.map(p => (
+              <div key={p.id} className="flex items-center justify-between gap-3 py-2 border-b border-border/20 last:border-0 text-xs">
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-[10px] text-muted-foreground truncate">{p.orderId}</p>
+                  <p className="font-medium">{p.planName} · {formatRp(p.amount)}</p>
+                  <p className="text-muted-foreground">{new Date(p.createdAt).toLocaleString("id-ID")}</p>
+                </div>
+                <div className={`shrink-0 px-2 py-0.5 rounded-full border text-[10px] font-medium ${
+                  p.status === "completed" ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400" :
+                  p.status === "expired"   ? "bg-red-500/10 border-red-500/25 text-red-400" :
+                  "bg-amber-500/10 border-amber-500/25 text-amber-400"
+                }`}>
+                  {p.status === "completed" ? "✓ Lunas" : p.status === "expired" ? "Expired" : "Pending"}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

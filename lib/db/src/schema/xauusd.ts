@@ -108,7 +108,7 @@ export const xauusdPredictionsTable = pgTable("xauusd_predictions", {
   priceDiff: real("price_diff"),
   revisedAt: timestamp("revised_at"),
   revisionNote: text("revision_note"), // AI's self-critique
-  status: text("status").notNull().default("pending"), // 'pending'|'verified'|'revised'
+  status: text("status").notNull().default("pending"), // 'pending'|'verified'|'revised'|'expired'
 });
 
 // ─── XAUUSD News ──────────────────────────────────────────────────────────────

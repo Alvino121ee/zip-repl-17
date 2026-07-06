@@ -27,6 +27,7 @@ import {
   restoreFromFile,
   BACKUP_PATH,
 } from "../lib/brain-sqlite-backup.js";
+import adminPlansRouter from "./admin-plans.js";
 
 const router = Router();
 
@@ -222,5 +223,8 @@ router.get("/brain-backup/download", requireAdmin, async (_req, res) => {
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
+
+// ─── VIP Plans, Pakasir, Payment history (admin-plans router) ────────────────
+router.use(requireAdmin, adminPlansRouter);
 
 export default router;

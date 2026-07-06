@@ -696,17 +696,13 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
   let tp3: number;
 
   if (direction === "up") {
-    entryLow  = parseFloat((price - pullback).toFixed(2));
-    entryHigh = parseFloat((price + pullback * 0.3).toFixed(2));
-    // SL: jika support tersedia DAN di bawah harga (valid struktural), letakkan di bawahnya; fallback ATR
+    // SL dihitung DULU — entry zone harus selalu di atasnya
     const slCandidate = indicators.supportLevel != null
       ? parseFloat((indicators.supportLevel - atr * 0.1).toFixed(2))
       : null;
     const slRawUp = (slCandidate != null && slCandidate < price)
       ? price - slCandidate
       : atr * 1.5;
-    // TP1: resistance terdekat di ATAS harga (area reaksi pertama); fallback ATR.
-    // Jarak akhir di-clamp ke $5–$20 (≈50–200 pip) supaya target selalu realistis.
     const tp1Candidate = indicators.resistanceLevel != null
       ? parseFloat(indicators.resistanceLevel.toFixed(2))
       : null;
@@ -715,24 +711,22 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
       : atr * 1.5;
     const tp1DistanceUp = clampMainTpDistance(tp1RawDistance);
     targetPrice = parseFloat((price + tp1DistanceUp).toFixed(2));
-    // SL di-clamp proporsional terhadap TP1 supaya RR tetap sehat setelah TP dikecilkan
     stopLoss = parseFloat((price - clampMainSlDistance(slRawUp, tp1DistanceUp)).toFixed(2));
-    // TP2/TP3: ektensi ATR dari TP1 (selalu valid karena relatif terhadap TP1)
+    // Entry zone: antara SL dan price — tidak boleh menembus SL ke bawah
+    // entryLow min = stopLoss + 10% ATR (buffer tipis di atas SL)
+    const entryBuffer = parseFloat((atr * 0.1).toFixed(2));
+    entryLow  = parseFloat((Math.max(price - pullback, stopLoss + entryBuffer)).toFixed(2));
+    entryHigh = parseFloat((Math.max(price + pullback * 0.15, entryLow + entryBuffer)).toFixed(2));
     tp2 = parseFloat((targetPrice + atr * 1.5).toFixed(2));
     tp3 = parseFloat((targetPrice + atr * 3.5).toFixed(2));
   } else {
-    // direction === "down"
-    entryLow  = parseFloat((price - pullback * 0.3).toFixed(2));
-    entryHigh = parseFloat((price + pullback).toFixed(2));
-    // SL: jika resistance tersedia DAN di atas harga (valid struktural), letakkan di atasnya; fallback ATR
+    // direction === "down" — SL dihitung DULU juga
     const slCandidate = indicators.resistanceLevel != null
       ? parseFloat((indicators.resistanceLevel + atr * 0.1).toFixed(2))
       : null;
     const slRawDown = (slCandidate != null && slCandidate > price)
       ? slCandidate - price
       : atr * 1.5;
-    // TP1: support terdekat di BAWAH harga (area reaksi pertama); fallback ATR.
-    // Jarak akhir di-clamp ke $5–$20 (≈50–200 pip) supaya target selalu realistis.
     const tp1Candidate = indicators.supportLevel != null
       ? parseFloat(indicators.supportLevel.toFixed(2))
       : null;
@@ -741,9 +735,12 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
       : atr * 1.5;
     const tp1DistanceDown = clampMainTpDistance(tp1RawDistance);
     targetPrice = parseFloat((price - tp1DistanceDown).toFixed(2));
-    // SL di-clamp proporsional terhadap TP1 supaya RR tetap sehat setelah TP dikecilkan
     stopLoss = parseFloat((price + clampMainSlDistance(slRawDown, tp1DistanceDown)).toFixed(2));
-    // TP2/TP3: ekstensi ATR dari TP1
+    // Entry zone: antara price dan SL — tidak boleh menembus SL ke atas
+    // entryHigh max = stopLoss - 10% ATR (buffer tipis di bawah SL)
+    const entryBuffer = parseFloat((atr * 0.1).toFixed(2));
+    entryHigh = parseFloat((Math.min(price + pullback, stopLoss - entryBuffer)).toFixed(2));
+    entryLow  = parseFloat((Math.min(price - pullback * 0.15, entryHigh - entryBuffer)).toFixed(2));
     tp2 = parseFloat((targetPrice - atr * 1.5).toFixed(2));
     tp3 = parseFloat((targetPrice - atr * 3.5).toFixed(2));
   }
@@ -1447,8 +1444,19 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
 
     let targetPrice = tp1Ok && notEqual ? rawTP1 : rbFinal.targetPrice;
     let stopLoss      = slOk  && notEqual ? rawSL  : rbFinal.stopLoss;
-    const entryLow    = rawEL < rawEH ? rawEL : rbFinal.entryLow;
-    const entryHigh   = rawEL < rawEH ? rawEH : rbFinal.entryHigh;
+    // Entry zone: pastikan rawEL < rawEH, lalu clamp agar tidak menembus SL
+    // UP  → entryLow harus > stopLoss (entry di atas SL)
+    // DOWN → entryHigh harus < stopLoss (entry di bawah SL)
+    const atrBuf = atrVal * 0.1;
+    let entryLow  = rawEL < rawEH ? rawEL : rbFinal.entryLow;
+    let entryHigh = rawEL < rawEH ? rawEH : rbFinal.entryHigh;
+    if (finalDirection === "up") {
+      if (entryLow <= stopLoss) entryLow  = parseFloat((stopLoss + atrBuf).toFixed(2));
+      if (entryHigh <= entryLow) entryHigh = parseFloat((entryLow + atrBuf).toFixed(2));
+    } else {
+      if (entryHigh >= stopLoss) entryHigh = parseFloat((stopLoss - atrBuf).toFixed(2));
+      if (entryLow >= entryHigh) entryLow  = parseFloat((entryHigh - atrBuf).toFixed(2));
+    }
 
     // Untuk prediksi UTAMA — clamp jarak TP1 ke $5–$20 (≈50–200 pip) dari entry,
     // tak peduli sumbernya rule-based atau AI. Jarak asal dipertahankan sebagai
@@ -1657,7 +1665,25 @@ async function verifyOldPredictions(
 
     const actualDirection =
       pricePct > 0.002 ? "up" : pricePct < -0.002 ? "down" : "sideways";
-    if (isCorrect === null) isCorrect = actualDirection === pred.direction;
+
+    // ── Prediksi expired (waktu habis tanpa TP/SL tercapai) ──────────────────
+    // Jangan paksa benar/salah dari arah harga saja — TP tidak pernah tersentuh,
+    // jadi ini bukan prediksi yang bisa dinilai. Simpan sebagai "expired" agar
+    // tidak merusak statistik akurasi.
+    if (isCorrect === null) {
+      console.log(`[XAUUSD Brain] Prediksi #${pred.id} ${pred.direction.toUpperCase()} → ⏰ EXPIRED | ${resolveReason}`);
+      await db
+        .update(xauusdPredictionsTable)
+        .set({
+          actualPrice: currentPrice,
+          actualDirection,
+          isCorrect: null,
+          priceDiff,
+          status: "expired",
+        })
+        .where(eq(xauusdPredictionsTable.id, pred.id));
+      continue;
+    }
 
     checkedCount++;
     if (!isCorrect) wrongCount++;

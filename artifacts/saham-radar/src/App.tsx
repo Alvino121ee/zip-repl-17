@@ -13,6 +13,8 @@ import RegisterPage from "@/pages/register";
 import VerifyEmailPage from "@/pages/verify-email";
 import MemberPage from "@/pages/member";
 import HomePage from "@/pages/home";
+import PricingPage from "@/pages/pricing";
+import PaymentPage from "@/pages/payment";
 import { getAdminToken } from "@/lib/auth";
 
 // ── Wrapper: halaman admin hanya bisa diakses saat sudah login ────────────────
@@ -46,6 +48,8 @@ function Router() {
       <Route path="/register" component={RegisterPage} />
       <Route path="/verify-email" component={VerifyEmailPage} />
       <Route path="/member" component={MemberPage} />
+      <Route path="/pricing" component={PricingPage} />
+      <Route path="/payment/:orderId" component={PaymentPage} />
 
       {/* Halaman admin dengan layout sidebar — wajib login admin */}
       <Route>

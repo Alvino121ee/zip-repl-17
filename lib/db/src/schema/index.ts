@@ -4,3 +4,4 @@ export * from "./agents";
 export * from "./xauusd";
 export * from "./btcusd";
 export * from "./members";
+export * from "./payments";
