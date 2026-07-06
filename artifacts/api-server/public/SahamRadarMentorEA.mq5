@@ -157,10 +157,12 @@ void PushAccountData() {
 
    char   postData[];
    char   result[];
-   string headers = "Content-Type: application/json\r\n";
+   string reqHeaders  = "Content-Type: application/json\r\n";
+   string respHeaders = "";
    StringToCharArray(body, postData, 0, StringLen(body));
 
-   WebRequest("POST", url, headers, "", 3000, postData, ArraySize(postData)-1, result, headers);
+   // 8-parameter version: (method, url, headers, timeout, data, data_size, result, result_headers)
+   WebRequest("POST", url, reqHeaders, 3000, postData, ArraySize(postData)-1, result, respHeaders);
    // Ignore error — push adalah best-effort
 }
 
@@ -176,7 +178,8 @@ void FetchAndProcess() {
    string respHeaders;
 
    ResetLastError();
-   int code = WebRequest("GET", url, "Accept: text/plain\r\n", "", 3000, post, 0, result, respHeaders);
+   // 8-parameter version: (method, url, headers, timeout, data, data_size, result, result_headers)
+   int code = WebRequest("GET", url, "Accept: text/plain\r\n", 3000, post, 0, result, respHeaders);
 
    if (code == -1) {
       g_errCount++;
