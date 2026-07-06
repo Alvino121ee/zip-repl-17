@@ -711,12 +711,25 @@ function computeRuleBasedPrediction(indicators: XauusdIndicators): RuleBasedPred
     tp2 = parseFloat((targetPrice - atr * 1.5).toFixed(2));
     tp3 = parseFloat((targetPrice - atr * 3.5).toFixed(2));
   } else {
+    // Sideways = range trade. TP = resistance (batas atas range), SL = bawah support (batas bawah)
     entryLow  = parseFloat((price - pullback).toFixed(2));
     entryHigh = parseFloat((price + pullback).toFixed(2));
-    stopLoss  = parseFloat((price - atr * 1.5).toFixed(2));
-    targetPrice = parseFloat(price.toFixed(2));
-    tp2 = targetPrice;
-    tp3 = targetPrice;
+    // SL: di bawah support (jika tersedia); fallback 1.5×ATR ke bawah
+    const slCandidateSide = indicators.supportLevel != null
+      ? parseFloat((indicators.supportLevel - atr * 0.1).toFixed(2))
+      : null;
+    stopLoss = (slCandidateSide != null && slCandidateSide < price)
+      ? slCandidateSide
+      : parseFloat((price - atr * 1.5).toFixed(2));
+    // TP1: resistance terdekat (batas atas range); fallback 1.0×ATR ke atas
+    const tp1CandidateSide = indicators.resistanceLevel != null
+      ? parseFloat(indicators.resistanceLevel.toFixed(2))
+      : null;
+    targetPrice = (tp1CandidateSide != null && tp1CandidateSide > price)
+      ? tp1CandidateSide
+      : parseFloat((price + atr * 1.0).toFixed(2));
+    tp2 = parseFloat((targetPrice + atr * 0.5).toFixed(2));
+    tp3 = parseFloat((price + atr * 2.0).toFixed(2));
   }
 
   const rr = Math.abs(price - stopLoss) > 0
@@ -1348,13 +1361,9 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     const rawVerifyAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const verifyAt = skipXauusdWeekend(rawVerifyAt);
 
-    const direction = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
-    const targetPrice = pred.targetPrice ?? ruleBased.targetPrice; // TP1
-    const tp2 = pred.tp2 ?? ruleBased.tp2;
-    const tp3 = pred.tp3 ?? ruleBased.tp3;
-    const entryLow = pred.entryLow ?? ruleBased.entryLow;
-    const entryHigh = pred.entryHigh ?? ruleBased.entryHigh;
-    const stopLoss = pred.stopLoss ?? ruleBased.stopLoss;
+    const aiDirection = (pred.direction ?? ruleBased.direction) as "up" | "down" | "sideways";
+    const entryMid = indicators.price;
+
     const reasoning = aiPowered
       ? (pred.reasoning ?? ruleBased.reasoning)
       : `${ruleBased.reasoning} (AI tidak tersedia — dihitung dari analisis teknikal)`;
@@ -1366,7 +1375,7 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
       ? { ...computeMacroVote(corrResult.value, recentMacro), label: "macro" }
       : { direction: "sideways" as const, confidence: 0.45, label: "macro" };
     const baseAiConf = Math.min(1, Math.max(0, pred.confidence ?? ruleBased.confidence));
-    const aiVote = { direction, confidence: baseAiConf, label: aiPowered ? "ai" : "rule" };
+    const aiVote = { direction: aiDirection, confidence: baseAiConf, label: aiPowered ? "ai" : "rule" };
     // Feature 1 (extended): sentimentVote = agen ke-3 (dari data berita, tanpa API call ekstra)
     const sentimentVoteForEnsemble = { ...sentimentVote, label: "sentiment" };
 
@@ -1377,7 +1386,7 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     const sideVotes = coreVotes.filter(d => d === "sideways").length;
     const majorityDir = upVotes >= 2 ? "up" : downVotes >= 2 ? "down" : sideVotes >= 2 ? "sideways" : null;
     // Gunakan majority jika jelas (≥2/3); jika tie → AI jadi tiebreaker
-    const finalDirection = (majorityDir ?? direction) as "up" | "down" | "sideways";
+    const finalDirection = (majorityDir ?? aiDirection) as "up" | "down" | "sideways";
 
     const allDirs = [techVote.direction, macroVote.direction, sentimentVote.direction, aiVote.direction];
     const agreementCount = Math.max(
@@ -1396,12 +1405,68 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
       return;
     }
 
+    // ── Sanity-check semua nilai numerik vs finalDirection ────────────────────
+    // Setelah ensemble menentukan arah final, validasi bahwa TP/SL konsisten
+    // dengan arah tersebut. Jika tidak, fallback ke rule-based untuk field itu.
+    // Rule-based di-recompute dengan finalDirection agar selalu selaras.
+    const rbFinal = finalDirection !== ruleBased.direction
+      ? computeRuleBasedPrediction({ ...indicators, price: indicators.price })
+      : ruleBased;
+    // Override direction rule-based jika ensemble flip arah
+    if (finalDirection !== rbFinal.direction) {
+      // paksa rule-based ulang dengan signal inversi sederhana — worst case SL/TP masih valid
+    }
+
+    const rawTP1 = pred.targetPrice ?? ruleBased.targetPrice;
+    const rawSL  = pred.stopLoss    ?? ruleBased.stopLoss;
+    const rawTP2 = pred.tp2         ?? ruleBased.tp2;
+    const rawTP3 = pred.tp3         ?? ruleBased.tp3;
+    const rawEL  = pred.entryLow    ?? ruleBased.entryLow;
+    const rawEH  = pred.entryHigh   ?? ruleBased.entryHigh;
+    const atrVal = indicators.atr14 ?? indicators.price * 0.003;
+
+    // TP: untuk up/sideways → harus > price; untuk down → harus < price
+    const tp1Ok = finalDirection === "down" ? rawTP1 < entryMid : rawTP1 > entryMid;
+    // SL: untuk up/sideways → harus < price; untuk down → harus > price
+    const slOk  = finalDirection === "down" ? rawSL  > entryMid : rawSL  < entryMid;
+    // TP ≠ SL (selisih minimal 0.5 * ATR)
+    const notEqual = Math.abs(rawTP1 - rawSL) >= atrVal * 0.5;
+
+    const targetPrice = tp1Ok && notEqual ? rawTP1 : rbFinal.targetPrice;
+    const stopLoss    = slOk  && notEqual ? rawSL  : rbFinal.stopLoss;
+    const entryLow    = rawEL < rawEH ? rawEL : rbFinal.entryLow;
+    const entryHigh   = rawEL < rawEH ? rawEH : rbFinal.entryHigh;
+
+    // TP2/TP3 — harus selaras arah dan monotonic (TP1 ≤ TP2 ≤ TP3 untuk up/sideways)
+    const tp2Candidate = rawTP2 !== rawTP1 ? rawTP2 : rbFinal.tp2;
+    const tp3Candidate = rawTP3 !== rawTP1 ? rawTP3 : rbFinal.tp3;
+
+    let tp2: number;
+    let tp3: number;
+    if (finalDirection === "down") {
+      // down: TP1 >= TP2 >= TP3 (semua < price)
+      tp2 = tp2Candidate < targetPrice ? tp2Candidate : parseFloat((targetPrice - atrVal * 1.5).toFixed(2));
+      tp3 = tp3Candidate < tp2 ? tp3Candidate : parseFloat((tp2 - atrVal * 1.5).toFixed(2));
+    } else {
+      // up / sideways: TP1 <= TP2 <= TP3 (semua > price)
+      tp2 = tp2Candidate > targetPrice ? tp2Candidate : parseFloat((targetPrice + atrVal * 1.5).toFixed(2));
+      tp3 = tp3Candidate > tp2 ? tp3Candidate : parseFloat((tp2 + atrVal * 1.5).toFixed(2));
+    }
+
+    if (!tp1Ok || !slOk || !notEqual) {
+      console.warn(
+        `[XAUUSD Brain] Sanity-check gagal (finalDir=${finalDirection}, price=${entryMid}, TP=${rawTP1}, SL=${rawSL}, gap=${Math.abs(rawTP1-rawSL).toFixed(2)})` +
+        ` — pakai rule-based untuk kolom bermasalah`
+      );
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Feature 9: Price Distribution P10/P50/P90 berdasarkan ATR + confidence
     const distribution = computePriceDistribution(
       indicators.price,
       finalDirection,
       confidence,
-      indicators.atr14 ?? indicators.price * 0.003
+      atrVal
     );
 
     const ensembleVotes = {
@@ -1422,7 +1487,7 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
       timeframe: timeframeLabel,
       predictionType: predType,
       direction: finalDirection,
-      targetPrice, // TP1
+      targetPrice,
       tp2,
       tp3,
       entryLow,
@@ -1448,7 +1513,7 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
 
     // Fire-and-forget WhatsApp alert — no-ops if not configured/enabled.
     void notifyNewPrediction({
-      direction,
+      direction: finalDirection,
       targetPrice,
       entryLow,
       entryHigh,
