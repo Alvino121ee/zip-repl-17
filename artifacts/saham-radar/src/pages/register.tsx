@@ -19,6 +19,7 @@ export default function RegisterPage() {
   const handleRegister = async () => {
     setError("");
     if (!email.trim()) return setError("Email diperlukan");
+    if (!/^[^\s@]+@gmail\.com$/i.test(email.trim())) return setError("Hanya email @gmail.com yang diperbolehkan");
     if (password.length < 8) return setError("Password minimal 8 karakter");
     if (password !== confirmPwd) return setError("Password dan konfirmasi tidak sama");
 
@@ -29,13 +30,17 @@ export default function RegisterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
-      const data = (await res.json()) as { ok: boolean; error?: string; email?: string };
+      const data = (await res.json()) as { ok: boolean; error?: string; email?: string; token?: string; memberId?: number };
       if (!res.ok || !data.ok) {
         setError(data.error ?? "Pendaftaran gagal");
         return;
       }
-      // Berhasil — arahkan ke halaman verifikasi
-      navigate(`/verify-email?email=${encodeURIComponent(email.trim())}`);
+      // Berhasil — simpan token dan langsung masuk ke member
+      if (data.token) {
+        sessionStorage.setItem("gr_member_token", data.token);
+        sessionStorage.setItem("gr_member_email", data.email ?? email.trim());
+      }
+      navigate("/member");
     } catch {
       setError("Gagal terhubung ke server");
     } finally {
@@ -72,7 +77,7 @@ export default function RegisterPage() {
             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60" />
             <Input
               type="email"
-              placeholder="Email Anda"
+              placeholder="Email Gmail (contoh@gmail.com)"
               value={email}
               onChange={(e) => { setEmail(e.target.value); setError(""); }}
               onKeyDown={(e) => e.key === "Enter" && handleRegister()}
@@ -126,7 +131,7 @@ export default function RegisterPage() {
             disabled={loading || !email.trim() || !password || !confirmPwd}
             className="w-full bg-primary hover:bg-primary/90 text-black font-semibold"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Daftar & Kirim Kode Verifikasi"}
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Daftar Sekarang"}
           </Button>
 
           <div className="mt-4 text-center text-xs text-muted-foreground">

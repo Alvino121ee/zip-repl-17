@@ -113,8 +113,8 @@ router.post("/login", loginLimiter, async (req, res) => {
 router.post("/register", registerLimiter, async (req, res) => {
   const { email, password } = req.body as { email?: string; password?: string };
 
-  if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-    return res.status(400).json({ ok: false, error: "Format email tidak valid" });
+  if (!email || typeof email !== "string" || !/^[^\s@]+@gmail\.com$/i.test(email.trim())) {
+    return res.status(400).json({ ok: false, error: "Hanya email @gmail.com yang diperbolehkan" });
   }
   if (!password || typeof password !== "string" || password.length < 8) {
     return res.status(400).json({ ok: false, error: "Password minimal 8 karakter" });
@@ -122,34 +122,21 @@ router.post("/register", registerLimiter, async (req, res) => {
 
   const existing = await findMemberByEmail(email.trim());
   if (existing) {
-    if (existing.emailVerified) {
-      return res.status(409).json({ ok: false, error: "Email sudah terdaftar" });
+    // Akun sudah ada (verified atau belum) — langsung auto-verify dan login
+    if (!existing.emailVerified) {
+      await markEmailVerified(existing.id);
     }
-    // Sudah terdaftar tapi belum verifikasi — kirim ulang kode
-    const code = generateVerificationCode();
-    await setVerificationCode(existing.id, code);
-    try {
-      const smtp = await getSmtpSettings();
-      await sendVerificationEmail(existing.email, code, smtp);
-    } catch (err) {
-      return res.status(500).json({ ok: false, error: `Gagal kirim email: ${String(err)}` });
-    }
-    return res.json({ ok: true, message: "Kode verifikasi baru dikirim ke email Anda" });
+    const token = await createSessionToken(existing.id);
+    return res.json({ ok: true, token, email: existing.email, memberId: existing.id });
   }
 
   const hash = await bcrypt.hash(password, 12);
   const member = await createMember(email.trim(), hash);
-  const code = generateVerificationCode();
-  await setVerificationCode(member.id, code);
+  // Langsung tandai terverifikasi — tidak perlu OTP
+  await markEmailVerified(member.id);
+  const token = await createSessionToken(member.id);
 
-  try {
-    const smtp = await getSmtpSettings();
-    await sendVerificationEmail(member.email, code, smtp);
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: `Akun dibuat tapi gagal kirim email verifikasi: ${String(err)}` });
-  }
-
-  return res.status(201).json({ ok: true, message: "Akun berhasil dibuat! Cek email untuk kode verifikasi.", email: member.email });
+  return res.status(201).json({ ok: true, token, email: member.email, memberId: member.id });
 });
 
 // ─── POST /auth/verify-email ──────────────────────────────────────────────────
