@@ -5,6 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { MentorModeWidget } from "@/components/MentorModeWidget";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -2661,6 +2662,9 @@ export default function XauusdAi() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Mentor Mode — floating draggable widget */}
+      <MentorModeWidget />
     </div>
   );
 }

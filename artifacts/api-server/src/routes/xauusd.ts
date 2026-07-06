@@ -96,6 +96,199 @@ xauusdRouter.get("/market-regime", async (_req, res) => {
   }
 });
 
+// ─── GET /xauusd/mentor-signal — fast rule-based signal for Mentor Mode ───────
+// Returns BUY / SHORT / HOLD command based on technical indicators.
+// Uses last DB snapshot (fast, no new TradingView call needed).
+// Query param: sensitivity = "aggressive" | "normal" | "conservative"
+xauusdRouter.get("/mentor-signal", async (req, res) => {
+  try {
+    const sensitivity = (["aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
+      ? req.query.sensitivity
+      : "normal") as "aggressive" | "normal" | "conservative";
+
+    // Use last saved snapshot from DB — already computed, instant
+    const snapRows = await db
+      .select()
+      .from(xauusdSnapshotsTable)
+      .orderBy(desc(xauusdSnapshotsTable.snapshotAt))
+      .limit(1);
+
+    const livePrice = getLatestLivePrice();
+
+    if (!snapRows.length) {
+      return res.json({
+        command: "HOLD",
+        reasons: ["Belum ada data snapshot — tunggu siklus pertama selesai"],
+        minTP: null,
+        confidence: 0,
+        price: livePrice?.price ?? null,
+        bullishScore: 0,
+        bearishScore: 0,
+        snapshotAge: null,
+      });
+    }
+
+    const snap = snapRows[0];
+    const price = livePrice?.price ?? snap.price;
+    const snapshotAgeMs = Date.now() - new Date(snap.snapshotAt).getTime();
+
+    // ── Scoring signals (max 8 checks) ────────────────────────────────────────
+    let bullishScore = 0;
+    let bearishScore = 0;
+    const bullishReasons: string[] = [];
+    const bearishReasons: string[] = [];
+
+    // 1. EMA alignment
+    if (snap.emaAlignment === "bullish_stack") {
+      bullishScore++;
+      bullishReasons.push("EMA bullish stack (9>21>50>200)");
+    } else if (snap.emaAlignment === "bearish_stack") {
+      bearishScore++;
+      bearishReasons.push("EMA bearish stack (9<21<50<200)");
+    }
+
+    // 2. RSI zone
+    if (snap.rsi14 != null) {
+      const rsi = snap.rsi14;
+      if (rsi <= 30) {
+        bullishScore++;
+        bullishReasons.push(`RSI ${rsi.toFixed(0)} — oversold, potensi reversal naik`);
+      } else if (rsi > 30 && rsi <= 50) {
+        bearishScore++;
+        bearishReasons.push(`RSI ${rsi.toFixed(0)} — momentum turun`);
+      } else if (rsi > 50 && rsi < 70) {
+        bullishScore++;
+        bullishReasons.push(`RSI ${rsi.toFixed(0)} — momentum naik`);
+      } else if (rsi >= 70) {
+        bearishScore++;
+        bearishReasons.push(`RSI ${rsi.toFixed(0)} — overbought, potensi reversal turun`);
+      }
+    }
+
+    // 3. MACD signal type
+    if (snap.macdSignalType === "bullish_cross") {
+      bullishScore++;
+      bullishReasons.push("MACD bullish cross");
+    } else if (snap.macdSignalType === "bearish_cross") {
+      bearishScore++;
+      bearishReasons.push("MACD bearish cross");
+    }
+
+    // 4. MACD histogram direction
+    if (snap.macdHistogram != null) {
+      if (snap.macdHistogram > 0) {
+        bullishScore++;
+        bullishReasons.push(`Histogram MACD positif (+${snap.macdHistogram.toFixed(2)})`);
+      } else if (snap.macdHistogram < 0) {
+        bearishScore++;
+        bearishReasons.push(`Histogram MACD negatif (${snap.macdHistogram.toFixed(2)})`);
+      }
+    }
+
+    // 5. Price vs EMA50
+    if (snap.ema50 != null) {
+      if (price > snap.ema50) {
+        bullishScore++;
+        bullishReasons.push(`Harga di atas EMA50 (${snap.ema50.toFixed(2)})`);
+      } else {
+        bearishScore++;
+        bearishReasons.push(`Harga di bawah EMA50 (${snap.ema50.toFixed(2)})`);
+      }
+    }
+
+    // 6. Trend (1H)
+    if (snap.trend === "bullish") {
+      bullishScore++;
+      bullishReasons.push("Trend 1H bullish");
+    } else if (snap.trend === "bearish") {
+      bearishScore++;
+      bearishReasons.push("Trend 1H bearish");
+    }
+
+    // 7. Bollinger Bands position
+    if (snap.bbLower != null && snap.bbUpper != null && snap.bbMiddle != null) {
+      if (price < snap.bbLower) {
+        bullishScore++;
+        bullishReasons.push(`Di bawah BB lower (${snap.bbLower.toFixed(2)}) — potensi reversal naik`);
+      } else if (price > snap.bbUpper) {
+        bearishScore++;
+        bearishReasons.push(`Di atas BB upper (${snap.bbUpper.toFixed(2)}) — potensi reversal turun`);
+      } else if (price < snap.bbMiddle) {
+        bearishScore += 0.5;
+      } else {
+        bullishScore += 0.5;
+      }
+    }
+
+    // 8. Price vs Support/Resistance midpoint
+    if (snap.supportLevel != null && snap.resistanceLevel != null) {
+      const midSR = (snap.supportLevel + snap.resistanceLevel) / 2;
+      if (price > midSR) {
+        bullishScore++;
+        bullishReasons.push(`Harga di atas S/R midpoint (${midSR.toFixed(2)})`);
+      } else {
+        bearishScore++;
+        bearishReasons.push(`Harga di bawah S/R midpoint (${midSR.toFixed(2)})`);
+      }
+    }
+
+    // ── Thresholds per sensitivity ────────────────────────────────────────────
+    const thresholds = { aggressive: 2, normal: 3, conservative: 4 };
+    const threshold = thresholds[sensitivity];
+    const maxPossible = 8.5; // accounting for 0.5 BB mid scores
+
+    // ── Determine command ─────────────────────────────────────────────────────
+    let command: "BUY" | "SHORT" | "HOLD";
+    let reasons: string[];
+    let confidence: number;
+
+    if (bullishScore >= threshold && bullishScore > bearishScore) {
+      command = "BUY";
+      reasons = bullishReasons;
+      confidence = parseFloat(Math.min(0.95, bullishScore / maxPossible).toFixed(2));
+    } else if (bearishScore >= threshold && bearishScore > bullishScore) {
+      command = "SHORT";
+      reasons = bearishReasons;
+      confidence = parseFloat(Math.min(0.95, bearishScore / maxPossible).toFixed(2));
+    } else {
+      command = "HOLD";
+      reasons = bullishScore >= bearishScore ? bullishReasons : bearishReasons;
+      confidence = parseFloat(Math.min(0.4, (Math.max(bullishScore, bearishScore)) / maxPossible).toFixed(2));
+    }
+
+    // ── Minimal TP based on ATR ───────────────────────────────────────────────
+    const atr = snap.atr14 ?? 5;
+    const minTPDistance = parseFloat((atr * 0.45).toFixed(2));
+    const minTP = command === "BUY"
+      ? parseFloat((price + minTPDistance).toFixed(2))
+      : command === "SHORT"
+      ? parseFloat((price - minTPDistance).toFixed(2))
+      : null;
+    const minSL = command === "BUY"
+      ? parseFloat((price - minTPDistance * 0.8).toFixed(2))
+      : command === "SHORT"
+      ? parseFloat((price + minTPDistance * 0.8).toFixed(2))
+      : null;
+
+    return res.json({
+      command,
+      reasons,
+      minTP,
+      minSL,
+      minTPDistance,
+      confidence,
+      price,
+      bullishScore: parseFloat(bullishScore.toFixed(1)),
+      bearishScore: parseFloat(bearishScore.toFixed(1)),
+      sensitivity,
+      snapshotAgeMs,
+    });
+  } catch (err) {
+    console.error("[XAUUSD] /mentor-signal error:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── GET /xauusd/multi-timeframe — 1H/4H/Daily trend confluence ──────────────
 xauusdRouter.get("/multi-timeframe", async (_req, res) => {
   try {
