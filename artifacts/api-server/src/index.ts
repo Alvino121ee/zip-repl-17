@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { startXauusdBrainEngine } from "./lib/xauusd-brain-engine.js";
 import { startBtcBrainEngine } from "./lib/btcusd-brain-engine.js";
 import { startXauusdLivePriceTicker } from "./lib/xauusd-live-price.js";
+import { startMentorIndicatorsTicker } from "./lib/xauusd-mentor-cache.js";
 import { ensureAgentsExist } from "./lib/agent-engine.js";
 
 const port = Number(process.env["PORT"] ?? "8080");
@@ -52,4 +53,7 @@ app.listen(port, async (err) => {
 
   // Start realtime (1s) live price ticker
   startXauusdLivePriceTicker();
+
+  // Start 30s indicator cache for Mentor Mode (live TradingView data, no DB)
+  startMentorIndicatorsTicker();
 });

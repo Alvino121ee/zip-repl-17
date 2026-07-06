@@ -36,7 +36,9 @@ interface MentorSignal {
   price: number | null;
   bullishScore: number;
   bearishScore: number;
-  snapshotAgeMs: number | null;
+  indicatorsAgeMs: number | null;
+  snapshotAgeMs: number | null; // backward-compat alias
+  dataSource: "live" | "snapshot";
 }
 
 interface HistoryEntry {
@@ -200,9 +202,11 @@ export function MentorModeWidget() {
   }
 
   // ── Derived display ────────────────────────────────────────────────────────
-  const style       = commandStyle(stableCmd);
-  const cooldownPct = Math.round((cooldownLeft / COOLDOWN_MS) * 100);
-  const snapshotOld = (signal?.snapshotAgeMs ?? 0) > 10 * 60 * 1000;
+  const style        = commandStyle(stableCmd);
+  const cooldownPct  = Math.round((cooldownLeft / COOLDOWN_MS) * 100);
+  const ageMs        = signal?.indicatorsAgeMs ?? signal?.snapshotAgeMs ?? null;
+  const isLive       = signal?.dataSource === "live";
+  const snapshotOld  = (ageMs ?? 0) > 10 * 60 * 1000;
 
   return (
     <div
@@ -218,6 +222,15 @@ export function MentorModeWidget() {
         <GripVertical className="w-4 h-4 text-zinc-500 shrink-0" />
         <GraduationCap className="w-4 h-4 text-amber-400 shrink-0" />
         <span className="text-xs font-semibold text-foreground flex-1">Mentor Mode</span>
+        {isActive && signal && (
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+            isLive
+              ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+              : "bg-amber-500/15 text-amber-500 border-amber-500/30"
+          }`}>
+            {isLive ? "● LIVE" : "● SNAP"}
+          </span>
+        )}
 
         <select
           data-nodrag

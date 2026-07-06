@@ -35,6 +35,7 @@ import {
 } from "../lib/xauusd-brain-engine.js";
 import { chatWithAgent } from "../lib/agent-engine.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
+import { getLatestMentorIndicators } from "../lib/xauusd-mentor-cache.js";
 import {
   getSettingsSummary,
   getMemberPassword,
@@ -97,8 +98,9 @@ xauusdRouter.get("/market-regime", async (_req, res) => {
 });
 
 // ─── GET /xauusd/mentor-signal — fast rule-based signal for Mentor Mode ───────
-// Returns BUY / SHORT / HOLD command based on technical indicators.
-// Uses last DB snapshot (fast, no new TradingView call needed).
+// Returns BUY / SHORT / HOLD command based on LIVE technical indicators.
+// Primary source: in-memory cache refreshed every 30s from TradingView Scanner.
+// Fallback: last DB snapshot (if cache not yet ready or TV unreachable).
 // Query param: sensitivity = "aggressive" | "normal" | "conservative"
 xauusdRouter.get("/mentor-signal", async (req, res) => {
   try {
@@ -106,31 +108,79 @@ xauusdRouter.get("/mentor-signal", async (req, res) => {
       ? req.query.sensitivity
       : "normal") as "aggressive" | "normal" | "conservative";
 
-    // Use last saved snapshot from DB — already computed, instant
-    const snapRows = await db
-      .select()
-      .from(xauusdSnapshotsTable)
-      .orderBy(desc(xauusdSnapshotsTable.snapshotAt))
-      .limit(1);
-
     const livePrice = getLatestLivePrice();
 
-    if (!snapRows.length) {
-      return res.json({
-        command: "HOLD",
-        reasons: ["Belum ada data snapshot — tunggu siklus pertama selesai"],
-        minTP: null,
-        confidence: 0,
-        price: livePrice?.price ?? null,
-        bullishScore: 0,
-        bearishScore: 0,
-        snapshotAge: null,
-      });
+    // ── Primary: live indicator cache (30s fresh) ─────────────────────────────
+    // Use cache only when populated AND not stale (TV reachable within 90s).
+    const cached = getLatestMentorIndicators();
+    const useLiveCache = cached.indicators !== null && !cached.stale;
+    let snap: typeof cached.indicators | null = useLiveCache ? cached.indicators : null;
+    let dataSource: "live" | "snapshot" = "live";
+    let indicatorsAgeMs: number | null = useLiveCache ? cached.ageMs : null;
+
+    // ── Fallback: DB snapshot when cache empty or TradingView unreachable ─────
+    if (!snap) {
+      const snapRows = await db
+        .select()
+        .from(xauusdSnapshotsTable)
+        .orderBy(desc(xauusdSnapshotsTable.snapshotAt))
+        .limit(1);
+
+      if (!snapRows.length) {
+        return res.json({
+          command: "HOLD",
+          reasons: ["Indikator belum tersedia — tunggu sebentar"],
+          minTP: null,
+          minSL: null,
+          minTPDistance: null,
+          confidence: 0,
+          price: livePrice?.price ?? null,
+          bullishScore: 0,
+          bearishScore: 0,
+          snapshotAgeMs: null,
+          indicatorsAgeMs: null,
+          dataSource: "snapshot", // normalized — no "none" in API contract
+          sensitivity,
+        });
+      }
+
+      // Map DB snapshot row → XauusdIndicators shape using all available fields
+      const row = snapRows[0];
+      const bbW = row.bbUpper != null && row.bbLower != null && row.bbMiddle != null && row.bbMiddle !== 0
+        ? parseFloat(((row.bbUpper - row.bbLower) / row.bbMiddle * 100).toFixed(3))
+        : null;
+      snap = {
+        price:          row.price,
+        open:           row.price,   // DB snapshot doesn't store open/high/low separately
+        high:           row.price,
+        low:            row.price,
+        volume:         row.volume ?? 0,
+        rsi14:          row.rsi14,
+        ema9:           row.ema9,
+        ema21:          row.ema21,
+        ema50:          row.ema50,
+        ema200:         row.ema200,
+        macdLine:       row.macdLine,
+        macdSignal:     row.macdSignal,
+        macdHistogram:  row.macdHistogram,
+        bbUpper:        row.bbUpper,
+        bbMiddle:       row.bbMiddle,
+        bbLower:        row.bbLower,
+        bbWidth:        bbW,
+        atr14:          row.atr14,
+        trend:          (row.trend as "bullish" | "bearish" | "sideways") ?? "sideways",
+        rsiSignal:      (row.rsiSignal as "overbought" | "oversold" | "neutral") ?? "neutral",
+        macdSignalType: (row.macdSignalType as "bullish_cross" | "bearish_cross" | "neutral") ?? "neutral",
+        emaAlignment:   (row.emaAlignment as "bullish_stack" | "bearish_stack" | "mixed") ?? "mixed",
+        supportLevel:   row.supportLevel,
+        resistanceLevel:row.resistanceLevel,
+      };
+      dataSource = "snapshot";
+      indicatorsAgeMs = Date.now() - new Date(row.snapshotAt).getTime();
     }
 
-    const snap = snapRows[0];
+    // Use live price over indicator price when available (5s fresh vs 30s)
     const price = livePrice?.price ?? snap.price;
-    const snapshotAgeMs = Date.now() - new Date(snap.snapshotAt).getTime();
 
     // ── Scoring signals (max 8 checks) ────────────────────────────────────────
     let bullishScore = 0;
@@ -281,7 +331,9 @@ xauusdRouter.get("/mentor-signal", async (req, res) => {
       bullishScore: parseFloat(bullishScore.toFixed(1)),
       bearishScore: parseFloat(bearishScore.toFixed(1)),
       sensitivity,
-      snapshotAgeMs,
+      indicatorsAgeMs,   // ms since last TradingView fetch (30s cycle)
+      snapshotAgeMs: indicatorsAgeMs, // kept for frontend backward-compat
+      dataSource,        // "live" | "snapshot"
     });
   } catch (err) {
     console.error("[XAUUSD] /mentor-signal error:", err);
