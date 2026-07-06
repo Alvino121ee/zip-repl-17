@@ -1461,6 +1461,22 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── Perbaikan #3: filter Risk:Reward minimum untuk prediksi UTAMA ─────────
+    // Prediksi "main" yang RR-nya di bawah 1:1 (TP lebih dekat dari SL) butuh
+    // win-rate sangat tinggi hanya untuk balik modal. Untuk training tetap
+    // disimpan (untuk pembelajaran), tapi tidak dijadikan sinyal utama ke user.
+    const riskDistance = Math.abs(entryMid - stopLoss);
+    const rewardDistance = Math.abs(targetPrice - entryMid);
+    const riskReward = riskDistance > 0 ? rewardDistance / riskDistance : 0;
+    const MIN_RR_MAIN = 1.0;
+    if (predType === "main" && riskReward < MIN_RR_MAIN) {
+      console.log(
+        `[XAUUSD Brain] Prediksi UTAMA dilewati — RR ${riskReward.toFixed(2)} di bawah minimum ${MIN_RR_MAIN} ` +
+        `(entry=${entryMid.toFixed(2)}, TP=${targetPrice.toFixed(2)}, SL=${stopLoss.toFixed(2)})`
+      );
+      return;
+    }
+
     // Feature 9: Price Distribution P10/P50/P90 berdasarkan ATR + confidence
     const distribution = computePriceDistribution(
       indicators.price,
@@ -1530,7 +1546,11 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
 
 // ─── Prediction verifier ───────────────────────────────────────────────────────
 
-async function verifyOldPredictions(currentPrice: number): Promise<{ checked: number; wrong: number }> {
+async function verifyOldPredictions(
+  currentPrice: number,
+  currentHigh?: number | null,
+  currentLow?: number | null
+): Promise<{ checked: number; wrong: number }> {
   const now = new Date();
 
   // Ambil SEMUA prediksi pending — validasi lewat SL/TP, bukan waktu
@@ -1545,6 +1565,14 @@ async function verifyOldPredictions(currentPrice: number): Promise<{ checked: nu
   let wrongCount = 0;
   let checkedCount = 0;
 
+  // Perbaikan #2: gunakan high/low candle 1H terkini (bukan cuma harga close)
+  // untuk deteksi TP/SL. Sebelumnya sistem hanya mengecek harga snapshot saat
+  // siklus berjalan (tiap 5 menit) — kalau harga sempat menyentuh TP/SL lalu
+  // reversal sebelum siklus berikutnya, itu tidak akan pernah tercatat.
+  // Dengan high/low bar 1H kita menangkap pergerakan intra-jam yang terlewat.
+  const high = currentHigh ?? currentPrice;
+  const low = currentLow ?? currentPrice;
+
   for (const pred of pending) {
     const sl = pred.stopLoss;
     const tp = pred.targetPrice;
@@ -1555,22 +1583,25 @@ async function verifyOldPredictions(currentPrice: number): Promise<{ checked: nu
     let isCorrect: boolean | null = null;
     let resolveReason = "";
 
-    // ── Validasi berdasarkan SL/TP (price-level) ──────────────────────────────
+    // ── Validasi berdasarkan SL/TP (price-level, pakai range high/low) ────────
+    // Catatan: cek SL lebih dulu dari TP saat keduanya masuk range candle yang
+    // sama — worst-case assumption (konservatif) karena kita tidak tahu urutan
+    // sebenarnya harga menyentuh level mana dulu dalam candle tersebut.
     if (pred.direction === "up") {
-      if (tp != null && currentPrice >= tp) {
-        resolved = true; isCorrect = true;
-        resolveReason = `TP tercapai ($${currentPrice.toFixed(2)} ≥ $${tp.toFixed(2)})`;
-      } else if (sl != null && currentPrice <= sl) {
+      if (sl != null && low <= sl) {
         resolved = true; isCorrect = false;
-        resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≤ $${sl.toFixed(2)})`;
+        resolveReason = `SL kena (low $${low.toFixed(2)} ≤ $${sl.toFixed(2)})`;
+      } else if (tp != null && high >= tp) {
+        resolved = true; isCorrect = true;
+        resolveReason = `TP tercapai (high $${high.toFixed(2)} ≥ $${tp.toFixed(2)})`;
       }
     } else if (pred.direction === "down") {
-      if (tp != null && currentPrice <= tp) {
-        resolved = true; isCorrect = true;
-        resolveReason = `TP tercapai ($${currentPrice.toFixed(2)} ≤ $${tp.toFixed(2)})`;
-      } else if (sl != null && currentPrice >= sl) {
+      if (sl != null && high >= sl) {
         resolved = true; isCorrect = false;
-        resolveReason = `SL kena ($${currentPrice.toFixed(2)} ≥ $${sl.toFixed(2)})`;
+        resolveReason = `SL kena (high $${high.toFixed(2)} ≥ $${sl.toFixed(2)})`;
+      } else if (tp != null && low <= tp) {
+        resolved = true; isCorrect = true;
+        resolveReason = `TP tercapai (low $${low.toFixed(2)} ≤ $${tp.toFixed(2)})`;
       }
     } else {
       // Bug fix #1: sideways kini punya jalur BENAR — harga tetap dalam kisaran saat verifyAt
@@ -2513,7 +2544,7 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
     }
 
     // 6. Verify old predictions & self-revise
-    const verifyResult = await verifyOldPredictions(indicators.price);
+    const verifyResult = await verifyOldPredictions(indicators.price, indicators.high, indicators.low);
     predictionsChecked = verifyResult.checked;
     wrongPredictions = verifyResult.wrong;
 

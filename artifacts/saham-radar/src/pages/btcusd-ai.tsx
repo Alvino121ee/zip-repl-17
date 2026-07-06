@@ -580,9 +580,9 @@ function BrainTab({ entries, stats }: { entries: BrainEntry[]; stats: BrainStats
                 <span className="w-28 text-muted-foreground shrink-0 truncate">{f.indicator}</span>
                 <span className="w-24 truncate">{f.value.replace(/_/g, " ")}</span>
                 <div className="flex-1 bg-muted/30 rounded-full h-1.5">
-                  <div className={`h-1.5 rounded-full ${f.lift >= 0 ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${Math.min(100, Math.abs(f.lift) * 2)}%` }} />
+                  <div className={`h-1.5 rounded-full ${(f.lift ?? 0) >= 0 ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${Math.min(100, Math.abs(f.lift ?? 0) * 2)}%` }} />
                 </div>
-                <span className={`w-14 text-right font-medium ${f.lift >= 0 ? "text-emerald-400" : "text-red-400"}`}>{f.lift >= 0 ? "+" : ""}{f.lift.toFixed(1)}%</span>
+                <span className={`w-14 text-right font-medium ${(f.lift ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}>{(f.lift ?? 0) >= 0 ? "+" : ""}{(f.lift ?? 0).toFixed(1)}%</span>
                 <span className="w-10 text-right text-muted-foreground">{f.winRate}%</span>
               </div>
             ))}

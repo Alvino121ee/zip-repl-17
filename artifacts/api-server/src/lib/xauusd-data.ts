@@ -103,12 +103,22 @@ async function fetchLivePriceFromTradingView(): Promise<XauusdLivePrice> {
   const json = (await res.json()) as TvScannerResponse;
   if (!json.data?.length) throw new Error("TradingView Scanner: no data");
 
-  const [close, , , , changeAbs, changePct] = json.data[0].d;
+  const [close, , high, low, changeAbs, changePct] = json.data[0].d;
   if (close == null) throw new Error("TradingView Scanner: close is null");
 
-  const SPREAD = 0.30; // typical XAUUSD spread ~$0.30
-  const bid = parseFloat((close - SPREAD / 2).toFixed(2));
-  const ask = parseFloat((close + SPREAD / 2).toFixed(2));
+  // Perbaikan #5: spread dinamis mengikuti volatilitas candle harian saat ini
+  // (bukan angka $0.30 tetap). Saat market bergerak liar (rentang high-low
+  // lebar), spread broker riil biasanya melebar juga — jadi estimasi ini
+  // lebih realistis daripada nilai statis.
+  const MIN_SPREAD = 0.20;
+  const MAX_SPREAD = 0.80;
+  const dailyRange = high != null && low != null ? high - low : null;
+  // ~2% dari rentang harian sebagai proxy spread, dibatasi ke rentang wajar
+  const dynamicSpread = dailyRange != null
+    ? Math.min(MAX_SPREAD, Math.max(MIN_SPREAD, dailyRange * 0.02))
+    : 0.30;
+  const bid = parseFloat((close - dynamicSpread / 2).toFixed(2));
+  const ask = parseFloat((close + dynamicSpread / 2).toFixed(2));
 
   return {
     price: parseFloat(close.toFixed(2)),

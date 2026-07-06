@@ -309,6 +309,7 @@ xauusdRouter.get("/brain/stats", async (_req, res) => {
     .select({
       isCorrect: xauusdPredictionsTable.isCorrect,
       status: xauusdPredictionsTable.status,
+      predictionType: xauusdPredictionsTable.predictionType,
     })
     .from(xauusdPredictionsTable);
 
@@ -321,6 +322,24 @@ xauusdRouter.get("/brain/stats", async (_req, res) => {
       ? Math.round((correctPreds.length / verifiedPreds.length) * 100)
       : null;
 
+  // Perbaikan #1: akurasi dipecah per predictionType — "main" adalah prediksi
+  // yang benar-benar ditampilkan ke user, sedangkan "training" hanya untuk
+  // melatih AI setiap siklus (5 menit) dan jauh lebih noisy. Mencampur
+  // keduanya membuat angka akurasi keseluruhan menyesatkan.
+  const mainVerified = verifiedPreds.filter((p: { predictionType: string }) => p.predictionType === "main");
+  const mainCorrect = mainVerified.filter((p: { isCorrect: boolean | null }) => p.isCorrect === true);
+  const mainAccuracy =
+    mainVerified.length > 0
+      ? Math.round((mainCorrect.length / mainVerified.length) * 100)
+      : null;
+
+  const trainingVerified = verifiedPreds.filter((p: { predictionType: string }) => p.predictionType === "training");
+  const trainingCorrect = trainingVerified.filter((p: { isCorrect: boolean | null }) => p.isCorrect === true);
+  const trainingAccuracy =
+    trainingVerified.length > 0
+      ? Math.round((trainingCorrect.length / trainingVerified.length) * 100)
+      : null;
+
   return res.json({
     totalInsights: all.length,
     byCategory,
@@ -329,6 +348,13 @@ xauusdRouter.get("/brain/stats", async (_req, res) => {
     verifiedPredictions: verifiedPreds.length,
     correctPredictions: correctPreds.length,
     predictionAccuracy: accuracy,
+    // Statistik baru — lebih jujur karena dipisah per jenis prediksi
+    mainPredictionAccuracy: mainAccuracy,
+    mainPredictionsVerified: mainVerified.length,
+    mainPredictionsCorrect: mainCorrect.length,
+    trainingPredictionAccuracy: trainingAccuracy,
+    trainingPredictionsVerified: trainingVerified.length,
+    trainingPredictionsCorrect: trainingCorrect.length,
   });
 });
 
