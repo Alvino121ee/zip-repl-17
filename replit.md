@@ -35,13 +35,16 @@ lib/
 scripts/        — Utility scripts (seed, dll)
 ```
 
-## Setup Awal (sudah selesai)
+## Setup Awal
+
+Script `scripts/post-merge.sh` dijalankan otomatis setelah merge atau clone baru. Perintah ekuivalennya:
 
 ```bash
-pnpm install                      # install semua dependensi
-tsc --build                       # build lib/db dan shared packages
-pnpm --filter @workspace/db run push  # push schema ke database
+pnpm install --frozen-lockfile         # install semua dependensi
+pnpm --filter @workspace/db run push   # push schema ke database (PostgreSQL managed Replit)
 ```
+
+> **Catatan**: Proyek ini menggunakan **PostgreSQL managed Replit** via `DATABASE_URL`. Tidak perlu modul `postgresql-16` di `.replit` — database sudah tersedia otomatis di environment Replit.
 
 ## Environment Variables
 
