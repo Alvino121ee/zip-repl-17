@@ -53,6 +53,38 @@ import { sendTestWhatsappMessage } from "../lib/xauusd-whatsapp.js";
 
 export const xauusdRouter = Router();
 
+// ─── In-memory EA account store ───────────────────────────────────────────────
+interface EaPosition {
+  ticket: number;
+  type: "BUY" | "SELL";
+  volume: number;
+  symbol: string;
+  openPrice: number;
+  currentPrice: number;
+  tp: number;
+  sl: number;
+  pnl: number;
+  swap: number;
+  openTime: string;
+}
+interface EaAccountData {
+  balance: number;
+  equity: number;
+  freeMargin: number;
+  margin: number;
+  pnl: number;
+  positions: EaPosition[];
+  accountName: string;
+  accountNumber: number;
+  broker: string;
+  leverage: number;
+  currency: string;
+  updatedAt: string;
+}
+let eaAccountStore: EaAccountData | null = null;
+let eaAccountUpdatedAt = 0;
+const EA_ACCOUNT_STALE_MS = 10_000; // anggap stale setelah 10 detik tidak ada update
+
 // ─── GET /xauusd/live-price — realtime price ticker (polled every 1s) ────────
 xauusdRouter.get("/live-price", (_req, res) => {
   return res.json(getLatestLivePrice());
@@ -1188,4 +1220,47 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
     console.error("[XAUUSD] /ea-signal error:", err);
     return res.status(500).json({ error: String(err) });
   }
+});
+
+// ─── POST /xauusd/ea-account — EA push data akun MT5 ke server ───────────────
+// EA memanggil ini setiap kali poll sinyal (setiap 2 detik)
+xauusdRouter.post("/ea-account", async (req, res) => {
+  try {
+    const authHeader = (req.headers.authorization as string | undefined) ?? "";
+    const providedKey =
+      (req.query.key as string | undefined) ??
+      authHeader.replace(/^Bearer\s+/i, "");
+
+    if (!providedKey) return res.status(401).json({ error: "EA key required" });
+    const keyValid = await validateEaApiKey(providedKey);
+    if (!keyValid) return res.status(403).json({ error: "Invalid EA key" });
+
+    const body = req.body as Partial<EaAccountData>;
+    eaAccountStore = {
+      balance:       body.balance       ?? 0,
+      equity:        body.equity        ?? 0,
+      freeMargin:    body.freeMargin    ?? 0,
+      margin:        body.margin        ?? 0,
+      pnl:           body.pnl          ?? 0,
+      positions:     body.positions     ?? [],
+      accountName:   body.accountName   ?? "",
+      accountNumber: body.accountNumber ?? 0,
+      broker:        body.broker        ?? "",
+      leverage:      body.leverage      ?? 0,
+      currency:      body.currency      ?? "USD",
+      updatedAt:     new Date().toISOString(),
+    };
+    eaAccountUpdatedAt = Date.now();
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── GET /xauusd/ea-account — frontend fetch data akun MT5 ───────────────────
+xauusdRouter.get("/ea-account", async (_req, res) => {
+  if (!eaAccountStore || Date.now() - eaAccountUpdatedAt > EA_ACCOUNT_STALE_MS) {
+    return res.json({ connected: false, data: null });
+  }
+  return res.json({ connected: true, data: eaAccountStore });
 });

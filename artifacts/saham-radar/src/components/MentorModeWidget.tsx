@@ -16,7 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   TrendingUp, TrendingDown, Minus, GraduationCap,
   Power, PowerOff, ChevronDown, ChevronUp, History,
-  AlertCircle, X, GripVertical,
+  AlertCircle, X, GripVertical, Wifi, WifiOff, DollarSign,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -45,6 +45,37 @@ interface HistoryEntry {
   command: DisplayCommand;
   price: number;
   time: string;
+}
+
+interface EaPosition {
+  ticket: number;
+  type: "BUY" | "SELL";
+  volume: number;
+  symbol: string;
+  openPrice: number;
+  currentPrice: number;
+  tp: number;
+  sl: number;
+  pnl: number;
+}
+
+interface EaAccountData {
+  balance: number;
+  equity: number;
+  freeMargin: number;
+  pnl: number;
+  positions: EaPosition[];
+  accountName: string;
+  accountNumber: number;
+  broker: string;
+  leverage: number;
+  currency: string;
+  updatedAt: string;
+}
+
+interface EaAccountResponse {
+  connected: boolean;
+  data: EaAccountData | null;
 }
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
@@ -138,6 +169,20 @@ export function MentorModeWidget() {
     staleTime: 1500,
   });
 
+  // ── EA account data (setiap 2s, selalu aktif) ──────────────────────────────
+  const { data: eaAccount } = useQuery<EaAccountResponse>({
+    queryKey: ["/api/xauusd/ea-account"],
+    queryFn: async () => {
+      const res = await fetch("/api/xauusd/ea-account");
+      if (!res.ok) throw new Error("Gagal fetch EA account");
+      return res.json() as Promise<EaAccountResponse>;
+    },
+    refetchInterval: 2000,
+    staleTime: 1800,
+  });
+
+  const ea = eaAccount?.connected ? eaAccount.data : null;
+
   // ── Cooldown ticker ────────────────────────────────────────────────────────
   // Only counts down from lastActionableTime; goes to 0 and stays there.
   useEffect(() => {
@@ -207,6 +252,9 @@ export function MentorModeWidget() {
   const ageMs        = signal?.indicatorsAgeMs ?? signal?.snapshotAgeMs ?? null;
   const isLive       = signal?.dataSource === "live";
   const snapshotOld  = (ageMs ?? 0) > 10 * 60 * 1000;
+
+  const fmtCurrency = (n: number, cur = "USD") =>
+    `${n >= 0 ? "+" : ""}${n.toFixed(2)} ${cur}`;
 
   return (
     <div
@@ -393,6 +441,85 @@ export function MentorModeWidget() {
                   Gagal ambil sinyal — periksa koneksi server
                 </div>
               )}
+
+              {/* ── MT5 Account Panel ── */}
+              <div className="border-t border-border/30 pt-2">
+                {ea ? (
+                  <div className="space-y-1.5">
+                    {/* Header status */}
+                    <div className="flex items-center gap-1.5 text-[9px] text-emerald-400 font-semibold">
+                      <Wifi className="w-3 h-3" />
+                      MT5 Terhubung · {ea.accountName} #{ea.accountNumber}
+                    </div>
+
+                    {/* Balance & Equity */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div className="bg-zinc-800/50 rounded-lg px-2 py-1.5">
+                        <div className="text-[9px] text-zinc-500 mb-0.5">Balance</div>
+                        <div className="text-[11px] font-bold text-zinc-200 font-mono">
+                          {ea.balance.toFixed(2)} <span className="text-[9px] text-zinc-500">{ea.currency}</span>
+                        </div>
+                      </div>
+                      <div className="bg-zinc-800/50 rounded-lg px-2 py-1.5">
+                        <div className="text-[9px] text-zinc-500 mb-0.5">Equity</div>
+                        <div className="text-[11px] font-bold text-zinc-200 font-mono">
+                          {ea.equity.toFixed(2)} <span className="text-[9px] text-zinc-500">{ea.currency}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* PnL floating */}
+                    <div className={`rounded-lg px-2 py-1.5 border flex items-center gap-2 ${
+                      ea.pnl >= 0
+                        ? "bg-emerald-500/8 border-emerald-500/20"
+                        : "bg-red-500/8 border-red-500/20"
+                    }`}>
+                      <DollarSign className={`w-3 h-3 shrink-0 ${ea.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`} />
+                      <div className="flex-1">
+                        <div className="text-[9px] text-zinc-500">Floating PnL</div>
+                        <div className={`text-[11px] font-bold font-mono ${ea.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          {fmtCurrency(ea.pnl, ea.currency)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[9px] text-zinc-500">Posisi</div>
+                        <div className="text-[11px] font-bold text-zinc-300">{ea.positions.length} terbuka</div>
+                      </div>
+                    </div>
+
+                    {/* Open positions detail */}
+                    {ea.positions.length > 0 && (
+                      <div className="space-y-1">
+                        {ea.positions.slice(0, 3).map((p) => (
+                          <div key={p.ticket} className={`rounded-md px-2 py-1 flex items-center gap-2 text-[9px] border ${
+                            p.type === "BUY"
+                              ? "bg-emerald-500/5 border-emerald-500/15"
+                              : "bg-red-500/5 border-red-500/15"
+                          }`}>
+                            <span className={`font-bold shrink-0 ${p.type === "BUY" ? "text-emerald-400" : "text-red-400"}`}>
+                              {p.type}
+                            </span>
+                            <span className="text-zinc-400 flex-1 font-mono">{p.volume} lot @ {p.openPrice.toFixed(2)}</span>
+                            <span className={`font-mono font-bold ${p.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                              {p.pnl >= 0 ? "+" : ""}{p.pnl.toFixed(2)}
+                            </span>
+                          </div>
+                        ))}
+                        {ea.positions.length > 3 && (
+                          <div className="text-[9px] text-zinc-600 text-center">
+                            +{ea.positions.length - 3} posisi lainnya
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 text-[9px] text-zinc-600">
+                    <WifiOff className="w-3 h-3" />
+                    MT5 belum terhubung — pasang EA di MetaTrader
+                  </div>
+                )}
+              </div>
             </>
           )}
 
