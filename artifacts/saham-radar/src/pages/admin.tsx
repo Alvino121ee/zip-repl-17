@@ -12,7 +12,7 @@ import {
   Activity, Brain, Clock, Key, Phone, Zap, CheckCircle2,
   XCircle, RefreshCw, LogOut, ShieldCheck, Users, KeyRound,
   Target, Bell, Loader2, Eye, EyeOff, Flame, StopCircle,
-  BarChart2, TrendingUp, Power, Bitcoin,
+  BarChart2, TrendingUp, Power, Bitcoin, Mail, Trash2, Send,
 } from "lucide-react";
 import { getAdminToken, clearAdminToken, authFetch } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -405,7 +405,110 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
           </div>
         </CardContent>
       </Card>
+
+      {/* SMTP Settings */}
+      <SmtpSettingsCard />
     </div>
+  );
+}
+
+// ─── SMTP Settings Card ───────────────────────────────────────────────────────
+function SmtpSettingsCard() {
+  const { toast } = useToast();
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("587");
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [from, setFrom] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  // Load current SMTP settings on mount
+  useEffect(() => {
+    adminFetch("/api/admin/settings/smtp")
+      .then((r) => r.json())
+      .then((d: { ok: boolean; smtp?: { host: string; port: number; user: string; from: string; hasPass: boolean } }) => {
+        if (d.ok && d.smtp) {
+          setHost(d.smtp.host ?? "");
+          setPort(String(d.smtp.port ?? 587));
+          setUser(d.smtp.user ?? "");
+          setFrom(d.smtp.from ?? "");
+        }
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, []);
+
+  const saveMut = useMutation({
+    mutationFn: () => adminPost("/api/admin/settings/smtp", { host, port: parseInt(port) || 587, user, pass: pass || undefined, from }),
+    onSuccess: () => { toast({ title: "✅ Pengaturan SMTP Disimpan" }); setPass(""); },
+    onError: (e) => toast({ title: "Error SMTP", description: String(e), variant: "destructive" }),
+  });
+
+  const testMut = useMutation({
+    mutationFn: () => adminPost<{ ok: boolean; message?: string; error?: string }>("/api/admin/settings/smtp/test"),
+    onSuccess: (r: { ok: boolean; message?: string; error?: string }) => {
+      if (r.ok) toast({ title: "✅ " + (r.message ?? "Koneksi SMTP berhasil!") });
+      else toast({ title: "❌ Gagal", description: r.error, variant: "destructive" });
+    },
+    onError: (e) => toast({ title: "Koneksi gagal", description: String(e), variant: "destructive" }),
+  });
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Mail className="w-5 h-5 text-sky-400" />
+          Konfigurasi SMTP Email
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Digunakan untuk mengirim kode verifikasi ke member baru. Gunakan Gmail App Password atau SMTP email hosting Anda.
+        </p>
+        {!loaded ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin" /> Memuat...</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2 space-y-1">
+                <label className="text-xs text-muted-foreground">SMTP Host</label>
+                <Input placeholder="smtp.gmail.com" value={host} onChange={(e) => setHost(e.target.value)} className="text-sm" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Port</label>
+                <Input placeholder="587" value={port} onChange={(e) => setPort(e.target.value)} className="text-sm" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Username / Email Pengirim</label>
+              <Input placeholder="noreply@example.com" value={user} onChange={(e) => setUser(e.target.value)} className="text-sm" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Password / App Password</label>
+              <div className="relative">
+                <Input type={showPass ? "text" : "password"} placeholder="Isi untuk mengganti password" value={pass} onChange={(e) => setPass(e.target.value)} className="pr-10 text-sm" />
+                <button type="button" onClick={() => setShowPass((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground">
+                  {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Nama / Email From (tampil ke penerima)</label>
+              <Input placeholder="noreply@radargold.ai" value={from} onChange={(e) => setFrom(e.target.value)} className="text-sm" />
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending || !host.trim() || !user.trim()} className="bg-sky-600 hover:bg-sky-700 text-white">
+                {saveMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Simpan"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending || !host.trim()}>
+                {testMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Send className="w-3.5 h-3.5 mr-1" />Test Koneksi</>}
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -991,6 +1094,15 @@ export default function AdminPanel() {
             <ExtremeModePanel data={data} onRefetch={() => refetch()} />
           </div>
 
+          {/* Members */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <Users className="w-5 h-5 text-blue-400" />
+              <h2 className="text-lg font-semibold">Member Terdaftar</h2>
+            </div>
+            <MembersPanel />
+          </div>
+
           {/* Settings */}
           <div>
             <div className="flex items-center gap-2 mb-4">
@@ -1002,5 +1114,79 @@ export default function AdminPanel() {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Members Panel ────────────────────────────────────────────────────────────
+function MembersPanel() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+
+  const { data: membersData, isLoading } = useQuery({
+    queryKey: ["admin-members"],
+    queryFn: async () => {
+      const res = await adminFetch("/api/admin/members");
+      if (!res.ok) throw new Error("Gagal memuat daftar member");
+      return res.json() as Promise<{ ok: boolean; members: { id: number; email: string; emailVerified: boolean; createdAt: string }[] }>;
+    },
+    refetchInterval: 30_000,
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => adminFetch(`/api/admin/members/${id}`, { method: "DELETE" }).then(r => r.json()),
+    onSuccess: () => { toast({ title: "Member dihapus" }); void qc.invalidateQueries({ queryKey: ["admin-members"] }); },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  const members = membersData?.members ?? [];
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Users className="w-5 h-5 text-blue-400" />
+          Member ({members.length})
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="w-4 h-4 animate-spin" /> Memuat...
+          </div>
+        )}
+        {!isLoading && members.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-4">Belum ada member terdaftar</p>
+        )}
+        {members.length > 0 && (
+          <div className="space-y-2">
+            {members.map((m) => (
+              <div key={m.id} className="flex items-center justify-between gap-3 py-2 border-b border-border/30 last:border-0">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{m.email}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Daftar: {new Date(m.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${m.emailVerified ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400" : "bg-amber-500/10 border-amber-500/25 text-amber-400"}`}>
+                    {m.emailVerified ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                    {m.emailVerified ? "Verified" : "Belum verif"}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteMut.mutate(m.id)}
+                    disabled={deleteMut.isPending}
+                    className="p-1 text-muted-foreground/40 hover:text-red-400 transition-colors"
+                    title="Hapus member"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -15,7 +15,11 @@ import {
   clearAiApiKey,
   setAiApiBaseUrl,
   setAiModel,
+  getSmtpSettings,
+  setSmtpSettings,
 } from "../lib/xauusd-settings.js";
+import { getAllMembers, deleteMember } from "../lib/members-db.js";
+import { testSmtpConnection } from "../lib/email-smtp.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
 import {
   getBackupStats,
@@ -88,6 +92,62 @@ router.post("/member-password", requireAdmin, async (req, res) => {
     return res.json({ ok: true, cleared: false });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
+  }
+});
+
+// GET /admin/members — daftar semua member terdaftar (admin only)
+router.get("/members", requireAdmin, async (_req, res) => {
+  try {
+    const members = await getAllMembers();
+    return res.json({ ok: true, members });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// DELETE /admin/members/:id — hapus member (admin only)
+router.delete("/members/:id", requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id ?? "");
+  if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
+  try {
+    await deleteMember(id);
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// GET /admin/settings/smtp — baca konfigurasi SMTP (admin only, sensor password)
+router.get("/settings/smtp", requireAdmin, async (_req, res) => {
+  try {
+    const cfg = await getSmtpSettings();
+    return res.json({ ok: true, smtp: { host: cfg.host, port: cfg.port, user: cfg.user, from: cfg.from, hasPass: !!cfg.pass } });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// POST /admin/settings/smtp — simpan konfigurasi SMTP (admin only)
+router.post("/settings/smtp", requireAdmin, async (req, res) => {
+  const { host, port, user, pass, from } = req.body as {
+    host?: string; port?: number; user?: string; pass?: string; from?: string;
+  };
+  try {
+    await setSmtpSettings({ host, port, user, pass, from });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// POST /admin/settings/smtp/test — test koneksi SMTP (admin only)
+router.post("/settings/smtp/test", requireAdmin, async (_req, res) => {
+  try {
+    const cfg = await getSmtpSettings();
+    await testSmtpConnection(cfg);
+    return res.json({ ok: true, message: "Koneksi SMTP berhasil!" });
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: String(err) });
   }
 });
 

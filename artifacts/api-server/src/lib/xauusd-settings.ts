@@ -18,6 +18,11 @@ const KEY_BTCUSD_BRAIN_ENABLED = "btcusd_brain_enabled";
 const KEY_AI_API_KEY = "ai_api_key";
 const KEY_AI_API_BASE_URL = "ai_api_base_url";
 const KEY_AI_MODEL = "ai_model";
+const KEY_SMTP_HOST = "smtp_host";
+const KEY_SMTP_PORT = "smtp_port";
+const KEY_SMTP_USER = "smtp_user";
+const KEY_SMTP_PASS = "smtp_pass";
+const KEY_SMTP_FROM = "smtp_from";
 
 let cache: Map<string, string> | null = null;
 let cacheLoadedAt = 0;
@@ -278,4 +283,35 @@ export async function getSettingsSummary(): Promise<{
     },
     validTimeframes: VALID_TIMEFRAMES,
   };
+}
+
+// ─── SMTP settings ────────────────────────────────────────────────────────────
+
+import type { SmtpConfig } from "./email-smtp.js";
+
+export async function getSmtpSettings(): Promise<SmtpConfig> {
+  const [host, port, user, pass, from] = await Promise.all([
+    getValue(KEY_SMTP_HOST),
+    getValue(KEY_SMTP_PORT),
+    getValue(KEY_SMTP_USER),
+    getValue(KEY_SMTP_PASS),
+    getValue(KEY_SMTP_FROM),
+  ]);
+  return {
+    host: host?.trim() ?? process.env.SMTP_HOST ?? "",
+    port: parseInt(port ?? "") || parseInt(process.env.SMTP_PORT ?? "") || 587,
+    user: user?.trim() ?? process.env.SMTP_USER ?? "",
+    pass: pass?.trim() ?? process.env.SMTP_PASS ?? "",
+    from: from?.trim() ?? process.env.SMTP_FROM ?? "noreply@radargold",
+  };
+}
+
+export async function setSmtpSettings(cfg: Partial<SmtpConfig>): Promise<void> {
+  const ops: Promise<void>[] = [];
+  if (cfg.host !== undefined) ops.push(setValue(KEY_SMTP_HOST, cfg.host));
+  if (cfg.port !== undefined) ops.push(setValue(KEY_SMTP_PORT, String(cfg.port)));
+  if (cfg.user !== undefined) ops.push(setValue(KEY_SMTP_USER, cfg.user));
+  if (cfg.pass !== undefined) ops.push(setValue(KEY_SMTP_PASS, cfg.pass));
+  if (cfg.from !== undefined) ops.push(setValue(KEY_SMTP_FROM, cfg.from));
+  await Promise.all(ops);
 }

@@ -3,10 +3,10 @@
  */
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { Zap, Lock, Eye, EyeOff, Loader2, ShieldCheck, Users } from "lucide-react";
+import { Zap, Lock, Mail, Eye, EyeOff, Loader2, ShieldCheck, Users, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { setAdminToken, setMemberToken } from "@/lib/auth";
+import { setAdminToken, setMemberToken, setMemberEmail } from "@/lib/auth";
 
 type Role = "member" | "admin";
 
@@ -17,29 +17,42 @@ export default function LoginPage() {
   const redirect = params.get("redirect") ?? "";
 
   const [role, setRole] = useState<Role>(defaultRole);
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
+  const [useLegacy, setUseLegacy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const handleLogin = async () => {
     if (!password.trim()) return;
+    if (role === "member" && !useLegacy && !email.trim()) return setError("Email diperlukan");
     setLoading(true);
     setError("");
     try {
+      const body = role === "member" && !useLegacy
+        ? { role, email: email.trim(), password }
+        : { role, password };
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role, password }),
+        body: JSON.stringify(body),
       });
-      const data = (await res.json()) as { ok: boolean; token?: string; error?: string };
+      const data = (await res.json()) as { ok: boolean; token?: string; email?: string | null; error?: string; code?: string };
       if (!res.ok || !data.ok) {
+        if (data.code === "EMAIL_NOT_VERIFIED") {
+          navigate(`/verify-email?email=${encodeURIComponent(email.trim())}`);
+          return;
+        }
         setError(data.error ?? "Login gagal");
         return;
       }
-      if (role === "admin") setAdminToken(data.token!);
-      else setMemberToken(data.token!);
-
+      if (role === "admin") {
+        setAdminToken(data.token!);
+      } else {
+        setMemberToken(data.token!);
+        if (data.email) setMemberEmail(data.email);
+      }
       const target = redirect || (role === "admin" ? "/admin" : "/member");
       navigate(target);
     } catch {
@@ -70,7 +83,7 @@ export default function LoginPage() {
             {(["member", "admin"] as Role[]).map((r) => (
               <button
                 key={r}
-                onClick={() => { setRole(r); setError(""); setPassword(""); }}
+                onClick={() => { setRole(r); setError(""); setPassword(""); setEmail(""); setUseLegacy(false); }}
                 className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
                   role === r
                     ? "bg-primary/20 text-primary border border-primary/30 shadow-[0_0_10px_rgba(245,158,11,0.15)]"
@@ -90,17 +103,33 @@ export default function LoginPage() {
               : "Login untuk mengakses pengaturan dan panel admin"}
           </p>
 
+          {/* Email (member only, not legacy) */}
+          {role === "member" && !useLegacy && (
+            <div className="relative mb-3">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60" />
+              <Input
+                type="email"
+                placeholder="Email Anda"
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); setError(""); }}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                className="pl-10 bg-background/50 border-border/50 focus:border-primary/50"
+                autoFocus
+              />
+            </div>
+          )}
+
           {/* Password input */}
           <div className="relative mb-4">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60" />
             <Input
               type={showPwd ? "text" : "password"}
-              placeholder={role === "member" ? "Password member" : "Password admin"}
+              placeholder={role === "member" ? "Password" : "Password admin"}
               value={password}
               onChange={(e) => { setPassword(e.target.value); setError(""); }}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()}
               className="pl-10 pr-10 bg-background/50 border-border/50 focus:border-primary/50"
-              autoFocus
+              autoFocus={role === "admin"}
             />
             <button
               type="button"
@@ -121,11 +150,37 @@ export default function LoginPage() {
           {/* Submit */}
           <Button
             onClick={handleLogin}
-            disabled={loading || !password.trim()}
+            disabled={loading || !password.trim() || (role === "member" && !useLegacy && !email.trim())}
             className="w-full bg-primary hover:bg-primary/90 text-black font-semibold"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : `Masuk sebagai ${role === "member" ? "Member" : "Admin"}`}
           </Button>
+
+          {/* Register + legacy toggle (member only) */}
+          {role === "member" && (
+            <div className="mt-4 space-y-2">
+              <div className="text-center text-xs text-muted-foreground">
+                Belum punya akun?{" "}
+                <button
+                  type="button"
+                  onClick={() => navigate("/register")}
+                  className="text-primary hover:text-primary/80 font-medium inline-flex items-center gap-1"
+                >
+                  <UserPlus className="w-3 h-3" />
+                  Daftar sekarang
+                </button>
+              </div>
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => { setUseLegacy((v) => !v); setError(""); setEmail(""); }}
+                  className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                >
+                  {useLegacy ? "← Kembali ke login email" : "Akses lama (tanpa email)"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}

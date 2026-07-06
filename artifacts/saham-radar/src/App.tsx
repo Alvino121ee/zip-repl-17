@@ -9,6 +9,8 @@ import XauusdAi from "@/pages/xauusd-ai";
 import BtcusdAi from "@/pages/btcusd-ai";
 import AdminPanel from "@/pages/admin";
 import LoginPage from "@/pages/login";
+import RegisterPage from "@/pages/register";
+import VerifyEmailPage from "@/pages/verify-email";
 import MemberPage from "@/pages/member";
 import HomePage from "@/pages/home";
 import { getAdminToken } from "@/lib/auth";
@@ -41,6 +43,8 @@ function Router() {
       {/* Halaman publik & tanpa sidebar */}
       <Route path="/" component={HomePage} />
       <Route path="/login" component={LoginPage} />
+      <Route path="/register" component={RegisterPage} />
+      <Route path="/verify-email" component={VerifyEmailPage} />
       <Route path="/member" component={MemberPage} />
 
       {/* Halaman admin dengan layout sidebar — wajib login admin */}

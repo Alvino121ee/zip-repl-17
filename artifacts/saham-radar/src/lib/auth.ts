@@ -5,6 +5,7 @@
 
 const ADMIN_TOKEN_KEY = "gr_admin_token";
 const MEMBER_TOKEN_KEY = "gr_member_token";
+const MEMBER_EMAIL_KEY = "gr_member_email";
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
 export const getAdminToken = (): string | null =>
@@ -26,6 +27,15 @@ export const setMemberToken = (token: string): void =>
 export const clearMemberToken = (): void =>
   sessionStorage.removeItem(MEMBER_TOKEN_KEY);
 
+export const getMemberEmail = (): string | null =>
+  typeof window !== "undefined" ? sessionStorage.getItem(MEMBER_EMAIL_KEY) : null;
+
+export const setMemberEmail = (email: string): void =>
+  sessionStorage.setItem(MEMBER_EMAIL_KEY, email);
+
+export const clearMemberEmail = (): void =>
+  sessionStorage.removeItem(MEMBER_EMAIL_KEY);
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 /** Token terbaik yang tersedia: admin lebih prioritas dari member */
 export const getAuthToken = (): string | null =>
@@ -36,7 +46,7 @@ export const isMember = (): boolean => !!(getAdminToken() ?? getMemberToken());
 
 export const logout = (role: "admin" | "member" | "all" = "all"): void => {
   if (role === "admin" || role === "all") clearAdminToken();
-  if (role === "member" || role === "all") clearMemberToken();
+  if (role === "member" || role === "all") { clearMemberToken(); clearMemberEmail(); }
 };
 
 /** Kirim request dengan Bearer token auth */

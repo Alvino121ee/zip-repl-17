@@ -10,3 +10,4 @@
 - [TV Scanner pivot fields limited to Monthly](tv-pivot-fields.md) — only `Pivot.M.Classic.S1/R1` returns data on TradingView Scanner for crypto; Weekly/Daily pivot fields return null — use ATR-based S/R instead for short-timeframe predictions.
 - [XAUUSD prediction quality fixes](xauusd-prediction-quality-fixes.md) — accuracy stats split main/training, TP/SL verified via interval-scoped high/low (no look-ahead), min RR 1:1 for main predictions, dynamic spread from daily range.
 - [Sideways removed from XAUUSD brain](sideways-removal.md) — direction is now strictly "up"|"down" everywhere; old H1/sideways rows remain in DB as legacy (no impact on new predictions).
+- [Member Registration System](member-registration-system.md) — email+password signup, SMTP OTP, session tokens; backward compat via legacy toggle; rate limits on all auth endpoints.

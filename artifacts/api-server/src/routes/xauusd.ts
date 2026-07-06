@@ -461,11 +461,18 @@ async function requireMember(req: import("express").Request, res: import("expres
   const secret = process.env.SESSION_SECRET;
   if (secret && token === secret) return next();
 
-  // Cek member token
+  // Cek member_password lama (backward compat)
   try {
     const memberPwd = await getMemberPassword();
     if (memberPwd && token === memberPwd) return next();
-  } catch { /* biarkan jatuh ke 401 */ }
+  } catch { /* lanjut */ }
+
+  // Cek session token member baru (email+password)
+  try {
+    const { findMemberBySessionToken } = await import("../lib/members-db.js");
+    const member = await findMemberBySessionToken(token);
+    if (member?.emailVerified) return next();
+  } catch { /* lanjut */ }
 
   return res.status(401).json({ error: "Akses member diperlukan — silakan login" });
 }

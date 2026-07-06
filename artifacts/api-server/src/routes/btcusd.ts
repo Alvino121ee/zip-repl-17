@@ -47,6 +47,12 @@ async function requireMember(req: Req, res: Res, next: Next) {
     const pwd = await getMemberPassword();
     if (pwd && token === pwd) return next();
   } catch { /**/ }
+  // Cek session token member baru
+  try {
+    const { findMemberBySessionToken } = await import("../lib/members-db.js");
+    const member = await findMemberBySessionToken(token);
+    if (member?.emailVerified) return next();
+  } catch { /**/ }
   return res.status(401).json({ error: "Akses member diperlukan" });
 }
 
