@@ -24,82 +24,72 @@ import {
 // agar sesuai dengan harga yang dilihat trader di platform broker mereka.
 const TV_SYMBOL = "OANDA:XAUUSD";
 
-function TradingViewTicker() {
+function useTradingViewWidget(
+  src: string,
+  config: object,
+  onError?: () => void
+) {
   const containerRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     el.innerHTML = `<div class="tradingview-widget-container__widget"></div>`;
     const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js";
+    script.src = src;
     script.type = "text/javascript";
     script.async = true;
-    script.innerHTML = JSON.stringify({
-      symbol: TV_SYMBOL,
-      width: "100%",
-      colorTheme: "dark",
-      isTransparent: true,
-      locale: "id",
-    });
+    script.innerHTML = JSON.stringify(config);
+    if (onError) {
+      script.onerror = () => {
+        console.warn("[TradingView] Widget gagal dimuat:", src);
+        onError();
+      };
+    }
     el.appendChild(script);
-    return () => {
-      el.innerHTML = "";
-    };
+    return () => { el.innerHTML = ""; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  return containerRef;
+}
 
+function TradingViewTicker() {
+  const [failed, setFailed] = useState(false);
+  const containerRef = useTradingViewWidget(
+    "https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js",
+    { symbol: TV_SYMBOL, width: "100%", colorTheme: "dark", isTransparent: true, locale: "id" },
+    () => setFailed(true)
+  );
+  if (failed) return null;
   return <div className="tradingview-widget-container" ref={containerRef} />;
 }
 
 function TradingViewSymbolInfo() {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.innerHTML = `<div class="tradingview-widget-container__widget"></div>`;
-    const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-symbol-info.js";
-    script.type = "text/javascript";
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      symbol: TV_SYMBOL,
-      width: "100%",
-      locale: "id",
-      colorTheme: "dark",
-      isTransparent: true,
-    });
-    el.appendChild(script);
-    return () => {
-      el.innerHTML = "";
-    };
-  }, []);
-
+  const [failed, setFailed] = useState(false);
+  const containerRef = useTradingViewWidget(
+    "https://s3.tradingview.com/external-embedding/embed-widget-symbol-info.js",
+    { symbol: TV_SYMBOL, width: "100%", locale: "id", colorTheme: "dark", isTransparent: true },
+    () => setFailed(true)
+  );
+  if (failed) return null;
   return <div className="tradingview-widget-container" ref={containerRef} style={{ minHeight: 56 }} />;
 }
 
 function TradingViewEconomicCalendar() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.innerHTML = `<div class="tradingview-widget-container__widget"></div>`;
-    const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-events.js";
-    script.type = "text/javascript";
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      colorTheme: "dark",
-      isTransparent: true,
-      width: "100%",
-      height: "600",
-      locale: "id",
-      importanceFilter: "-1,0,1",
-      currencyFilter: "USD,XAU,EUR,GBP,JPY",
-    });
-    el.appendChild(script);
-    return () => { el.innerHTML = ""; };
-  }, []);
+  const [failed, setFailed] = useState(false);
+  const containerRef = useTradingViewWidget(
+    "https://s3.tradingview.com/external-embedding/embed-widget-events.js",
+    {
+      colorTheme: "dark", isTransparent: true, width: "100%",
+      height: "600", locale: "id",
+      importanceFilter: "-1,0,1", currencyFilter: "USD,XAU,EUR,GBP,JPY",
+    },
+    () => setFailed(true)
+  );
+  if (failed) return (
+    <div className="rounded-lg border border-border/30 bg-card/30 p-6 text-center text-sm text-muted-foreground">
+      Widget kalender ekonomi tidak dapat dimuat. Cek koneksi internet.
+    </div>
+  );
   return <div className="tradingview-widget-container" ref={containerRef} style={{ height: 600 }} />;
 }
 

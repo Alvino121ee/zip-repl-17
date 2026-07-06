@@ -1303,8 +1303,9 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
   } = ruleBased;
   let aiPowered = false;
 
+  const VALID_DIRS_SCHED = new Set(["up", "down", "sideways"]);
   try {
-    const raw = await queryDeepSeek(systemPrompt, userMsg, 400);
+    const raw = await queryDeepSeek(systemPrompt, userMsg, 1000);
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]) as {
@@ -1318,16 +1319,21 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
         confidence: number;
         reasoning: string;
       };
-      // Only trust the AI response if it actually supplied numeric entry/SL
-      // levels — otherwise fall back to the rule-based analysis so we never
-      // save arbitrary/missing numbers.
+      // Only trust the AI response if it actually supplied valid direction +
+      // numeric entry/SL levels — otherwise fall back to the rule-based
+      // analysis so we never save arbitrary/missing numbers.
+      const dirValid = typeof parsed.direction === "string" &&
+        VALID_DIRS_SCHED.has(parsed.direction.toLowerCase());
       if (
+        dirValid &&
         typeof parsed.entryLow === "number" &&
         typeof parsed.entryHigh === "number" &&
         typeof parsed.stopLoss === "number" &&
-        typeof parsed.targetPrice === "number"
+        typeof parsed.targetPrice === "number" &&
+        parsed.targetPrice > 0 &&
+        parsed.stopLoss > 0
       ) {
-        pred = parsed;
+        pred = { ...parsed, direction: parsed.direction.toLowerCase() };
         aiPowered = true;
       }
     }
@@ -2710,7 +2716,7 @@ Mode: ${modeLabel}. Buat prediksi XAUUSD. Jawab JSON saja.`;
   const VALID_DIRS = new Set(["up", "down", "sideways"]);
 
   try {
-    const raw = await queryDeepSeek(systemPrompt, userMsg, 400);
+    const raw = await queryDeepSeek(systemPrompt, userMsg, 1000);
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]) as {
