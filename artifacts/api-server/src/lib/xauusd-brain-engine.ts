@@ -1253,7 +1253,7 @@ ATURAN TP (target dari area yang secara teknis wajar jadi tempat reaksi):
 ATURAN CONFIDENCE:
 - >0.75: ≥4 faktor align searah
 - 0.55–0.75: 3 faktor align
-- <0.55: sinyal mixed → tidak perlu prediksi
+- 0.45–0.55: sinyal mixed, tetap buat prediksi tapi confidence rendah
 - Jika win rate segmen <50%, TURUNKAN confidence 10–15%
 - Pertimbangkan memori AI: jika pola ini sebelumnya terbukti salah, sesuaikan
 
@@ -1389,8 +1389,8 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     const agreementBonus = agreementCount === 4 ? 0.08 : agreementCount === 3 ? 0.04 : agreementCount === 1 ? -0.06 : 0;
     const confidence = Math.min(1, Math.max(0, baseAiConf + agreementBonus));
 
-    // ── Confidence Gate: abaikan prediksi dengan sinyal terlalu lemah ────────
-    const CONFIDENCE_GATE = 0.55;
+    // ── Confidence Gate: abaikan prediksi dengan sinyal sangat lemah ─────────
+    const CONFIDENCE_GATE = 0.45;
     if (confidence < CONFIDENCE_GATE) {
       console.log(`[XAUUSD Brain] Prediksi tidak disimpan — confidence ${(confidence * 100).toFixed(0)}% di bawah threshold ${(CONFIDENCE_GATE * 100).toFixed(0)}%`);
       return;
@@ -2457,34 +2457,52 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
     //    MAIN (utama) — hanya dibuat saat arah berubah dari main pending saat ini, untuk ditampilkan ke user
     await makePrediction(indicators, "training");
 
-    // Cek apakah perlu buat prediksi UTAMA baru (saat arah berubah / belum ada main pending)
+    // Cek apakah perlu buat prediksi UTAMA baru:
+    // (1) tidak ada main pending, (2) arah berubah, (3) main pending sudah > 4 jam (stale)
     try {
-      const lastMainPending = await db
-        .select({ id: xauusdPredictionsTable.id, direction: xauusdPredictionsTable.direction })
-        .from(xauusdPredictionsTable)
-        .where(
-          and(
-            eq(xauusdPredictionsTable.predictionType, "main"),
-            eq(xauusdPredictionsTable.status, "pending")
+      const [lastMainPendingRows, latestTrainingRows] = await Promise.all([
+        db
+          .select({
+            id: xauusdPredictionsTable.id,
+            direction: xauusdPredictionsTable.direction,
+            predictedAt: xauusdPredictionsTable.predictedAt,
+          })
+          .from(xauusdPredictionsTable)
+          .where(
+            and(
+              eq(xauusdPredictionsTable.predictionType, "main"),
+              eq(xauusdPredictionsTable.status, "pending")
+            )
           )
-        )
-        .orderBy(desc(xauusdPredictionsTable.predictedAt))
-        .limit(1);
+          .orderBy(desc(xauusdPredictionsTable.predictedAt))
+          .limit(1),
+        db
+          .select({ direction: xauusdPredictionsTable.direction })
+          .from(xauusdPredictionsTable)
+          .where(eq(xauusdPredictionsTable.predictionType, "training"))
+          .orderBy(desc(xauusdPredictionsTable.predictedAt))
+          .limit(1),
+      ]);
 
-      // Ambil arah dari training prediction yang baru saja dibuat (ambil latest)
-      const latestTraining = await db
-        .select({ direction: xauusdPredictionsTable.direction })
-        .from(xauusdPredictionsTable)
-        .where(eq(xauusdPredictionsTable.predictionType, "training"))
-        .orderBy(desc(xauusdPredictionsTable.predictedAt))
-        .limit(1);
+      const latestDir = latestTrainingRows[0]?.direction;
+      const mainPending = lastMainPendingRows[0];
+      const mainPendingDir = mainPending?.direction;
 
-      const latestDir = latestTraining[0]?.direction;
-      const mainPendingDir = lastMainPending[0]?.direction;
+      // Prediksi UTAMA dianggap stale jika > 4 jam tanpa pembaruan
+      const MAIN_STALE_MS = 4 * 60 * 60 * 1000;
+      const mainAge = mainPending?.predictedAt
+        ? Date.now() - new Date(mainPending.predictedAt).getTime()
+        : Infinity;
+      const isStale = mainAge > MAIN_STALE_MS;
 
-      // Buat prediksi UTAMA jika: (1) tidak ada main pending, atau (2) arah berubah
-      if (latestDir && (!mainPendingDir || latestDir !== mainPendingDir)) {
-        const changeReason = !mainPendingDir ? "belum ada prediksi utama" : `arah berubah ${mainPendingDir} → ${latestDir}`;
+      const needsNew = !mainPendingDir || latestDir !== mainPendingDir || isStale;
+
+      if (latestDir && needsNew) {
+        const changeReason = !mainPendingDir
+          ? "belum ada prediksi utama"
+          : isStale && latestDir === mainPendingDir
+          ? `prediksi lama stale (${Math.round(mainAge / 3_600_000)}j), refresh arah ${latestDir}`
+          : `arah berubah ${mainPendingDir} → ${latestDir}`;
         console.log(`[XAUUSD Brain] Prediksi UTAMA dibuat — ${changeReason}`);
         await makePrediction(indicators, "main");
       }
