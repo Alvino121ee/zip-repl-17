@@ -868,7 +868,7 @@ export function detectMarketRegime(
 
 function computePriceDistribution(
   price: number,
-  direction: "up" | "down" | "sideways",
+  direction: "up" | "down",
   confidence: number,
   atr: number
 ): { p10: number; p50: number; p90: number } {
@@ -881,17 +881,11 @@ function computePriceDistribution(
       p50: parseFloat((price + a * 1.2 * mult).toFixed(2)),   // median target
       p90: parseFloat((price + a * 2.5 * mult).toFixed(2)),   // optimistic
     };
-  } else if (direction === "down") {
+  } else {
     return {
       p10: parseFloat((price - a * 2.5 * mult).toFixed(2)),   // optimistic downside
       p50: parseFloat((price - a * 1.2 * mult).toFixed(2)),   // median target
       p90: parseFloat((price - a * 0.2).toFixed(2)),          // minimal move
-    };
-  } else {
-    return {
-      p10: parseFloat((price - a * 0.6).toFixed(2)),
-      p50: parseFloat(price.toFixed(2)),
-      p90: parseFloat((price + a * 0.6).toFixed(2)),
     };
   }
 }
@@ -926,7 +920,7 @@ function computeSentimentVote(
   news: Array<{ sentiment: string | null; title?: string | null; publishedAt?: Date | string | null }>
 ): { direction: "up" | "down"; confidence: number; label: string } {
   if (news.length === 0)
-    return { direction: "up", confidence: 0.42, label: "sentiment" }; // abstain → default netral
+    return { direction: "up", confidence: 0.3, label: "sentiment" }; // tidak ada data berita → low-confidence abstain
 
   const HIGH_IMPACT = [
     "fed", "fomc", "nfp", "cpi", "pce", "war", "sanction", "crisis",
@@ -1200,21 +1194,21 @@ async function makePrediction(
     const correct = preds.filter((p) => p.isCorrect === true).length;
     const total = preds.length;
     const winRate = ((correct / total) * 100).toFixed(1);
-    const byDir = { up: { c: 0, t: 0 }, down: { c: 0, t: 0 }, sideways: { c: 0, t: 0 } };
+    const byDir = { up: { c: 0, t: 0 }, down: { c: 0, t: 0 } };
     for (const p of preds) {
-      const d = p.direction as "up" | "down" | "sideways";
-      if (byDir[d]) {
+      const d = p.direction as "up" | "down";
+      if (d === "up" || d === "down") {
         byDir[d].t++;
         if (p.isCorrect) byDir[d].c++;
       }
     }
-    winRateContext = `\n\n=== WIN RATE AI (${total} prediksi terakhir) ===\nOverall: ${winRate}% akurat (${correct}/${total})\nBUY: ${byDir.up.t > 0 ? ((byDir.up.c / byDir.up.t) * 100).toFixed(0) : "n/a"}% (${byDir.up.c}/${byDir.up.t}) | SELL: ${byDir.down.t > 0 ? ((byDir.down.c / byDir.down.t) * 100).toFixed(0) : "n/a"}% (${byDir.down.c}/${byDir.down.t}) | SIDEWAYS: ${byDir.sideways.t > 0 ? ((byDir.sideways.c / byDir.sideways.t) * 100).toFixed(0) : "n/a"}% (${byDir.sideways.c}/${byDir.sideways.t})\nGunakan data ini untuk kalibrasi confidence — jika win rate direction tertentu rendah, turunkan confidence.`;
+    winRateContext = `\n\n=== WIN RATE AI (${total} prediksi terakhir) ===\nOverall: ${winRate}% akurat (${correct}/${total})\nBUY: ${byDir.up.t > 0 ? ((byDir.up.c / byDir.up.t) * 100).toFixed(0) : "n/a"}% (${byDir.up.c}/${byDir.up.t}) | SELL: ${byDir.down.t > 0 ? ((byDir.down.c / byDir.down.t) * 100).toFixed(0) : "n/a"}% (${byDir.down.c}/${byDir.down.t})\nGunakan data ini untuk kalibrasi confidence — jika win rate direction tertentu rendah, turunkan confidence.`;
 
     // ── Deteksi streak kalah — jika 3+ dari 5 terakhir salah, tambah peringatan ──
     const recentPreds = preds.slice(0, 5);
     const recentWrongCount = recentPreds.filter(p => p.isCorrect === false).length;
     if (recentWrongCount >= 3) {
-      winRateContext += `\n\n⚠️ STREAK KALAH TERDETEKSI: ${recentWrongCount}/${recentPreds.length} prediksi terakhir SALAH. Kondisi pasar sedang sulit. WAJIB: (1) turunkan confidence 15-20%, (2) preferensikan SIDEWAYS jika sinyal tidak sangat kuat, (3) perlebar entry zone.`;
+      winRateContext += `\n\n⚠️ STREAK KALAH TERDETEKSI: ${recentWrongCount}/${recentPreds.length} prediksi terakhir SALAH. Kondisi pasar sedang sulit. WAJIB: (1) turunkan confidence 15-20%, (2) perlebar entry zone, (3) pastikan RR minimal 1.2.`;
     }
   }
 
@@ -1380,7 +1374,8 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     const verifyAt = skipXauusdWeekend(rawVerifyAt);
 
     const rawAiDir = (pred.direction ?? ruleBased.direction) as string;
-    const aiDirection: "up" | "down" = rawAiDir === "down" ? "down" : "up";
+    // Jika AI merespons selain up/down, gunakan sinyal teknikal sebagai tiebreaker
+    const aiDirection: "up" | "down" = rawAiDir === "down" ? "down" : rawAiDir === "up" ? "up" : ruleBased.direction;
     const entryMid = indicators.price;
 
     const reasoning = aiPowered
@@ -1404,7 +1399,7 @@ Buat prediksi arah berikutnya. Jawab JSON saja, tanpa teks lain.`;
     const upVotes = coreVotes.filter(d => d === "up").length;
     const downVotes = coreVotes.filter(d => d === "down").length;
     const majorityDir: "up" | "down" | null = upVotes >= 2 ? "up" : downVotes >= 2 ? "down" : null;
-    // Gunakan majority jika jelas (≥2/3); jika tie → AI jadi tiebreaker, lalu teknikal
+    // Gunakan majority jika jelas (≥2/3); jika tie → AI jadi tiebreaker, lalu teknikal sebagai last resort
     const finalDirection: "up" | "down" = majorityDir ?? aiDirection;
 
     const allDirs = [techVote.direction, macroVote.direction, sentimentVote.direction, aiVote.direction];
@@ -2705,7 +2700,7 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
 // ─── On-Demand Prediction (3 mode: normal | technical | fundamental) ──────────
 
 export interface OnDemandPredictionResult {
-  direction: "up" | "down" | "sideways";
+  direction: "up" | "down";
   targetPrice: number;
   tp2: number | null;
   tp3: number | null;
@@ -2867,7 +2862,7 @@ Mode: ${modeLabel}. Buat prediksi XAUUSD. Jawab JSON saja.`;
 
   let pred = { ...ruleBased, tp2: ruleBased.tp2, tp3: ruleBased.tp3, entryLow: ruleBased.entryLow, entryHigh: ruleBased.entryHigh };
   let aiPowered = false;
-  const VALID_DIRS = new Set(["up", "down", "sideways"]);
+  const VALID_DIRS = new Set(["up", "down"]);
 
   try {
     const raw = await queryDeepSeek(systemPrompt, userMsg, 1000);
@@ -2877,21 +2872,22 @@ Mode: ${modeLabel}. Buat prediksi XAUUSD. Jawab JSON saja.`;
         direction: string; targetPrice: number; tp2?: number; tp3?: number;
         entryLow?: number; entryHigh?: number; stopLoss?: number; confidence: number; reasoning: string;
       };
-      const dirValid = typeof parsed.direction === "string" && VALID_DIRS.has(parsed.direction.toLowerCase());
+      const parsedDir = parsed.direction?.toLowerCase();
+      const dirValid = parsedDir === "up" || parsedDir === "down";
       if (
         dirValid &&
         typeof parsed.entryLow === "number" && typeof parsed.entryHigh === "number" &&
         typeof parsed.stopLoss === "number" && typeof parsed.targetPrice === "number" &&
         parsed.targetPrice > 0 && parsed.stopLoss > 0
       ) {
-        pred = { ...ruleBased, ...parsed, direction: parsed.direction.toLowerCase() as "up" | "down" | "sideways" };
+        pred = { ...ruleBased, ...parsed, direction: parsedDir as "up" | "down" };
         aiPowered = true;
       }
     }
   } catch { /* fallback ke rule-based */ }
 
   return {
-    direction: (pred.direction ?? "sideways") as "up" | "down" | "sideways",
+    direction: pred.direction,
     targetPrice: pred.targetPrice,
     tp2: pred.tp2 ?? null,
     tp3: pred.tp3 ?? null,
