@@ -15,6 +15,9 @@ const KEY_WHATSAPP_ENABLED = "whatsapp_enabled";
 const KEY_MEMBER_PASSWORD = "member_password";
 const KEY_XAUUSD_BRAIN_ENABLED = "xauusd_brain_enabled";
 const KEY_BTCUSD_BRAIN_ENABLED = "btcusd_brain_enabled";
+const KEY_AI_API_KEY = "ai_api_key";
+const KEY_AI_API_BASE_URL = "ai_api_base_url";
+const KEY_AI_MODEL = "ai_model";
 
 let cache: Map<string, string> | null = null;
 let cacheLoadedAt = 0;
@@ -142,25 +145,137 @@ export async function setBtcusdBrainEnabled(enabled: boolean): Promise<void> {
   await setValue(KEY_BTCUSD_BRAIN_ENABLED, enabled ? "true" : "false");
 }
 
+// ─── AI API Key (OpenAI / OpenAI-compatible) ──────────────────────────────────
+
+/** Update atau hapus satu baris di file .env workspace root — atomic (temp + rename) */
+async function writeEnvFileLine(envKey: string, value: string): Promise<void> {
+  const { readFile, writeFile, rename } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  const envPath = "/home/runner/workspace/.env";
+  const tmpPath = envPath + ".tmp";
+
+  const content = existsSync(envPath) ? await readFile(envPath, "utf-8") : "";
+  const lines = content.split("\n");
+  const prefix = envKey + "=";
+  const idx = lines.findIndex((l) => l.startsWith(prefix));
+
+  if (value) {
+    const needsQuote = /[ #$"'`\\]/.test(value);
+    const escaped = needsQuote ? '"' + value.replace(/"/g, '\\"') + '"' : value;
+    if (idx >= 0) {
+      lines[idx] = envKey + "=" + escaped;
+    } else {
+      lines.push(envKey + "=" + escaped);
+    }
+  } else {
+    if (idx >= 0) lines.splice(idx, 1);
+  }
+
+  const result = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  await writeFile(tmpPath, result ? result + "\n" : "", "utf-8");
+  await rename(tmpPath, envPath);
+}
+
+export async function getAiApiKey(): Promise<string> {
+  const fromDb = await getValue(KEY_AI_API_KEY);
+  if (fromDb?.trim()) return fromDb.trim();
+  return process.env.OPENAI_API_KEY ?? process.env.AI_API_KEY ?? "";
+}
+
+export async function setAiApiKey(key: string): Promise<void> {
+  const trimmed = key.trim();
+  await setValue(KEY_AI_API_KEY, trimmed);
+  process.env.AI_API_KEY = trimmed;
+  await writeEnvFileLine("AI_API_KEY", trimmed);
+}
+
+export async function clearAiApiKey(): Promise<void> {
+  await db.delete(xauusdSettingsTable).where(eq(xauusdSettingsTable.key, KEY_AI_API_KEY));
+  cache = null;
+  process.env.AI_API_KEY = "";
+  await writeEnvFileLine("AI_API_KEY", "");
+}
+
+export async function getAiApiBaseUrl(): Promise<string> {
+  const fromDb = await getValue(KEY_AI_API_BASE_URL);
+  if (fromDb?.trim()) return fromDb.trim();
+  return process.env.AI_API_BASE_URL ?? "";
+}
+
+export async function setAiApiBaseUrl(url: string): Promise<void> {
+  const trimmed = url.trim();
+  await setValue(KEY_AI_API_BASE_URL, trimmed);
+  process.env.AI_API_BASE_URL = trimmed;
+  await writeEnvFileLine("AI_API_BASE_URL", trimmed);
+}
+
+export async function getAiModel(): Promise<string> {
+  const fromDb = await getValue(KEY_AI_MODEL);
+  if (fromDb?.trim()) return fromDb.trim();
+  return process.env.AI_MODEL ?? "";
+}
+
+export async function setAiModel(model: string): Promise<void> {
+  const trimmed = model.trim();
+  await setValue(KEY_AI_MODEL, trimmed);
+  process.env.AI_MODEL = trimmed;
+  await writeEnvFileLine("AI_MODEL", trimmed);
+}
+
+/** Muat AI key dari DB ke process.env — dipanggil saat server startup */
+export async function loadAiEnvFromDb(): Promise<void> {
+  try {
+    const [key, baseUrl, model] = await Promise.all([
+      getValue(KEY_AI_API_KEY),
+      getValue(KEY_AI_API_BASE_URL),
+      getValue(KEY_AI_MODEL),
+    ]);
+    if (key?.trim()) process.env.AI_API_KEY = key.trim();
+    if (baseUrl?.trim()) process.env.AI_API_BASE_URL = baseUrl.trim();
+    if (model?.trim()) process.env.AI_MODEL = model.trim();
+  } catch (err) {
+    console.error("[xauusd-settings] loadAiEnvFromDb error:", err);
+  }
+}
+
 export async function getSettingsSummary(): Promise<{
   hasDeepseekKey: boolean;
   deepseekKeySource: "database" | "environment" | "none";
+  hasAiKey: boolean;
+  aiKeySource: "database" | "environment" | "none";
+  aiBaseUrl: string;
+  aiModel: string;
   predictionTimeframeMinutes: PredictionTimeframeMinutes;
   whatsapp: {
     number: string;
     enabled: boolean;
   };
+  validTimeframes: readonly number[];
 }> {
-  const fromDb = await getValue(KEY_DEEPSEEK);
-  const hasDbKey = !!fromDb && fromDb.trim().length > 0;
-  const hasEnvKey = !!process.env.DEEPSEEK_API_KEY;
+  const [fromDbDeepseek, fromDbAiKey, fromDbBaseUrl, fromDbModel] = await Promise.all([
+    getValue(KEY_DEEPSEEK),
+    getValue(KEY_AI_API_KEY),
+    getValue(KEY_AI_API_BASE_URL),
+    getValue(KEY_AI_MODEL),
+  ]);
+
+  const hasDbDeepseek = !!fromDbDeepseek?.trim();
+  const hasEnvDeepseek = !!process.env.DEEPSEEK_API_KEY;
+  const hasDbAiKey = !!fromDbAiKey?.trim();
+  const hasEnvAiKey = !!(process.env.OPENAI_API_KEY || process.env.AI_API_KEY);
+
   return {
-    hasDeepseekKey: hasDbKey || hasEnvKey,
-    deepseekKeySource: hasDbKey ? "database" : hasEnvKey ? "environment" : "none",
+    hasDeepseekKey: hasDbDeepseek || hasEnvDeepseek,
+    deepseekKeySource: hasDbDeepseek ? "database" : hasEnvDeepseek ? "environment" : "none",
+    hasAiKey: hasDbAiKey || hasEnvAiKey,
+    aiKeySource: hasDbAiKey ? "database" : hasEnvAiKey ? "environment" : "none",
+    aiBaseUrl: fromDbBaseUrl?.trim() || process.env.AI_API_BASE_URL || "",
+    aiModel: fromDbModel?.trim() || process.env.AI_MODEL || "",
     predictionTimeframeMinutes: await getPredictionTimeframeMinutes(),
     whatsapp: {
       number: await getWhatsappNumber(),
       enabled: await isWhatsappEnabled(),
     },
+    validTimeframes: VALID_TIMEFRAMES,
   };
 }

@@ -49,15 +49,26 @@ function fmtPct(n: number | null | undefined): string {
 }
 
 /**
- * Generate AI report menggunakan OpenAI/API dari environment.
+ * Generate AI report menggunakan OpenAI/API dari environment atau DB.
  * Jika AI API tidak tersedia, gunakan template berbasis data.
  */
 export async function generateAiReport(ctx: StockContext): Promise<AiReportContent> {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY;
+  // Cek DB dulu, lalu env var sebagai fallback
+  let apiKey: string;
+  let baseUrl: string;
+  let model: string;
+  try {
+    const { getAiApiKey, getAiApiBaseUrl, getAiModel } = await import("./xauusd-settings.js");
+    [apiKey, baseUrl, model] = await Promise.all([getAiApiKey(), getAiApiBaseUrl(), getAiModel()]);
+  } catch {
+    apiKey = process.env.OPENAI_API_KEY ?? process.env.AI_API_KEY ?? "";
+    baseUrl = process.env.AI_API_BASE_URL ?? "";
+    model = process.env.AI_MODEL ?? "";
+  }
 
   if (apiKey) {
     try {
-      return await generateWithAI(ctx, apiKey);
+      return await generateWithAI(ctx, apiKey, baseUrl, model);
     } catch (err) {
       logger.warn({ err, ticker: ctx.ticker }, "AI API gagal, fallback ke template");
     }
@@ -66,9 +77,14 @@ export async function generateAiReport(ctx: StockContext): Promise<AiReportConte
   return generateFromTemplate(ctx);
 }
 
-async function generateWithAI(ctx: StockContext, apiKey: string): Promise<AiReportContent> {
-  const baseUrl = process.env.AI_API_BASE_URL || "https://api.openai.com/v1";
-  const model = process.env.AI_MODEL || "gpt-4o-mini";
+async function generateWithAI(
+  ctx: StockContext,
+  apiKey: string,
+  baseUrlOverride?: string,
+  modelOverride?: string,
+): Promise<AiReportContent> {
+  const baseUrl = baseUrlOverride || process.env.AI_API_BASE_URL || "https://api.openai.com/v1";
+  const model = modelOverride || process.env.AI_MODEL || "gpt-4o-mini";
 
   const prompt = buildPrompt(ctx);
 

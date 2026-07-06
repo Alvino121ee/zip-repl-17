@@ -11,6 +11,10 @@ import {
   clearMemberPassword,
   isXauusdBrainEnabled,
   isBtcusdBrainEnabled,
+  setAiApiKey,
+  clearAiApiKey,
+  setAiApiBaseUrl,
+  setAiModel,
 } from "../lib/xauusd-settings.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
 import {
@@ -82,6 +86,31 @@ router.post("/member-password", requireAdmin, async (req, res) => {
     }
     await setMemberPassword(password);
     return res.json({ ok: true, cleared: false });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// POST /admin/settings/ai-key — set/clear general AI API key + base URL + model (admin only)
+router.post("/settings/ai-key", requireAdmin, async (req, res) => {
+  const { apiKey, baseUrl, model } = req.body as { apiKey?: string; baseUrl?: string; model?: string };
+  let clearedKey = false;
+  try {
+    if (typeof apiKey === "string") {
+      if (apiKey.trim().length === 0) {
+        await clearAiApiKey();
+        clearedKey = true;
+      } else {
+        await setAiApiKey(apiKey);
+      }
+    }
+    if (typeof baseUrl === "string") {
+      await setAiApiBaseUrl(baseUrl);
+    }
+    if (typeof model === "string") {
+      await setAiModel(model);
+    }
+    return res.json({ ok: true, clearedKey });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }

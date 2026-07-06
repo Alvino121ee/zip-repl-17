@@ -27,8 +27,11 @@ app.listen(port, async (err) => {
     logger.error({ err: e }, "Failed to seed agents");
   }
 
+  // Load AI API key from DB into process.env (agar ai-generator.ts langsung bisa pakai)
+  const { isXauusdBrainEnabled, isBtcusdBrainEnabled, loadAiEnvFromDb } = await import("./lib/xauusd-settings.js");
+  try { await loadAiEnvFromDb(); } catch (e) { logger.warn({ err: e }, "Gagal load AI env dari DB"); }
+
   // Start engines — respect admin on/off settings persisted in DB
-  const { isXauusdBrainEnabled, isBtcusdBrainEnabled } = await import("./lib/xauusd-settings.js");
 
   const [xauusdEnabled, btcEnabled] = await Promise.all([
     isXauusdBrainEnabled(),

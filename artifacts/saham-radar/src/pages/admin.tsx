@@ -53,6 +53,10 @@ interface SystemStatus {
   settings: {
     hasDeepseekKey: boolean;
     deepseekKeySource: "database" | "environment" | "none";
+    hasAiKey: boolean;
+    aiKeySource: "database" | "environment" | "none";
+    aiBaseUrl: string;
+    aiModel: string;
     predictionTimeframeMinutes: number;
     whatsapp: { number: string; enabled: boolean };
     validTimeframes?: number[];
@@ -93,6 +97,10 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
   const qc = useQueryClient();
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [aiKeyInput, setAiKeyInput] = useState("");
+  const [showAiKey, setShowAiKey] = useState(false);
+  const [aiBaseUrlInput, setAiBaseUrlInput] = useState(data.settings.aiBaseUrl ?? "");
+  const [aiModelInput, setAiModelInput] = useState(data.settings.aiModel ?? "");
   const [waNumber, setWaNumber] = useState(data.settings.whatsapp.number ?? "");
   const [waEnabled, setWaEnabled] = useState(data.settings.whatsapp.enabled ?? false);
   const [memberPwd, setMemberPwd] = useState("");
@@ -114,6 +122,38 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
     onSuccess: () => { toast({ title: "Key Dihapus" }); onRefetch(); },
     onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
   });
+
+  const saveAiKeyMut = useMutation({
+    mutationFn: () => {
+      const payload: Record<string, string> = {
+        baseUrl: aiBaseUrlInput,
+        model: aiModelInput,
+      };
+      if (aiKeyInput.trim().length > 0) payload.apiKey = aiKeyInput;
+      return adminPost("/api/admin/settings/ai-key", payload);
+    },
+    onSuccess: () => {
+      const msg = aiKeyInput.trim().length > 0
+        ? "API key + konfigurasi tersimpan ke database & file .env"
+        : "Konfigurasi (base URL/model) disimpan";
+      toast({ title: "✅ Pengaturan AI Disimpan", description: msg });
+      setAiKeyInput("");
+      onRefetch();
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  const clearAiKeyMut = useMutation({
+    mutationFn: () => adminPost("/api/admin/settings/ai-key", { apiKey: "" }),
+    onSuccess: () => { toast({ title: "AI Key Dihapus" }); onRefetch(); },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  // Apakah ada perubahan yang bisa disimpan (key baru, atau base URL/model berubah)
+  const aiConfigChanged =
+    aiKeyInput.trim().length > 0 ||
+    aiBaseUrlInput !== (data.settings.aiBaseUrl ?? "") ||
+    aiModelInput !== (data.settings.aiModel ?? "");
 
   const saveTimeframeMut = useMutation({
     mutationFn: (minutes: number) => adminPost("/api/xauusd/settings/timeframe", { minutes }),
@@ -231,6 +271,75 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
           </div>
           {data.settings.deepseekKeySource === "database" && (
             <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300" onClick={() => clearKeyMut.mutate()} disabled={clearKeyMut.isPending}>
+              Hapus key dari database
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* OpenAI / General AI API Key */}
+      <Card className="border-border/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Key className="w-5 h-5 text-violet-400" />
+            OpenAI / AI API Key
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Untuk laporan analisis AI. Mendukung OpenAI atau provider OpenAI-compatible (Groq, Together, dll). Disimpan ke database dan file <code className="bg-muted px-1 rounded text-[11px]">.env</code>.
+          </p>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Status</span>
+            <StatusBadge ok={data.settings.hasAiKey} label={data.settings.hasAiKey ? `Aktif (${data.settings.aiKeySource})` : "Belum diset"} />
+          </div>
+          {/* API Key */}
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={showAiKey ? "text" : "password"}
+                placeholder="sk-xxxxxxxxxxxxxxxx"
+                value={aiKeyInput}
+                onChange={(e) => setAiKeyInput(e.target.value)}
+                className="pr-10"
+              />
+              <button type="button" onClick={() => setShowAiKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground">
+                {showAiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => saveAiKeyMut.mutate()}
+              disabled={saveAiKeyMut.isPending || !aiConfigChanged}
+              className="bg-violet-600 hover:bg-violet-700 text-white"
+            >
+              {saveAiKeyMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Simpan"}
+            </Button>
+          </div>
+          {/* Base URL (opsional) */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Base URL <span className="text-muted-foreground/50">(opsional — default: api.openai.com)</span></label>
+            <Input
+              type="text"
+              placeholder="https://api.openai.com/v1"
+              value={aiBaseUrlInput}
+              onChange={(e) => setAiBaseUrlInput(e.target.value)}
+              className="text-sm"
+            />
+          </div>
+          {/* Model (opsional) */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Model <span className="text-muted-foreground/50">(opsional — default: gpt-4o-mini)</span></label>
+            <Input
+              type="text"
+              placeholder="gpt-4o-mini"
+              value={aiModelInput}
+              onChange={(e) => setAiModelInput(e.target.value)}
+              className="text-sm"
+            />
+          </div>
+          {data.settings.aiKeySource === "database" && (
+            <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300" onClick={() => clearAiKeyMut.mutate()} disabled={clearAiKeyMut.isPending}>
               Hapus key dari database
             </Button>
           )}
