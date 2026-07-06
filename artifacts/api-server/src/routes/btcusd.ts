@@ -330,6 +330,24 @@ btcusdRouter.post("/engine/stop", requireAdmin, (_req, res) => {
   res.json({ ok: true, status: getBtcEngineStatus() });
 });
 
+// ─── Toggle engine enabled (persists across restarts) ────────────────────────
+btcusdRouter.post("/engine/toggle", requireAdmin, async (req, res) => {
+  const { enabled } = req.body as { enabled: boolean };
+  if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled harus boolean" });
+  try {
+    const { setBtcusdBrainEnabled } = await import("../lib/xauusd-settings.js");
+    await setBtcusdBrainEnabled(enabled);
+    if (enabled) {
+      startBtcBrainEngine();
+    } else {
+      stopBtcBrainEngine();
+    }
+    return res.json({ ok: true, enabled, status: getBtcEngineStatus() });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── Trigger manual learning cycle (admin) — sync ────────────────────────────
 btcusdRouter.post("/learn-now", requireAdmin, async (_req, res) => {
   try {

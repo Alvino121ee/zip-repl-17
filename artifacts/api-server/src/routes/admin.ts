@@ -3,11 +3,14 @@
  */
 import { Router } from "express";
 import { getEngineStatus } from "../lib/xauusd-brain-engine.js";
+import { getBtcEngineStatus } from "../lib/btcusd-brain-engine.js";
 import {
   getSettingsSummary,
   getMemberPassword,
   setMemberPassword,
   clearMemberPassword,
+  isXauusdBrainEnabled,
+  isBtcusdBrainEnabled,
 } from "../lib/xauusd-settings.js";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
 import {
@@ -49,10 +52,16 @@ router.get("/system", requireAdmin, async (_req, res) => {
       Promise.resolve(getLatestLivePrice()),
     ]);
 
-    const memberPwd = await getMemberPassword();
+    const [memberPwd, xauusdEnabled, btcEnabled] = await Promise.all([
+      getMemberPassword(),
+      isXauusdBrainEnabled(),
+      isBtcusdBrainEnabled(),
+    ]);
     res.json({
       ok: true,
       engine,
+      btcEngine: getBtcEngineStatus(),
+      engineEnabled: { xauusd: xauusdEnabled, btc: btcEnabled },
       settings,
       livePrice,
       serverTime: new Date().toISOString(),

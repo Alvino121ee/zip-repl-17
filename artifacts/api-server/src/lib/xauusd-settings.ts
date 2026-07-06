@@ -13,6 +13,8 @@ const KEY_TIMEFRAME = "prediction_timeframe_minutes";
 const KEY_WHATSAPP_NUMBER = "whatsapp_number";
 const KEY_WHATSAPP_ENABLED = "whatsapp_enabled";
 const KEY_MEMBER_PASSWORD = "member_password";
+const KEY_XAUUSD_BRAIN_ENABLED = "xauusd_brain_enabled";
+const KEY_BTCUSD_BRAIN_ENABLED = "btcusd_brain_enabled";
 
 let cache: Map<string, string> | null = null;
 let cacheLoadedAt = 0;
@@ -118,6 +120,26 @@ export async function setMemberPassword(password: string): Promise<void> {
 export async function clearMemberPassword(): Promise<void> {
   await db.delete(xauusdSettingsTable).where(eq(xauusdSettingsTable.key, KEY_MEMBER_PASSWORD));
   cache = null;
+}
+
+// ─── Brain engine enable/disable ──────────────────────────────────────────────
+
+export async function isXauusdBrainEnabled(): Promise<boolean> {
+  const v = await getValue(KEY_XAUUSD_BRAIN_ENABLED);
+  return v !== "false"; // default: enabled
+}
+
+export async function setXauusdBrainEnabled(enabled: boolean): Promise<void> {
+  await setValue(KEY_XAUUSD_BRAIN_ENABLED, enabled ? "true" : "false");
+}
+
+export async function isBtcusdBrainEnabled(): Promise<boolean> {
+  const v = await getValue(KEY_BTCUSD_BRAIN_ENABLED);
+  return v !== "false"; // default: enabled
+}
+
+export async function setBtcusdBrainEnabled(enabled: boolean): Promise<void> {
+  await setValue(KEY_BTCUSD_BRAIN_ENABLED, enabled ? "true" : "false");
 }
 
 export async function getSettingsSummary(): Promise<{

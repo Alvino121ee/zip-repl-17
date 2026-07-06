@@ -44,6 +44,8 @@ import {
   setWhatsappNumber,
   setWhatsappEnabled,
   VALID_TIMEFRAMES,
+  isXauusdBrainEnabled,
+  setXauusdBrainEnabled,
 } from "../lib/xauusd-settings.js";
 import { sendTestWhatsappMessage } from "../lib/xauusd-whatsapp.js";
 
@@ -478,6 +480,23 @@ xauusdRouter.post("/engine/start", requireAdmin, (_req, res) => {
 xauusdRouter.post("/engine/stop", requireAdmin, (_req, res) => {
   stopXauusdBrainEngine();
   return res.json({ ok: true, status: getEngineStatus() });
+});
+
+// ─── POST /xauusd/engine/toggle — on/off persists across restarts ────────────
+xauusdRouter.post("/engine/toggle", requireAdmin, async (req, res) => {
+  const { enabled } = req.body as { enabled: boolean };
+  if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled harus boolean" });
+  try {
+    await setXauusdBrainEnabled(enabled);
+    if (enabled) {
+      startXauusdBrainEngine();
+    } else {
+      stopXauusdBrainEngine();
+    }
+    return res.json({ ok: true, enabled, status: getEngineStatus() });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
 });
 
 // ─── POST /xauusd/learn-now — trigger immediate learning cycle ────────────────

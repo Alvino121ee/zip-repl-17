@@ -12,7 +12,7 @@ import {
   Activity, Brain, Clock, Key, Phone, Zap, CheckCircle2,
   XCircle, RefreshCw, LogOut, ShieldCheck, Users, KeyRound,
   Target, Bell, Loader2, Eye, EyeOff, Flame, StopCircle,
-  BarChart2, TrendingUp,
+  BarChart2, TrendingUp, Power, Bitcoin,
 } from "lucide-react";
 import { getAdminToken, clearAdminToken, authFetch } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -32,6 +32,12 @@ interface ExtremeMode {
   dataMode: "live" | "historical";
 }
 
+interface BtcEngineStatus {
+  running: boolean;
+  totalCycles: number;
+  lastCycleAt: string | null;
+}
+
 interface SystemStatus {
   ok: boolean;
   engine: {
@@ -42,6 +48,8 @@ interface SystemStatus {
     isLearning: boolean;
     extremeMode: ExtremeMode;
   };
+  btcEngine: BtcEngineStatus | null;
+  engineEnabled: { xauusd: boolean; btc: boolean };
   settings: {
     hasDeepseekKey: boolean;
     deepseekKeySource: "database" | "environment" | "none";
@@ -289,6 +297,131 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ─── Engine Toggle Card ───────────────────────────────────────────────────────
+function EngineToggleCard({ data, onRefetch }: { data: SystemStatus; onRefetch: () => void }) {
+  const { toast } = useToast();
+
+  const xauusdEnabled = data.engineEnabled?.xauusd ?? true;
+  const btcEnabled = data.engineEnabled?.btc ?? true;
+
+  const toggleXauusd = useMutation({
+    mutationFn: (enabled: boolean) => adminPost("/api/xauusd/engine/toggle", { enabled }),
+    onSuccess: (_r, enabled) => {
+      toast({ title: enabled ? "✅ XAUUSD Brain dinyalakan" : "⛔ XAUUSD Brain dimatikan" });
+      onRefetch();
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  const toggleBtc = useMutation({
+    mutationFn: (enabled: boolean) => adminPost("/api/btcusd/engine/toggle", { enabled }),
+    onSuccess: (_r, enabled) => {
+      toast({ title: enabled ? "✅ BTC Brain dinyalakan" : "⛔ BTC Brain dimatikan" });
+      onRefetch();
+    },
+    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
+  });
+
+  function ToggleRow({
+    label,
+    icon,
+    color,
+    enabled,
+    running,
+    cycles,
+    lastCycle,
+    isPending,
+    onToggle,
+  }: {
+    label: string;
+    icon: React.ReactNode;
+    color: string;
+    enabled: boolean;
+    running: boolean;
+    cycles?: number;
+    lastCycle?: string | null;
+    isPending: boolean;
+    onToggle: (v: boolean) => void;
+  }) {
+    return (
+      <div className={`rounded-xl border p-4 transition-colors ${enabled ? "border-border/50 bg-background" : "border-border/30 bg-muted/20"}`}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`p-2 rounded-lg ${enabled ? `bg-${color}-500/10` : "bg-muted/30"}`}>
+              <span className={enabled ? `text-${color}-400` : "text-muted-foreground/40"}>
+                {icon}
+              </span>
+            </div>
+            <div className="min-w-0">
+              <p className={`text-sm font-semibold truncate ${enabled ? "text-foreground" : "text-muted-foreground"}`}>{label}</p>
+              <p className="text-[11px] text-muted-foreground/60 mt-0.5">
+                {running ? (
+                  <span className="flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+                    Berjalan{cycles !== undefined ? ` · ${cycles} siklus` : ""}
+                  </span>
+                ) : enabled ? "Berhenti sementara" : "Dinonaktifkan"}
+                {lastCycle && (
+                  <> · {new Date(lastCycle).toLocaleTimeString("id-ID")}</>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* Toggle switch */}
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => onToggle(!enabled)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50 ${enabled ? "bg-emerald-500" : "bg-muted"}`}
+            aria-pressed={enabled}
+          >
+            <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg ring-0 transition-transform duration-200 ${enabled ? "translate-x-5" : "translate-x-0"}`} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Power className="w-5 h-5 text-emerald-400" />
+          Kontrol Brain Engine
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Nyala/matikan setiap brain engine secara independen. Pengaturan ini disimpan permanen — tetap aktif setelah server restart.
+        </p>
+        <ToggleRow
+          label="XAUUSD Brain (Gold)"
+          icon={<Zap className="w-4 h-4" />}
+          color="amber"
+          enabled={xauusdEnabled}
+          running={data.engine.running}
+          cycles={data.engine.totalCycles}
+          lastCycle={data.engine.lastCycleAt}
+          isPending={toggleXauusd.isPending}
+          onToggle={(v) => toggleXauusd.mutate(v)}
+        />
+        <ToggleRow
+          label="BTC Brain (Bitcoin)"
+          icon={<Bitcoin className="w-4 h-4" />}
+          color="orange"
+          enabled={btcEnabled}
+          running={data.btcEngine?.running ?? false}
+          cycles={data.btcEngine?.totalCycles}
+          lastCycle={data.btcEngine?.lastCycleAt}
+          isPending={toggleBtc.isPending}
+          onToggle={(v) => toggleBtc.mutate(v)}
+        />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -655,7 +788,10 @@ export default function AdminPanel() {
             </Card>
           )}
 
-          {/* Brain Engine */}
+          {/* Engine Toggle */}
+          <EngineToggleCard data={data} onRefetch={() => refetch()} />
+
+          {/* Brain Engine Stats */}
           <Card className="border-border/50">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center justify-between text-base">
@@ -670,7 +806,7 @@ export default function AdminPanel() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Status</span>
+                <span className="text-sm text-muted-foreground">Status XAUUSD</span>
                 <StatusBadge ok={data.engine.running} label={data.engine.running ? "Running" : "Stopped"} />
               </div>
               <div className="flex items-center justify-between">
@@ -683,8 +819,14 @@ export default function AdminPanel() {
               </div>
               {data.engine.lastCycleAt && (
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Siklus Terakhir</span>
+                  <span className="text-sm text-muted-foreground">Siklus Terakhir (Gold)</span>
                   <span className="text-sm text-foreground/70">{new Date(data.engine.lastCycleAt).toLocaleString("id-ID")}</span>
+                </div>
+              )}
+              {data.btcEngine?.lastCycleAt && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Siklus Terakhir (BTC)</span>
+                  <span className="text-sm text-foreground/70">{new Date(data.btcEngine.lastCycleAt).toLocaleString("id-ID")}</span>
                 </div>
               )}
               {data.engine.isLearning && (

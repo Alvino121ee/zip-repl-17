@@ -27,11 +27,25 @@ app.listen(port, async (err) => {
     logger.error({ err: e }, "Failed to seed agents");
   }
 
-  // Start XAUUSD autonomous learning engine
-  startXauusdBrainEngine();
+  // Start engines — respect admin on/off settings persisted in DB
+  const { isXauusdBrainEnabled, isBtcusdBrainEnabled } = await import("./lib/xauusd-settings.js");
 
-  // Start BTCUSD autonomous learning engine (BTC is 24/7)
-  startBtcBrainEngine();
+  const [xauusdEnabled, btcEnabled] = await Promise.all([
+    isXauusdBrainEnabled(),
+    isBtcusdBrainEnabled(),
+  ]);
+
+  if (xauusdEnabled) {
+    startXauusdBrainEngine();
+  } else {
+    logger.info("XAUUSD Brain Engine dinonaktifkan (setting DB).");
+  }
+
+  if (btcEnabled) {
+    startBtcBrainEngine();
+  } else {
+    logger.info("BTC Brain Engine dinonaktifkan (setting DB).");
+  }
 
   // Start realtime (1s) live price ticker
   startXauusdLivePriceTicker();
