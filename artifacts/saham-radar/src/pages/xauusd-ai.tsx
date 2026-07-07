@@ -2166,8 +2166,175 @@ function PredictionPanel({ mainPreds, trainingPreds }: { mainPreds: Prediction[]
   );
 }
 
+// ─── Fixed Prediction Panel ───────────────────────────────────────────────────
+interface FixedPredIndicator { name: string; value: string; signal: "bullish" | "bearish" | "neutral"; score: number; description: string }
+interface FixedPredResult {
+  direction: "up" | "down"; confidence: number; price: number;
+  entryLow: number; entryHigh: number; stopLoss: number;
+  targetPrice: number; tp2: number; tp3: number;
+  bullishScore: number; bearishScore: number;
+  reasoning: string; indicatorDetails: FixedPredIndicator[];
+  dataSource: "live" | "snapshot"; indicatorsAgeMs: number | null;
+  updatedAt: string;
+}
+
+function FixedPredictionPanel() {
+  const [countdown, setCountdown] = useState(5);
+
+  const q = useQuery<FixedPredResult>({
+    queryKey: ["fixed-prediction"],
+    queryFn: () => apiGet<FixedPredResult>("/fixed-prediction"),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+  });
+
+  // Countdown timer 5→0→refresh
+  useEffect(() => {
+    setCountdown(5);
+    const iv = setInterval(() => {
+      setCountdown(c => (c <= 1 ? 5 : c - 1));
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [q.dataUpdatedAt]);
+
+  const dirLabel = (d: string) => d === "up" ? "▲ NAIK" : "▼ TURUN";
+  const dirCls   = (d: string) => d === "up" ? "text-emerald-400" : "text-red-400";
+  const borderCls = (d: string) => d === "up" ? "border-emerald-500/40 bg-emerald-500/5" : "border-red-500/40 bg-red-500/5";
+  const badgeCls  = (d: string) => d === "up" ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10" : "border-red-500/40 text-red-400 bg-red-500/10";
+  const sigCls    = (s: string) => s === "bullish" ? "text-emerald-400" : s === "bearish" ? "text-red-400" : "text-slate-400";
+  const sigBg     = (s: string) => s === "bullish" ? "bg-emerald-500/10 border-emerald-500/20" : s === "bearish" ? "bg-red-500/10 border-red-500/20" : "bg-slate-500/10 border-slate-500/20";
+  const sigIcon   = (s: string) => s === "bullish" ? "▲" : s === "bearish" ? "▼" : "—";
+
+  const r = q.data;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-foreground">Prediksi Fiks — Agresif</p>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/15 border border-orange-500/25 text-orange-400 font-medium">⚡ Rule-Based</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            8 indikator teknikal · selalu ada arah · update otomatis setiap 5 detik
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {q.isFetching && <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />}
+          <div className="text-xs text-muted-foreground tabular-nums w-14 text-right">
+            {q.isFetching ? "updating..." : `refresh ${countdown}s`}
+          </div>
+        </div>
+      </div>
+
+      {q.isError && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-5 space-y-2">
+          <p className="text-sm text-red-400 font-medium">⚠️ Gagal memuat prediksi</p>
+          <p className="text-xs text-red-400/70">{String(q.error)}</p>
+        </div>
+      )}
+
+      {q.isLoading && !r && (
+        <div className="rounded-xl border border-border/30 bg-card/30 p-10 flex flex-col items-center gap-3">
+          <Loader2 className="w-7 h-7 animate-spin text-amber-400" />
+          <p className="text-sm text-muted-foreground">Menganalisis 8 indikator...</p>
+        </div>
+      )}
+
+      {r && (
+        <div className={`rounded-xl border-2 p-5 space-y-4 ${borderCls(r.direction)}`}>
+          {/* Direction header */}
+          <div className="flex items-start justify-between flex-wrap gap-3">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-2xl font-bold ${dirCls(r.direction)}`}>{dirLabel(r.direction)}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${badgeCls(r.direction)}`}>
+                  {(r.confidence * 100).toFixed(0)}% confidence
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/10 border border-slate-500/20 text-slate-400">📏 Rule</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                @ ${r.price.toFixed(2)} · {new Date(r.updatedAt).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </p>
+            </div>
+            {/* Score bar */}
+            <div className="flex items-center gap-3 text-xs">
+              <div className="text-center">
+                <p className="text-emerald-400 font-bold text-base">{r.bullishScore}</p>
+                <p className="text-muted-foreground/60 text-[10px]">Bull</p>
+              </div>
+              <div className="h-8 w-px bg-border/50" />
+              <div className="text-center">
+                <p className="text-red-400 font-bold text-base">{r.bearishScore}</p>
+                <p className="text-muted-foreground/60 text-[10px]">Bear</p>
+              </div>
+              <div className="text-center ml-1">
+                <p className="text-slate-400 font-bold text-base">8</p>
+                <p className="text-muted-foreground/60 text-[10px]">Total</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Trade levels */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+            <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-2.5">
+              <p className="text-blue-400/70 mb-0.5">Entry Zone</p>
+              <p className="font-semibold text-blue-300">${r.entryLow.toFixed(2)} – ${r.entryHigh.toFixed(2)}</p>
+            </div>
+            <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2.5">
+              <p className="text-red-400/70 mb-0.5">Stop Loss</p>
+              <p className="font-semibold text-red-300">${r.stopLoss.toFixed(2)}</p>
+            </div>
+            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5">
+              <p className="text-emerald-400/70 mb-0.5">TP1</p>
+              <p className="font-semibold text-emerald-300">${r.targetPrice.toFixed(2)}</p>
+            </div>
+            <div className="rounded-lg bg-emerald-500/8 border border-emerald-500/15 p-2.5">
+              <p className="text-emerald-400/60 mb-0.5">TP2</p>
+              <p className="font-semibold text-emerald-300/70">${r.tp2.toFixed(2)}</p>
+            </div>
+            <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/10 p-2.5">
+              <p className="text-emerald-400/50 mb-0.5">TP3</p>
+              <p className="font-semibold text-emerald-300/50">${r.tp3.toFixed(2)}</p>
+            </div>
+          </div>
+
+          {/* Reasoning */}
+          <div className="rounded-lg bg-card/50 border border-border/30 p-3">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">Analisis Prediksi</p>
+            <p className="text-xs text-foreground/80 leading-relaxed">{r.reasoning}</p>
+          </div>
+
+          {/* Indicator breakdown */}
+          <div className="space-y-1.5">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Detail 8 Indikator</p>
+            {r.indicatorDetails.map((ind, i) => (
+              <div key={i} className={`flex items-start gap-2 rounded-lg border p-2.5 ${sigBg(ind.signal)}`}>
+                <span className={`text-[11px] font-bold shrink-0 w-4 text-center mt-0.5 ${sigCls(ind.signal)}`}>{sigIcon(ind.signal)}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-xs font-medium text-foreground">{ind.name}</span>
+                    <span className={`text-[11px] font-semibold tabular-nums ${sigCls(ind.signal)}`}>{ind.value}</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-snug">{ind.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground/50">
+            <span>Sumber: {r.dataSource === "live" ? `🟢 live cache` : `🟡 snapshot`}{r.indicatorsAgeMs != null ? ` · ${(r.indicatorsAgeMs / 1000).toFixed(0)}s lalu` : ""}</span>
+            <span>⚠️ Bukan saran keuangan</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
-type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "ondemand" | "questions" | "news" | "log" | "settings" | "calendar" | "winrate" | "backtest" | "multitimeframe" | "correlation";
+type Tab = "chart" | "indicators" | "brain" | "chat" | "predictions" | "ondemand" | "fixedprediction" | "questions" | "news" | "log" | "settings" | "calendar" | "winrate" | "backtest" | "multitimeframe" | "correlation";
 
 export default function XauusdAi() {
   const [activeTab, setActiveTab] = useState<Tab>("chart");
@@ -2332,6 +2499,7 @@ export default function XauusdAi() {
     { id: "chat", label: "Chat", icon: <MessageSquare className="w-3.5 h-3.5" /> },
     { id: "predictions", label: `Prediksi (${mainPredictionsQ.data?.length ?? 0} utama)`, icon: <Target className="w-3.5 h-3.5" /> },
     { id: "ondemand", label: "Prediksi On-Demand", icon: <Zap className="w-3.5 h-3.5" /> },
+    { id: "fixedprediction", label: "⚡ Prediksi Fiks", icon: <Target className="w-3.5 h-3.5" /> },
     { id: "questions", label: `Pertanyaan (${statsQ.data?.totalQuestionsAsked ?? 0})`, icon: <BookOpen className="w-3.5 h-3.5" /> },
     { id: "news", label: "Berita", icon: <Newspaper className="w-3.5 h-3.5" /> },
     { id: "log", label: `Log Belajar (${logQ.data?.length ?? 0})`, icon: <History className="w-3.5 h-3.5" /> },
@@ -2590,6 +2758,8 @@ export default function XauusdAi() {
           )}
 
           {activeTab === "ondemand" && <OnDemandPredictionPanel />}
+
+          {activeTab === "fixedprediction" && <FixedPredictionPanel />}
 
           {activeTab === "questions" && <QuestionsPanel questions={questionsQ.data ?? []} />}
 

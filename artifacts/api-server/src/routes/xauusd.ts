@@ -376,6 +376,148 @@ xauusdRouter.get("/mentor-signal", async (req, res) => {
   }
 });
 
+// ─── GET /xauusd/fixed-prediction — always-on aggressive rule-based prediction ──
+// threshold=2, ALWAYS picks a direction (no HOLD), returns full trade levels +
+// per-indicator breakdown. Designed for Fixed Prediction Mode, refreshed every 5s.
+xauusdRouter.get("/fixed-prediction", async (_req, res) => {
+  try {
+    const livePrice = getLatestLivePrice();
+
+    const cached = getLatestMentorIndicators();
+    const useLiveCache = cached.indicators !== null && !cached.stale;
+    let snap: typeof cached.indicators | null = useLiveCache ? cached.indicators : null;
+    let dataSource: "live" | "snapshot" = "live";
+    let indicatorsAgeMs: number | null = useLiveCache ? cached.ageMs : null;
+
+    if (!snap) {
+      const snapRows = await db
+        .select().from(xauusdSnapshotsTable)
+        .orderBy(desc(xauusdSnapshotsTable.snapshotAt)).limit(1);
+      if (!snapRows.length) return res.status(503).json({ error: "Indikator belum tersedia — tunggu sebentar" });
+      const row = snapRows[0];
+      const bbW = row.bbUpper != null && row.bbLower != null && row.bbMiddle != null && row.bbMiddle !== 0
+        ? parseFloat(((row.bbUpper - row.bbLower) / row.bbMiddle * 100).toFixed(3)) : null;
+      snap = {
+        price: row.price, open: row.price, high: row.price, low: row.price, volume: row.volume ?? 0,
+        rsi14: row.rsi14, ema9: row.ema9, ema21: row.ema21, ema50: row.ema50, ema200: row.ema200,
+        macdLine: row.macdLine, macdSignal: row.macdSignal, macdHistogram: row.macdHistogram,
+        bbUpper: row.bbUpper, bbMiddle: row.bbMiddle, bbLower: row.bbLower, bbWidth: bbW,
+        atr14: row.atr14,
+        trend: (row.trend as "bullish" | "bearish" | "sideways") ?? "sideways",
+        rsiSignal: (row.rsiSignal as "overbought" | "oversold" | "neutral") ?? "neutral",
+        macdSignalType: (row.macdSignalType as "bullish_cross" | "bearish_cross" | "neutral") ?? "neutral",
+        emaAlignment: (row.emaAlignment as "bullish_stack" | "bearish_stack" | "mixed") ?? "mixed",
+        supportLevel: row.supportLevel, resistanceLevel: row.resistanceLevel,
+      };
+      dataSource = "snapshot";
+      indicatorsAgeMs = Date.now() - new Date(row.snapshotAt).getTime();
+    }
+
+    const price = livePrice?.price ?? snap.price;
+
+    let bullishScore = 0;
+    let bearishScore = 0;
+    const indicatorDetails: Array<{ name: string; value: string; signal: "bullish" | "bearish" | "neutral"; score: number; description: string }> = [];
+
+    // 1. EMA Alignment
+    if (snap.emaAlignment === "bullish_stack") {
+      bullishScore++;
+      indicatorDetails.push({ name: "EMA Alignment", value: "Bullish Stack", signal: "bullish", score: 1, description: `EMA 9>21>50>200 — semua EMA terurut naik` });
+    } else if (snap.emaAlignment === "bearish_stack") {
+      bearishScore++;
+      indicatorDetails.push({ name: "EMA Alignment", value: "Bearish Stack", signal: "bearish", score: -1, description: `EMA 9<21<50<200 — semua EMA terurut turun` });
+    } else {
+      indicatorDetails.push({ name: "EMA Alignment", value: "Mixed", signal: "neutral", score: 0, description: `EMA tidak terurut — trend sideways atau transisi` });
+    }
+
+    // 2. RSI
+    if (snap.rsi14 != null) {
+      const rsi = snap.rsi14;
+      if (rsi <= 30) { bullishScore++; indicatorDetails.push({ name: "RSI14", value: rsi.toFixed(1), signal: "bullish", score: 1, description: `RSI ${rsi.toFixed(0)} — oversold, potensi reversal naik` }); }
+      else if (rsi > 30 && rsi <= 50) { bearishScore++; indicatorDetails.push({ name: "RSI14", value: rsi.toFixed(1), signal: "bearish", score: -1, description: `RSI ${rsi.toFixed(0)} — zona bearish, momentum turun` }); }
+      else if (rsi > 50 && rsi < 70) { bullishScore++; indicatorDetails.push({ name: "RSI14", value: rsi.toFixed(1), signal: "bullish", score: 1, description: `RSI ${rsi.toFixed(0)} — zona bullish, momentum naik` }); }
+      else { bearishScore++; indicatorDetails.push({ name: "RSI14", value: rsi.toFixed(1), signal: "bearish", score: -1, description: `RSI ${rsi.toFixed(0)} — overbought, potensi reversal turun` }); }
+    }
+
+    // 3. MACD Cross
+    if (snap.macdSignalType === "bullish_cross") { bullishScore++; indicatorDetails.push({ name: "MACD Cross", value: "Bullish Cross", signal: "bullish", score: 1, description: `MACD line memotong signal ke atas — sinyal beli` }); }
+    else if (snap.macdSignalType === "bearish_cross") { bearishScore++; indicatorDetails.push({ name: "MACD Cross", value: "Bearish Cross", signal: "bearish", score: -1, description: `MACD line memotong signal ke bawah — sinyal jual` }); }
+    else { indicatorDetails.push({ name: "MACD Cross", value: "Neutral", signal: "neutral", score: 0, description: `Tidak ada crossover MACD saat ini` }); }
+
+    // 4. MACD Histogram
+    if (snap.macdHistogram != null) {
+      if (snap.macdHistogram > 0) { bullishScore++; indicatorDetails.push({ name: "MACD Histogram", value: `+${snap.macdHistogram.toFixed(2)}`, signal: "bullish", score: 1, description: `Histogram positif — momentum bullish menguat` }); }
+      else if (snap.macdHistogram < 0) { bearishScore++; indicatorDetails.push({ name: "MACD Histogram", value: snap.macdHistogram.toFixed(2), signal: "bearish", score: -1, description: `Histogram negatif — momentum bearish menguat` }); }
+      else { indicatorDetails.push({ name: "MACD Histogram", value: "0.00", signal: "neutral", score: 0, description: `Histogram nol — momentum netral` }); }
+    }
+
+    // 5. Price vs EMA50
+    if (snap.ema50 != null) {
+      if (price > snap.ema50) { bullishScore++; indicatorDetails.push({ name: "Harga vs EMA50", value: `$${price.toFixed(0)} > ${snap.ema50.toFixed(0)}`, signal: "bullish", score: 1, description: `Harga $${price.toFixed(2)} di atas EMA50 (${snap.ema50.toFixed(2)}) — bullish bias` }); }
+      else { bearishScore++; indicatorDetails.push({ name: "Harga vs EMA50", value: `$${price.toFixed(0)} < ${snap.ema50.toFixed(0)}`, signal: "bearish", score: -1, description: `Harga $${price.toFixed(2)} di bawah EMA50 (${snap.ema50.toFixed(2)}) — bearish bias` }); }
+    }
+
+    // 6. Trend 1H
+    if (snap.trend === "bullish") { bullishScore++; indicatorDetails.push({ name: "Trend 1H", value: "Bullish", signal: "bullish", score: 1, description: `Struktur harga 1H: higher highs & higher lows` }); }
+    else if (snap.trend === "bearish") { bearishScore++; indicatorDetails.push({ name: "Trend 1H", value: "Bearish", signal: "bearish", score: -1, description: `Struktur harga 1H: lower highs & lower lows` }); }
+    else { indicatorDetails.push({ name: "Trend 1H", value: "Sideways", signal: "neutral", score: 0, description: `Struktur harga 1H sideways / tidak ada trend jelas` }); }
+
+    // 7. Bollinger Bands
+    if (snap.bbLower != null && snap.bbUpper != null && snap.bbMiddle != null) {
+      if (price < snap.bbLower) { bullishScore++; indicatorDetails.push({ name: "Bollinger Band", value: "< Lower Band", signal: "bullish", score: 1, description: `Harga di bawah BB lower (${snap.bbLower.toFixed(2)}) — oversold, potensi reversal naik` }); }
+      else if (price > snap.bbUpper) { bearishScore++; indicatorDetails.push({ name: "Bollinger Band", value: "> Upper Band", signal: "bearish", score: -1, description: `Harga di atas BB upper (${snap.bbUpper.toFixed(2)}) — overbought, potensi koreksi` }); }
+      else if (price < snap.bbMiddle) { bearishScore += 0.5; indicatorDetails.push({ name: "Bollinger Band", value: "< Mid Band", signal: "bearish", score: -0.5, description: `Harga di bawah BB midline (${snap.bbMiddle.toFixed(2)}) — tekanan jual ringan` }); }
+      else { bullishScore += 0.5; indicatorDetails.push({ name: "Bollinger Band", value: "> Mid Band", signal: "bullish", score: 0.5, description: `Harga di atas BB midline (${snap.bbMiddle.toFixed(2)}) — tekanan beli ringan` }); }
+    }
+
+    // 8. S/R Midpoint
+    if (snap.supportLevel != null && snap.resistanceLevel != null) {
+      const midSR = (snap.supportLevel + snap.resistanceLevel) / 2;
+      if (price > midSR) { bullishScore++; indicatorDetails.push({ name: "S/R Midpoint", value: `$${price.toFixed(0)} > ${midSR.toFixed(0)}`, signal: "bullish", score: 1, description: `Harga di atas midpoint S/R (${midSR.toFixed(2)}) — area bullish` }); }
+      else { bearishScore++; indicatorDetails.push({ name: "S/R Midpoint", value: `$${price.toFixed(0)} < ${midSR.toFixed(0)}`, signal: "bearish", score: -1, description: `Harga di bawah midpoint S/R (${midSR.toFixed(2)}) — area bearish` }); }
+    }
+
+    // ── Always pick a direction (no HOLD) ─────────────────────────────────────
+    const maxPossible = 8.5;
+    const direction = bullishScore >= bearishScore ? "up" : "down";
+    const winScore = direction === "up" ? bullishScore : bearishScore;
+    const confidence = parseFloat(Math.min(0.95, Math.max(0.35, winScore / maxPossible)).toFixed(2));
+
+    // ── ATR-based trade levels ─────────────────────────────────────────────────
+    const atr = snap.atr14 ?? 5;
+    const dir = direction === "up" ? 1 : -1;
+    const entryLow  = parseFloat((price - atr * 0.08).toFixed(2));
+    const entryHigh = parseFloat((price + atr * 0.08).toFixed(2));
+    const targetPrice = parseFloat((price + dir * atr * 0.45).toFixed(2));
+    const tp2         = parseFloat((price + dir * atr * 0.80).toFixed(2));
+    const tp3         = parseFloat((price + dir * atr * 1.30).toFixed(2));
+    const stopLoss    = parseFloat((price - dir * atr * 0.30).toFixed(2));
+
+    // ── Auto reasoning ─────────────────────────────────────────────────────────
+    const winDetails = indicatorDetails.filter(i => i.signal === (direction === "up" ? "bullish" : "bearish"));
+    const loseDetails = indicatorDetails.filter(i => i.signal === (direction === "up" ? "bearish" : "bullish"));
+    const dirLabel = direction === "up" ? "NAIK (BUY)" : "TURUN (SHORT)";
+    const reasoning = `${winDetails.length} dari 8 indikator mendukung arah ${dirLabel}. `
+      + `Konfirmasi utama: ${winDetails.slice(0, 3).map(d => d.name).join(", ")}. `
+      + (loseDetails.length > 0 ? `Indikator berlawanan: ${loseDetails.slice(0, 2).map(d => d.name).join(", ")}. ` : "")
+      + `TP1 ${targetPrice.toFixed(2)}, TP2 ${tp2.toFixed(2)}, SL ${stopLoss.toFixed(2)} berdasarkan ATR ${atr.toFixed(1)}.`;
+
+    return res.json({
+      direction, confidence, price,
+      entryLow, entryHigh, stopLoss,
+      targetPrice, tp2, tp3,
+      bullishScore: parseFloat(bullishScore.toFixed(1)),
+      bearishScore: parseFloat(bearishScore.toFixed(1)),
+      reasoning, indicatorDetails,
+      dataSource, indicatorsAgeMs,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("[XAUUSD] /fixed-prediction error:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── GET /xauusd/multi-timeframe — 1H/4H/Daily trend confluence ──────────────
 xauusdRouter.get("/multi-timeframe", async (_req, res) => {
   try {
