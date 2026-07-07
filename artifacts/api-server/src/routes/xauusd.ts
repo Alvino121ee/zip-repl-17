@@ -137,9 +137,9 @@ xauusdRouter.get("/market-regime", async (_req, res) => {
 // Query param: sensitivity = "aggressive" | "normal" | "conservative"
 xauusdRouter.get("/mentor-signal", async (req, res) => {
   try {
-    const sensitivity = (["aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
+    const sensitivity = (["super_aggressive", "aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
       ? req.query.sensitivity
-      : "normal") as "aggressive" | "normal" | "conservative";
+      : "normal") as "super_aggressive" | "aggressive" | "normal" | "conservative";
 
     const livePrice = getLatestLivePrice();
 
@@ -316,7 +316,7 @@ xauusdRouter.get("/mentor-signal", async (req, res) => {
     }
 
     // ── Thresholds per sensitivity ────────────────────────────────────────────
-    const thresholds = { aggressive: 2, normal: 3, conservative: 4 };
+    const thresholds = { super_aggressive: 1, aggressive: 2, normal: 3, conservative: 4 };
     const threshold = thresholds[sensitivity];
     const maxPossible = 8.5; // accounting for 0.5 BB mid scores
 
@@ -339,18 +339,20 @@ xauusdRouter.get("/mentor-signal", async (req, res) => {
       confidence = parseFloat(Math.min(0.4, (Math.max(bullishScore, bearishScore)) / maxPossible).toFixed(2));
     }
 
-    // ── Minimal TP based on ATR ───────────────────────────────────────────────
+    // ── Minimal TP/SL based on ATR — super_aggressive uses tighter scalping levels ──
     const atr = snap.atr14 ?? 5;
-    const minTPDistance = parseFloat((atr * 0.45).toFixed(2));
+    const tpMultiplier = sensitivity === "super_aggressive" ? 0.20 : 0.45;
+    const slMultiplier = sensitivity === "super_aggressive" ? 0.12 : 0.80;
+    const minTPDistance = parseFloat((atr * tpMultiplier).toFixed(2));
     const minTP = command === "BUY"
       ? parseFloat((price + minTPDistance).toFixed(2))
       : command === "SHORT"
       ? parseFloat((price - minTPDistance).toFixed(2))
       : null;
     const minSL = command === "BUY"
-      ? parseFloat((price - minTPDistance * 0.8).toFixed(2))
+      ? parseFloat((price - minTPDistance * slMultiplier).toFixed(2))
       : command === "SHORT"
-      ? parseFloat((price + minTPDistance * 0.8).toFixed(2))
+      ? parseFloat((price + minTPDistance * slMultiplier).toFixed(2))
       : null;
 
     return res.json({
@@ -1119,9 +1121,9 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
     }
 
     // ── Reuse mentor-signal logic ────────────────────────────────────────────
-    const sensitivity = (["aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
+    const sensitivity = (["super_aggressive", "aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
       ? req.query.sensitivity
-      : "normal") as "aggressive" | "normal" | "conservative";
+      : "normal") as "super_aggressive" | "aggressive" | "normal" | "conservative";
 
     const livePrice = getLatestLivePrice();
     const price = livePrice?.price ?? null;
@@ -1175,7 +1177,7 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
       if (p > mid) bullishScore++; else bearishScore++;
     }
 
-    const thresholds = { aggressive: 2, normal: 3, conservative: 4 };
+    const thresholds = { super_aggressive: 1, aggressive: 2, normal: 3, conservative: 4 };
     const threshold = thresholds[sensitivity];
     const maxPossible = 8.5;
     let rawCommand: "BUY" | "SELL" | "HOLD";
@@ -1189,8 +1191,10 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
     }
 
     const atr = snap.atr14 ?? 5;
-    const tpDist = parseFloat((atr * 0.45).toFixed(2));
-    const slDist = parseFloat((tpDist * 0.8).toFixed(2));
+    const eaTpMultiplier = sensitivity === "super_aggressive" ? 0.20 : 0.45;
+    const eaSlMultiplier = sensitivity === "super_aggressive" ? 0.12 : 0.80;
+    const tpDist = parseFloat((atr * eaTpMultiplier).toFixed(2));
+    const slDist = parseFloat((tpDist * eaSlMultiplier).toFixed(2));
     const tp = rawCommand === "BUY" ? parseFloat((p + tpDist).toFixed(2))
       : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
     const sl = rawCommand === "BUY" ? parseFloat((p - slDist).toFixed(2))

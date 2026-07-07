@@ -21,7 +21,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Sensitivity = "aggressive" | "normal" | "conservative";
+type Sensitivity = "super_aggressive" | "aggressive" | "normal" | "conservative";
 type RawCommand = "BUY" | "SHORT" | "HOLD";
 type PositionState = "NONE" | "BUY" | "SHORT";
 type DisplayCommand = "BUKA BUY" | "BUKA SHORT" | "CLOSE BUY" | "CLOSE SHORT" | "TUNGGU";
@@ -112,7 +112,12 @@ function fmt(n: number | null | undefined) {
   return n != null ? n.toFixed(2) : "—";
 }
 
-const COOLDOWN_MS = 15_000;
+const COOLDOWN_BY_SENSITIVITY: Record<Sensitivity, number> = {
+  super_aggressive: 5_000,
+  aggressive: 10_000,
+  normal: 15_000,
+  conservative: 20_000,
+};
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -183,6 +188,9 @@ export function MentorModeWidget() {
 
   const ea = eaAccount?.connected ? eaAccount.data : null;
 
+  // ── Cooldown dinamis berdasarkan sensitivity ───────────────────────────────
+  const COOLDOWN_MS = COOLDOWN_BY_SENSITIVITY[sensitivity];
+
   // ── Cooldown ticker ────────────────────────────────────────────────────────
   // Only counts down from lastActionableTime; goes to 0 and stays there.
   useEffect(() => {
@@ -192,7 +200,7 @@ export function MentorModeWidget() {
       setCooldownLeft(remaining);
     }, 250);
     return () => clearInterval(id);
-  }, [isActive, lastActionableTime]);
+  }, [isActive, lastActionableTime, COOLDOWN_MS]);
 
   // ── Command resolution — runs on new signal OR position change ────────────
   useEffect(() => {
@@ -284,8 +292,13 @@ export function MentorModeWidget() {
           data-nodrag
           value={sensitivity}
           onChange={e => setSensitivity(e.target.value as Sensitivity)}
-          className="text-[10px] bg-zinc-800 border border-zinc-700 rounded-md px-1.5 py-0.5 text-zinc-300 cursor-pointer focus:outline-none"
+          className={`text-[10px] border rounded-md px-1.5 py-0.5 cursor-pointer focus:outline-none ${
+            sensitivity === "super_aggressive"
+              ? "bg-red-950/60 border-red-500/50 text-red-300 font-bold"
+              : "bg-zinc-800 border-zinc-700 text-zinc-300"
+          }`}
         >
+          <option value="super_aggressive">⚡ Super Agresif</option>
           <option value="aggressive">Agresif</option>
           <option value="normal">Normal</option>
           <option value="conservative">Konservatif</option>
@@ -314,6 +327,19 @@ export function MentorModeWidget() {
 
       {!minimized && (
         <div className="p-3 space-y-3">
+          {/* ── Super Agresif warning banner ── */}
+          {sensitivity === "super_aggressive" && (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-2">
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="text-red-400 text-xs font-black">⚡ SCALPING MODE</span>
+                <span className="text-[9px] bg-red-500/20 text-red-400 px-1 py-0.5 rounded font-bold border border-red-500/30">HIGH RISK</span>
+              </div>
+              <p className="text-[9px] text-red-300/70 leading-relaxed">
+                Threshold 1 indikator · TP/SL super ketat · Cooldown 5 detik. Hanya untuk scalper berpengalaman.
+              </p>
+            </div>
+          )}
+
           {!isActive ? (
             <div className="text-center py-4">
               <p className="text-xs text-zinc-500">Mentor Mode nonaktif</p>
