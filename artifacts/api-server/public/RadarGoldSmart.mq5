@@ -334,12 +334,27 @@ void FetchAndProcess()
       return;
    }
 
-   //--- Terapkan Reverse Mode
+   //--- Terapkan Reverse Mode (balik sinyal DAN hitung ulang TP/SL untuk arah baru)
    string cmd = g_rawCommand;
    if(InpReverseMode)
    {
       if(cmd == "BUY")       cmd = "SELL";
       else if(cmd == "SELL") cmd = "BUY";
+
+      // Hitung ulang TP/SL untuk arah yang dibalik
+      // (nilai dari server dihitung untuk arah ASLI — tidak valid untuk arah terbalik)
+      if(cmd == "BUY" || cmd == "SELL")
+      {
+         int    revDir  = (cmd == "BUY") ? 1 : -1;
+         // Back-calculate ATR dari TP1 yang dikirim server (tp1 = price ± atr*0.45)
+         double atrEst  = (g_tp1 > 0 && g_price > 0) ? MathAbs(g_tp1 - g_price) / 0.45 : 5.0;
+         g_tp1       = NormalizeDouble(g_price + revDir * atrEst * 0.45, _Digits);
+         g_tp2       = NormalizeDouble(g_price + revDir * atrEst * 0.80, _Digits);
+         g_tp3       = NormalizeDouble(g_price + revDir * atrEst * 1.30, _Digits);
+         g_sl        = NormalizeDouble(g_price - revDir * atrEst * 0.30, _Digits);
+         g_entryLow  = NormalizeDouble(g_price - atrEst * 0.08, _Digits);
+         g_entryHigh = NormalizeDouble(g_price + atrEst * 0.08, _Digits);
+      }
    }
 
    Print("[Sinyal] ", g_rawCommand,
