@@ -27,8 +27,10 @@ input int    InpTrailActivate = 50;  // Profit minimal (pips) sebelum trailing a
 input int    InpTrailDistance = 20;  // Jarak trailing SL dari harga (pips)
 
 input group "=== Smart Re-entry ==="
-input bool   InpSmartReentry  = true;   // Re-entry jika sinyal sama & harga balik ke zona
-input double InpReentryBufPip = 3.0;    // Buffer zona entry (pips) untuk toleransi re-entry
+input bool   InpSmartReentry   = true;   // Re-entry jika sinyal sama & harga balik ke zona
+input double InpReentryZonePip = 10.0;   // Lebar zona re-entry ±pip dari harga entry asli
+input double InpReentryBufPip  = 3.0;    // Buffer toleransi tambahan saat cek harga masuk zona
+input int    InpRentryCooldown = 30;     // Detik jeda minimum setelah posisi close sebelum re-entry
 
 input group "=== Tampilan ==="
 input bool   InpShowPanel = true;
@@ -71,7 +73,7 @@ double   g_conf       = 0;
 
 //--- Re-entry state
 bool     g_waitingReentry    = false;
-bool     g_reentryZoneExited = false;  // true setelah harga keluar zona → baru boleh re-entry
+datetime g_reentryAvailableAt = 0;    // cooldown: re-entry boleh setelah waktu ini
 string   g_lastEntrySignal   = "HOLD";
 double   g_reentryZoneLow    = 0;
 double   g_reentryZoneHigh   = 0;
@@ -143,28 +145,24 @@ void CheckPositionsClosed()
    {
       if(g_lastEntrySignal != "HOLD" && g_lastEntrySignal == g_lastCommand)
       {
-         // Hitung zona dari harga ENTRY ASLI (bukan harga server terbaru yang selalu update)
-         // Back-calculate ATR dari TP1 vs harga entry asli
-         double atrEst = (g_tp1 > 0 && g_lastEntryPrice > 0)
-            ? MathAbs(g_tp1 - g_lastEntryPrice) / 0.45
-            : (g_tp1 > 0 && g_price > 0 ? MathAbs(g_tp1 - g_price) / 0.45 : 5.0);
-         double halfZone      = atrEst * 0.08;
-         double basePrice     = (g_lastEntryPrice > 0) ? g_lastEntryPrice : g_price;
+         // Zona sempit ±InpReentryZonePip dari harga ENTRY ASLI
+         double pointSize  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+         double halfZone   = InpReentryZonePip * pointSize * 10.0;
+         double basePrice  = (g_lastEntryPrice > 0) ? g_lastEntryPrice : g_price;
 
-         g_waitingReentry     = true;
-         g_reentryZoneExited  = false;   // reset: harga harus keluar zona dulu
-         g_reentryZoneLow     = NormalizeDouble(basePrice - halfZone, _Digits);
-         g_reentryZoneHigh    = NormalizeDouble(basePrice + halfZone, _Digits);
+         g_waitingReentry      = true;
+         g_reentryAvailableAt  = TimeCurrent() + InpRentryCooldown;  // cooldown dulu
+         g_reentryZoneLow      = NormalizeDouble(basePrice - halfZone, _Digits);
+         g_reentryZoneHigh     = NormalizeDouble(basePrice + halfZone, _Digits);
 
-         Print("[Re-entry] Posisi ditutup. Menunggu harga KELUAR lalu KEMBALI ke zona ",
+         Print("[Re-entry] Posisi ditutup. Cooldown ", InpRentryCooldown, "s, lalu pantau zona ",
                DoubleToString(g_reentryZoneLow, 2), " – ", DoubleToString(g_reentryZoneHigh, 2),
-               " (dari entry asli $", DoubleToString(basePrice, 2), ") | Sinyal: ", g_lastEntrySignal);
-         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: TUNGGU KELUAR ZONA", clrYellow);
+               " (entry asli $", DoubleToString(basePrice, 2), ") | Sinyal: ", g_lastEntrySignal);
+         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: COOLDOWN...", clrOrange);
       }
       else
       {
-         g_waitingReentry     = false;
-         g_reentryZoneExited  = false;
+         g_waitingReentry = false;
          if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: OFF (sinyal beda)", clrGray);
       }
    }
@@ -396,9 +394,8 @@ void FetchAndProcess()
       {
          Print("[Trade] Sinyal HOLD — tutup semua posisi");
          CloseByType(-1);
-         g_waitingReentry     = false;
-         g_reentryZoneExited  = false;
-         g_lastEntrySignal    = "HOLD";
+         g_waitingReentry  = false;
+         g_lastEntrySignal = "HOLD";
          if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: OFF (HOLD)", clrGray);
       }
       return;
@@ -412,9 +409,8 @@ void FetchAndProcess()
    if(signalChanged)
    {
       Print("[Trade] Sinyal baru: ", cmd, " — tutup lawan & buka baru");
-      g_waitingReentry     = false;
-      g_reentryZoneExited  = false;
-      g_lastEntrySignal    = cmd;
+      g_waitingReentry  = false;
+      g_lastEntrySignal = cmd;
       if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: RESET (sinyal baru)", clrGray);
 
       CloseByType((int)oppType);
@@ -423,10 +419,11 @@ void FetchAndProcess()
       {
          OpenOrder(orderType);
          g_lastEntrySignal = cmd;
-         // Zona dihitung dari harga entry asli (g_lastEntryPrice diset di OpenOrder)
-         double atrEst2    = (g_tp1 > 0 && g_lastEntryPrice > 0) ? MathAbs(g_tp1 - g_lastEntryPrice) / 0.45 : 5.0;
-         g_reentryZoneLow  = NormalizeDouble(g_lastEntryPrice - atrEst2 * 0.08, _Digits);
-         g_reentryZoneHigh = NormalizeDouble(g_lastEntryPrice + atrEst2 * 0.08, _Digits);
+         // Zona ±InpReentryZonePip dari harga entry asli (g_lastEntryPrice diset di OpenOrder)
+         double pointSize2 = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+         double halfZone2  = InpReentryZonePip * pointSize2 * 10.0;
+         g_reentryZoneLow  = NormalizeDouble(g_lastEntryPrice - halfZone2, _Digits);
+         g_reentryZoneHigh = NormalizeDouble(g_lastEntryPrice + halfZone2, _Digits);
       }
       return;
    }
@@ -440,42 +437,33 @@ void FetchAndProcess()
       double pointSize = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
       double bufSize   = InpReentryBufPip * pointSize * 10.0;
 
+      bool cooldownDone = (TimeCurrent() >= g_reentryAvailableAt);
       bool inZone = (curPrice >= g_reentryZoneLow  - bufSize)
                  && (curPrice <= g_reentryZoneHigh + bufSize);
 
-      // Fase 1: Tunggu harga KELUAR zona dulu sebelum boleh re-entry
-      if(!inZone && !g_reentryZoneExited)
+      if(!cooldownDone)
       {
-         g_reentryZoneExited = true;
-         Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
-               " keluar zona [", DoubleToString(g_reentryZoneLow, 2),
-               "-", DoubleToString(g_reentryZoneHigh, 2), "] — siap pantau kembali");
-         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MENUNGGU KEMBALI KE ZONA", clrYellow);
-      }
-
-      // Fase 2: Harga sudah pernah keluar, kini masuk lagi → re-entry
-      if(inZone && g_reentryZoneExited && !HasPosition((int)posType))
-      {
-         Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
-               " KEMBALI ke zona [", DoubleToString(g_reentryZoneLow, 2),
-               "-", DoubleToString(g_reentryZoneHigh, 2), "] — masuk ulang ", cmd);
-         OpenOrder(orderType);
-         g_waitingReentry     = false;
-         g_reentryZoneExited  = false;
-         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MASUK! zona kembali", clrLime);
-      }
-      else if(!g_reentryZoneExited)
-      {
+         // Masih cooldown — tampilkan sisa detik
+         int sisaDetik = (int)(g_reentryAvailableAt - TimeCurrent());
          if(InpShowPanel)
             SetLabelText(LBL_REENTRY,
-               "Re-entry: tunggu keluar $" + DoubleToString(g_reentryZoneLow, 2)
-               + "-" + DoubleToString(g_reentryZoneHigh, 2), clrOrange);
+               "Re-entry: cooldown " + IntegerToString(sisaDetik) + "s...", clrOrange);
+      }
+      else if(inZone && !HasPosition((int)posType))
+      {
+         // Cooldown selesai + harga di zona entry asli → re-entry
+         Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
+               " di zona [", DoubleToString(g_reentryZoneLow, 2),
+               "-", DoubleToString(g_reentryZoneHigh, 2), "] — masuk ulang ", cmd);
+         OpenOrder(orderType);
+         g_waitingReentry = false;
+         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MASUK! zona entry", clrLime);
       }
       else if(!inZone)
       {
          if(InpShowPanel)
             SetLabelText(LBL_REENTRY,
-               "Re-entry: tunggu kembali $" + DoubleToString(g_reentryZoneLow, 2)
+               "Re-entry: tunggu $" + DoubleToString(g_reentryZoneLow, 2)
                + "-" + DoubleToString(g_reentryZoneHigh, 2), clrYellow);
       }
    }
