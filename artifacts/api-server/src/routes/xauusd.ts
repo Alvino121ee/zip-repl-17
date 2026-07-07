@@ -1344,8 +1344,21 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
 
     const timestamp = new Date().toISOString();
 
+    if (req.query.format === "plain2") {
+      // Format richer untuk Smart EA v3: CMD|PRICE|TP1|TP2|TP3|SL|ENTRY_LOW|ENTRY_HIGH|CONFIDENCE
+      const atrV = snap.atr14 ?? 5;
+      const dir2 = rawCommand === "BUY" ? 1 : rawCommand === "SELL" ? -1 : 0;
+      const tp1v = dir2 !== 0 ? parseFloat((p + dir2 * atrV * 0.45).toFixed(2)) : p;
+      const tp2v = dir2 !== 0 ? parseFloat((p + dir2 * atrV * 0.80).toFixed(2)) : p;
+      const tp3v = dir2 !== 0 ? parseFloat((p + dir2 * atrV * 1.30).toFixed(2)) : p;
+      const slv  = dir2 !== 0 ? parseFloat((p - dir2 * atrV * 0.30).toFixed(2)) : p;
+      const elv  = parseFloat((p - atrV * 0.08).toFixed(2));
+      const ehv  = parseFloat((p + atrV * 0.08).toFixed(2));
+      return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp1v}|${tp2v}|${tp3v}|${slv}|${elv}|${ehv}|${confidence}`);
+    }
+
     if (req.query.format === "plain") {
-      // Format: COMMAND|PRICE|TP|SL|CONFIDENCE  — mudah di-parse MQL4/5 StringSplit
+      // Format lama: COMMAND|PRICE|TP|SL|CONFIDENCE  — backward compat
       return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp ?? 0}|${sl ?? 0}|${confidence}`);
     }
 

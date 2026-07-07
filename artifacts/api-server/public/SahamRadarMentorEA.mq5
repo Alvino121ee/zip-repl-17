@@ -1,74 +1,105 @@
 //+------------------------------------------------------------------+
-//|                                        SahamRadarMentorEA.mq5   |
-//|                         Saham Radar - Mentor Mode Expert Advisor |
-//|                                                                  |
-//| Polling sinyal & push data akun setiap 2 detik                  |
-//| (sinkron dengan Mentor Mode widget di dashboard)                 |
+//|                                    SahamRadarMentorEA.mq5        |
+//|                      Saham Radar — Smart Mentor EA v3.0          |
+//|  Fitur: Trailing Stop, Smart Re-entry, Reverse Mode             |
 //+------------------------------------------------------------------+
 #property copyright "Saham Radar"
-#property version   "2.20"
-#property description "Mentor Mode EA - Saham Radar AI Trading"
+#property version   "3.00"
+#property description "Smart Mentor EA v3 - Trailing Stop + Smart Re-entry + Reverse Mode"
 
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
 input group "=== Koneksi API ==="
 input string InpApiUrl      = "https://8ae1aa97-4c85-4df7-a5c8-a0a0d4f6f453-00-112mi78mouw69.pike.replit.dev";
-input string InpEaApiKey    = "sr_ea_79c5d01e86372a5dcf112d0b9ddfdd78ea851deb7400277c";
-input string InpSensitivity = "normal"; // aggressive / normal / conservative
+input string InpEaApiKey    = "";
+input string InpSensitivity = "aggressive"; // super_aggressive|aggressive|normal|conservative
 
 input group "=== Trading ==="
 input double InpLotSize     = 0.01;
 input bool   InpAutoTrade   = false;
 input int    InpMagicNumber = 202607;
+input bool   InpReverseMode = false;   // true = balik sinyal (BUY->SELL, SELL->BUY)
+
+input group "=== Trailing Stop ==="
+input bool   InpUseTrailing   = true;
+input int    InpTrailActivate = 50;  // Profit minimal (pips) sebelum trailing aktif
+input int    InpTrailDistance = 20;  // Jarak trailing SL dari harga (pips)
+
+input group "=== Smart Re-entry ==="
+input bool   InpSmartReentry  = true;   // Re-entry jika sinyal sama & harga balik ke zona
+input double InpReentryBufPip = 3.0;    // Buffer zona entry (pips) untuk toleransi re-entry
 
 input group "=== Tampilan ==="
-input bool   InpShowPanel   = true;
+input bool   InpShowPanel = true;
 
 //--- Constants
 #define POLL_INTERVAL_SEC 2
 
 //--- Label names
-#define LBL_BG     "SR_BG"
-#define LBL_TITLE  "SR_TITLE"
-#define LBL_STATUS "SR_STATUS"
-#define LBL_CMD    "SR_CMD"
-#define LBL_PRICE  "SR_PRICE"
-#define LBL_TPSL   "SR_TPSL"
-#define LBL_CONF   "SR_CONF"
-#define LBL_SEP    "SR_SEP"
-#define LBL_BAL    "SR_BAL"
-#define LBL_EQ     "SR_EQ"
-#define LBL_PNL    "SR_PNL"
-#define LBL_POS    "SR_POS"
-#define LBL_TIME   "SR_TIME"
+#define LBL_BG       "SR_BG"
+#define LBL_TITLE    "SR_TITLE"
+#define LBL_STATUS   "SR_STATUS"
+#define LBL_CMD      "SR_CMD"
+#define LBL_MODE     "SR_MODE"
+#define LBL_PRICE    "SR_PRICE"
+#define LBL_TPSL     "SR_TPSL"
+#define LBL_CONF     "SR_CONF"
+#define LBL_TRAIL    "SR_TRAIL"
+#define LBL_REENTRY  "SR_REENTRY"
+#define LBL_SEP      "SR_SEP"
+#define LBL_BAL      "SR_BAL"
+#define LBL_EQ       "SR_EQ"
+#define LBL_PNL      "SR_PNL"
+#define LBL_POS      "SR_POS"
+#define LBL_TIME     "SR_TIME"
 
-//--- Global variables
+//--- Global state
 CTrade   g_trade;
-datetime g_lastPoll    = 0;
-string   g_lastCommand = "HOLD";
+datetime g_lastPoll     = 0;
+string   g_lastCommand  = "HOLD";  // setelah reverse
+string   g_rawCommand   = "HOLD";  // sebelum reverse (dari API)
 
-double   g_price = 0;
-double   g_tp    = 0;
-double   g_sl    = 0;
-double   g_conf  = 0;
+double   g_price      = 0;
+double   g_tp1        = 0;
+double   g_tp2        = 0;
+double   g_tp3        = 0;
+double   g_sl         = 0;
+double   g_entryLow   = 0;
+double   g_entryHigh  = 0;
+double   g_conf       = 0;
+
+//--- Re-entry state
+bool     g_waitingReentry    = false;
+string   g_lastEntrySignal   = "HOLD";
+double   g_reentryZoneLow    = 0;
+double   g_reentryZoneHigh   = 0;
+double   g_lastEntryPrice    = 0;
+int      g_prevPosCount      = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
    if(InpEaApiKey == "")
    {
-      Alert("Saham Radar EA: EaApiKey kosong!");
+      Alert("Saham Radar EA: EaApiKey kosong! Buat EA API key di Admin Panel dulu.");
       return INIT_PARAMETERS_INCORRECT;
    }
 
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(20);
+   g_prevPosCount = CountOurPositions();
 
    if(InpShowPanel) CreatePanel();
 
-   Print("Saham Radar Mentor EA v2.20 aktif - polling ", POLL_INTERVAL_SEC, "s");
-   Print("URL: ", InpApiUrl);
+   Print("=== Saham Radar Smart EA v3.0 aktif ===");
+   Print("URL        : ", InpApiUrl);
+   Print("Magic#     : ", InpMagicNumber);
+   Print("Mode       : ", InpReverseMode ? "REVERSE (sinyal dibalik)" : "NORMAL");
+   Print("TrailStop  : ", InpUseTrailing
+      ? "ON — aktif setelah " + IntegerToString(InpTrailActivate) + " pips profit, jarak " + IntegerToString(InpTrailDistance) + " pips"
+      : "OFF");
+   Print("Re-entry   : ", InpSmartReentry ? "ON" : "OFF");
 
    FetchAndProcess();
    return INIT_SUCCEEDED;
@@ -78,33 +109,124 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    if(InpShowPanel) DeletePanel();
-   Print("Saham Radar Mentor EA dihentikan.");
+   Print("Saham Radar Smart EA v3.0 dihentikan.");
 }
 
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   if(InpUseTrailing)   ManageTrailingStops();
+   if(InpSmartReentry)  CheckPositionsClosed();
+
    if(TimeCurrent() - g_lastPoll < POLL_INTERVAL_SEC) return;
    g_lastPoll = TimeCurrent();
+
    PushAccountData();
    FetchAndProcess();
 }
 
 //+------------------------------------------------------------------+
-// Helper: konversi string ke uchar array (tanpa null terminator)
-void StringToUcharArray(const string text, uchar &buf[])
+// Hitung jumlah posisi milik EA ini
+int CountOurPositions()
 {
-   int len = StringLen(text);
-   ArrayResize(buf, len);
-   StringToCharArray(text, buf, 0, len);
+   int count = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))               continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      count++;
+   }
+   return count;
 }
 
 //+------------------------------------------------------------------+
+// Deteksi posisi tertutup → aktifkan re-entry waiting
+void CheckPositionsClosed()
+{
+   int curCount = CountOurPositions();
+   if(curCount < g_prevPosCount)
+   {
+      // Satu atau lebih posisi baru ditutup
+      if(g_lastEntrySignal != "HOLD" && g_lastEntrySignal == g_lastCommand)
+      {
+         // Sinyal masih sama — aktifkan menunggu re-entry
+         g_waitingReentry  = true;
+         g_reentryZoneLow  = g_entryLow;
+         g_reentryZoneHigh = g_entryHigh;
+         Print("[Re-entry] Posisi ditutup. Menunggu harga kembali ke zona ",
+               DoubleToString(g_reentryZoneLow, 2), " – ", DoubleToString(g_reentryZoneHigh, 2),
+               " | Sinyal: ", g_lastEntrySignal);
+         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MENUNGGU ZONA", clrYellow);
+      }
+      else
+      {
+         // Sinyal sudah berubah — tidak perlu re-entry
+         g_waitingReentry = false;
+         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: OFF (sinyal beda)", clrGray);
+      }
+   }
+   g_prevPosCount = curCount;
+}
+
+//+------------------------------------------------------------------+
+// Trailing stop — jalankan setiap tick
+void ManageTrailingStops()
+{
+   double pointSize = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   int    digits    = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   // Konversi pips ke harga (1 pip = 10 point pada pair 5-digit)
+   double trailAct  = InpTrailActivate * pointSize * 10.0;
+   double trailDist = InpTrailDistance * pointSize * 10.0;
+
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))               continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      ENUM_POSITION_TYPE pt        = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double             openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double             curSL     = PositionGetDouble(POSITION_SL);
+      double             curTP     = PositionGetDouble(POSITION_TP);
+      double             ask       = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+      double             bid       = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+      if(pt == POSITION_TYPE_BUY)
+      {
+         double profit = bid - openPrice;
+         if(profit < trailAct) continue;  // belum cukup profit untuk aktifkan trailing
+         double newSL = NormalizeDouble(bid - trailDist, digits);
+         // Hanya geser SL ke atas (tidak boleh turun)
+         if(newSL > curSL + pointSize)
+         {
+            if(g_trade.PositionModify(ticket, newSL, curTP))
+               Print("[Trail] BUY #", ticket, " SL: ", DoubleToString(curSL, digits), " → ", DoubleToString(newSL, digits));
+         }
+      }
+      else if(pt == POSITION_TYPE_SELL)
+      {
+         double profit = openPrice - ask;
+         if(profit < trailAct) continue;
+         double newSL = NormalizeDouble(ask + trailDist, digits);
+         // Hanya geser SL ke bawah (tidak boleh naik)
+         if(curSL == 0 || newSL < curSL - pointSize)
+         {
+            if(g_trade.PositionModify(ticket, newSL, curTP))
+               Print("[Trail] SELL #", ticket, " SL: ", DoubleToString(curSL, digits), " → ", DoubleToString(newSL, digits));
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+// Push data akun MT5 ke server (best-effort)
 void PushAccountData()
 {
    string url = InpApiUrl + "/api/xauusd/ea-account?key=" + InpEaApiKey;
 
-   //--- Build positions JSON
    string posJson  = "[";
    double totalPnl = 0.0;
    int    total    = PositionsTotal();
@@ -114,13 +236,12 @@ void PushAccountData()
       ulong ticket = PositionGetTicket(i);
       if(!PositionSelectByTicket(ticket)) continue;
 
-      double              pnl   = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      totalPnl                 += pnl;
-      ENUM_POSITION_TYPE  pt    = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      string              ptype = (pt == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+      double             pnl   = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      totalPnl                += pnl;
+      ENUM_POSITION_TYPE pt    = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      string             ptype = (pt == POSITION_TYPE_BUY) ? "BUY" : "SELL";
 
       if(i > 0) posJson += ",";
-
       posJson += "{\"ticket\":"      + IntegerToString((long)ticket)
               + ",\"type\":\""       + ptype + "\""
               + ",\"symbol\":\""     + PositionGetString(POSITION_SYMBOL) + "\""
@@ -136,7 +257,6 @@ void PushAccountData()
    }
    posJson += "]";
 
-   //--- Build JSON body
    string body = "{"
       + "\"balance\":"        + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),    2)
       + ",\"equity\":"        + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY),     2)
@@ -151,25 +271,25 @@ void PushAccountData()
       + ",\"currency\":\""    + AccountInfoString(ACCOUNT_CURRENCY) + "\""
       + "}";
 
-   // WebRequest 7-param: (method, url, headers, timeout, data[], result[], result_headers)
    uchar  postBuf[];
    uchar  resBuf[];
    string resHeaders = "";
    StringToUcharArray(body, postBuf);
    WebRequest("POST", url, "Content-Type: application/json\r\n", 3000, postBuf, resBuf, resHeaders);
-   //--- Ignore result - push is best-effort
 }
 
 //+------------------------------------------------------------------+
+// Fetch sinyal dari API dan proses trading
 void FetchAndProcess()
 {
+   // Gunakan format=plain2 untuk mendapatkan data lengkap:
+   // CMD|PRICE|TP1|TP2|TP3|SL|ENTRY_LOW|ENTRY_HIGH|CONFIDENCE
    string url = InpApiUrl + "/api/xauusd/ea-signal"
               + "?key="         + InpEaApiKey
               + "&sensitivity=" + InpSensitivity
-              + "&format=plain";
+              + "&format=plain2";
 
-   // WebRequest 7-param: (method, url, headers, timeout, data[], result[], result_headers)
-   uchar  sendBuf[];   // empty for GET
+   uchar  sendBuf[];
    uchar  recvBuf[];
    string resHeaders = "";
 
@@ -179,80 +299,161 @@ void FetchAndProcess()
    if(code == -1)
    {
       int err = GetLastError();
-      string msg;
-      if(err == 5203)
-         msg = "Tambahkan URL di: Tools > Options > Expert Advisors > Allow WebRequest";
-      else
-         msg = "Koneksi error: " + IntegerToString(err);
-      Print("ERROR: ", msg);
+      string msg = (err == 5203)
+         ? "Tambahkan URL ke: Tools > Options > Expert Advisors > Allow WebRequest"
+         : "Koneksi error: " + IntegerToString(err);
+      Print("[ERROR] ", msg);
       if(InpShowPanel) SetLabelText(LBL_STATUS, "ERROR " + IntegerToString(err), clrRed);
       return;
    }
-
    if(code != 200)
    {
-      string body = CharArrayToString(recvBuf);
-      Print("API error HTTP ", code, ": ", body);
+      Print("[ERROR] HTTP ", code, ": ", CharArrayToString(recvBuf));
       if(InpShowPanel) SetLabelText(LBL_STATUS, "HTTP " + IntegerToString(code), clrRed);
       return;
    }
 
-   //--- Parse response: COMMAND|PRICE|TP|SL|CONFIDENCE
+   //--- Parse: CMD|PRICE|TP1|TP2|TP3|SL|ENTRY_LOW|ENTRY_HIGH|CONFIDENCE
    string resp = CharArrayToString(recvBuf);
    StringTrimRight(resp);
    StringTrimLeft(resp);
 
    string parts[];
-   if(StringSplit(resp, '|', parts) < 5)
+   int numParts = StringSplit(resp, '|', parts);
+
+   if(numParts >= 9)
    {
-      Print("Respons tidak valid: ", resp);
+      g_rawCommand = parts[0];
+      g_price      = StringToDouble(parts[1]);
+      g_tp1        = StringToDouble(parts[2]);
+      g_tp2        = StringToDouble(parts[3]);
+      g_tp3        = StringToDouble(parts[4]);
+      g_sl         = StringToDouble(parts[5]);
+      g_entryLow   = StringToDouble(parts[6]);
+      g_entryHigh  = StringToDouble(parts[7]);
+      g_conf       = StringToDouble(parts[8]);
+   }
+   else if(numParts >= 5)
+   {
+      // Fallback format lama: CMD|PRICE|TP|SL|CONF
+      g_rawCommand = parts[0];
+      g_price      = StringToDouble(parts[1]);
+      g_tp1        = StringToDouble(parts[2]);
+      g_tp2        = g_tp1;
+      g_tp3        = g_tp1;
+      g_sl         = StringToDouble(parts[3]);
+      g_conf       = StringToDouble(parts[4]);
+      double atrEst  = MathAbs(g_tp1 - g_price) / 0.45;
+      g_entryLow   = g_price - atrEst * 0.08;
+      g_entryHigh  = g_price + atrEst * 0.08;
+   }
+   else
+   {
+      Print("[ERROR] Respons tidak valid: ", resp);
       if(InpShowPanel) SetLabelText(LBL_STATUS, "Respons tidak valid", clrRed);
       return;
    }
 
-   string cmd = parts[0];
-   g_price    = StringToDouble(parts[1]);
-   g_tp       = StringToDouble(parts[2]);
-   g_sl       = StringToDouble(parts[3]);
-   g_conf     = StringToDouble(parts[4]);
+   //--- Terapkan Reverse Mode
+   string cmd = g_rawCommand;
+   if(InpReverseMode)
+   {
+      if(cmd == "BUY")       cmd = "SELL";
+      else if(cmd == "SELL") cmd = "BUY";
+   }
 
-   Print("Sinyal: ", cmd,
-         " | Harga: ", DoubleToString(g_price, 2),
-         " | TP: ",    DoubleToString(g_tp, 2),
-         " | SL: ",    DoubleToString(g_sl, 2),
-         " | Conf: ",  DoubleToString(g_conf * 100, 0), "%");
+   Print("[Sinyal] ", g_rawCommand,
+         (InpReverseMode ? " → " + cmd + " (REVERSE)" : ""),
+         " | $", DoubleToString(g_price, 2),
+         " | TP1=", DoubleToString(g_tp1, 2),
+         " | TP2=", DoubleToString(g_tp2, 2),
+         " | SL=",  DoubleToString(g_sl, 2),
+         " | Zone=", DoubleToString(g_entryLow, 2), "–", DoubleToString(g_entryHigh, 2),
+         " | Conf=", DoubleToString(g_conf * 100, 0), "%");
 
    if(InpShowPanel) UpdatePanel(cmd);
 
    //--- Auto trading
-   if(InpAutoTrade)
-   {
-      string prevCmd = g_lastCommand;
-      g_lastCommand  = cmd;
-
-      if(cmd != prevCmd || !HasPosition(-1))
-      {
-         if(cmd == "BUY")
-         {
-            CloseByType(POSITION_TYPE_SELL);
-            if(!HasPosition(POSITION_TYPE_BUY))
-               OpenOrder(ORDER_TYPE_BUY);
-         }
-         else if(cmd == "SELL")
-         {
-            CloseByType(POSITION_TYPE_BUY);
-            if(!HasPosition(POSITION_TYPE_SELL))
-               OpenOrder(ORDER_TYPE_SELL);
-         }
-         else // HOLD
-         {
-            CloseByType(-1);
-         }
-      }
-   }
-   else
+   if(!InpAutoTrade)
    {
       g_lastCommand = cmd;
+      return;
+   }
+
+   bool signalChanged = (cmd != g_lastCommand);
+   g_lastCommand = cmd;
+
+   //--- HOLD: tutup semua posisi & reset re-entry
+   if(cmd == "HOLD")
+   {
+      if(signalChanged)
+      {
+         Print("[Trade] Sinyal HOLD — tutup semua posisi");
+         CloseByType(-1);
+         g_waitingReentry  = false;
+         g_lastEntrySignal = "HOLD";
+         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: OFF (HOLD)", clrGray);
+      }
+      return;
+   }
+
+   ENUM_ORDER_TYPE    orderType = (cmd == "BUY") ? ORDER_TYPE_BUY  : ORDER_TYPE_SELL;
+   ENUM_POSITION_TYPE posType   = (cmd == "BUY") ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   ENUM_POSITION_TYPE oppType   = (cmd == "BUY") ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+
+   //--- Sinyal BERUBAH: tutup posisi berlawanan, buka langsung
+   if(signalChanged)
+   {
+      Print("[Trade] Sinyal berubah ke ", cmd, " — tutup posisi berlawanan & buka baru");
+      g_waitingReentry  = false;
+      g_lastEntrySignal = cmd;
+      if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: RESET (sinyal baru)", clrGray);
+
+      CloseByType((int)oppType);
+
+      if(!HasPosition((int)posType))
+      {
+         OpenOrder(orderType);
+         g_lastEntrySignal  = cmd;
+         g_reentryZoneLow   = g_entryLow;
+         g_reentryZoneHigh  = g_entryHigh;
+      }
+      return;
+   }
+
+   //--- Sinyal SAMA: cek re-entry jika sedang menunggu
+   if(InpSmartReentry && g_waitingReentry && g_lastEntrySignal == cmd)
+   {
+      double curPrice = (cmd == "BUY")
+         ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+         : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+      double pointSize = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      double bufSize   = InpReentryBufPip * pointSize * 10.0;
+
+      bool inZone = (curPrice >= g_reentryZoneLow  - bufSize)
+                 && (curPrice <= g_reentryZoneHigh + bufSize);
+
+      if(inZone && !HasPosition((int)posType))
+      {
+         Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
+               " kembali ke zona [", DoubleToString(g_reentryZoneLow, 2),
+               "–", DoubleToString(g_reentryZoneHigh, 2), "] — masuk ulang ", cmd);
+         OpenOrder(orderType);
+         g_waitingReentry  = false;
+         g_reentryZoneLow  = g_entryLow;
+         g_reentryZoneHigh = g_entryHigh;
+         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MASUK! zona kembali", clrLime);
+      }
+      else if(!inZone)
+      {
+         if(InpShowPanel)
+         {
+            string zoneInfo = "Re-entry: tunggu $" + DoubleToString(g_reentryZoneLow, 2)
+                            + "–" + DoubleToString(g_reentryZoneHigh, 2);
+            SetLabelText(LBL_REENTRY, zoneInfo, clrYellow);
+         }
+      }
    }
 }
 
@@ -262,9 +463,9 @@ void OpenOrder(ENUM_ORDER_TYPE type)
    double price  = (type == ORDER_TYPE_BUY)
                  ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                  : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double tpNorm = NormalizeDouble(g_tp, _Digits);
-   double slNorm = NormalizeDouble(g_sl, _Digits);
-   string cmt    = "SahamRadar " + DoubleToString(g_conf * 100, 0) + "%";
+   double tpNorm = NormalizeDouble(g_tp1, _Digits);
+   double slNorm = NormalizeDouble(g_sl,  _Digits);
+   string cmt    = "SR" + (InpReverseMode ? "-REV" : "") + " " + DoubleToString(g_conf * 100, 0) + "%";
 
    bool ok;
    if(type == ORDER_TYPE_BUY)
@@ -273,9 +474,15 @@ void OpenOrder(ENUM_ORDER_TYPE type)
       ok = g_trade.Sell(InpLotSize, Symbol(), price, slNorm, tpNorm, cmt);
 
    if(ok)
-      Print("Order OK: ", EnumToString(type), " tiket=", g_trade.ResultOrder());
+   {
+      g_lastEntryPrice = price;
+      Print("[Order] ", EnumToString(type), " OK | tiket=", g_trade.ResultOrder(),
+            " | harga=", DoubleToString(price, _Digits),
+            " | TP=", DoubleToString(tpNorm, _Digits),
+            " | SL=", DoubleToString(slNorm, _Digits));
+   }
    else
-      Print("Order GAGAL: retcode=", g_trade.ResultRetcode(), " ", g_trade.ResultComment());
+      Print("[Order] GAGAL | retcode=", g_trade.ResultRetcode(), " | ", g_trade.ResultComment());
 }
 
 //+------------------------------------------------------------------+
@@ -284,7 +491,7 @@ bool HasPosition(int typeFilter)
    for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong ticket = PositionGetTicket(i);
-      if(!PositionSelectByTicket(ticket))          continue;
+      if(!PositionSelectByTicket(ticket))               continue;
       if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
       if(typeFilter == -1) return true;
@@ -304,41 +511,52 @@ void CloseByType(int typeFilter)
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
       if(typeFilter != -1 && (int)PositionGetInteger(POSITION_TYPE) != typeFilter) continue;
       g_trade.PositionClose(ticket);
+      Print("[Close] Posisi #", ticket, " ditutup (filter=", typeFilter, ")");
    }
 }
 
 //+------------------------------------------------------------------+
-//--- Panel functions
+void StringToUcharArray(const string text, uchar &buf[])
+{
+   int len = StringLen(text);
+   ArrayResize(buf, len);
+   StringToCharArray(text, buf, 0, len);
+}
+
+//+------------------------------------------------------------------+
+//                         PANEL FUNCTIONS
 //+------------------------------------------------------------------+
 void CreatePanel()
 {
-   int x = 10, y = 25, w = 280, h = 195;
-
+   int x = 10, y = 25, w = 300, h = 230;
    if(ObjectFind(0, LBL_BG) >= 0) DeletePanel();
 
    ObjectCreate(0, LBL_BG, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_XDISTANCE,    x);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_YDISTANCE,    y);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_XSIZE,         w);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_YSIZE,         h);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_BGCOLOR,       C'15,15,25');
-   ObjectSetInteger(0, LBL_BG, OBJPROP_BORDER_COLOR,  C'60,60,90');
-   ObjectSetInteger(0, LBL_BG, OBJPROP_CORNER,        CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_BACK,          false);
-   ObjectSetInteger(0, LBL_BG, OBJPROP_SELECTABLE,    false);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_XDISTANCE,   x);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_YDISTANCE,   y);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_XSIZE,        w);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_YSIZE,        h);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_BGCOLOR,      C'12,14,22');
+   ObjectSetInteger(0, LBL_BG, OBJPROP_BORDER_COLOR, C'70,60,100');
+   ObjectSetInteger(0, LBL_BG, OBJPROP_CORNER,       CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_BACK,         false);
+   ObjectSetInteger(0, LBL_BG, OBJPROP_SELECTABLE,   false);
 
-   MakeLabel(LBL_TITLE,  x+8, y+6,   "SAHAM RADAR MENTOR",   clrWhite,   9);
-   MakeLabel(LBL_STATUS, x+8, y+22,  "Menghubungkan...",      clrGray,    8);
-   MakeLabel(LBL_CMD,    x+8, y+44,  "---",                   clrGray,   18);
-   MakeLabel(LBL_PRICE,  x+8, y+72,  "Harga: ---",            clrSilver,  8);
-   MakeLabel(LBL_TPSL,   x+8, y+86,  "TP: --- | SL: ---",    clrSilver,  8);
-   MakeLabel(LBL_CONF,   x+8, y+100, "Conf: ---",             clrSilver,  8);
-   MakeLabel(LBL_SEP,    x+8, y+114, "------------------------", C'55,55,80', 7);
-   MakeLabel(LBL_BAL,    x+8, y+126, "Balance: ---",          clrSilver,  8);
-   MakeLabel(LBL_EQ,     x+8, y+140, "Equity:  ---",          clrSilver,  8);
-   MakeLabel(LBL_PNL,    x+8, y+154, "PnL:     ---",          clrSilver,  8);
-   MakeLabel(LBL_POS,    x+8, y+168, "Posisi:  ---",          clrSilver,  8);
-   MakeLabel(LBL_TIME,   x+8, y+182, "---",                   C'55,55,80', 7);
+   MakeLabel(LBL_TITLE,   x+8, y+6,   "SAHAM RADAR SMART EA v3.0",  clrWhite,   9);
+   MakeLabel(LBL_STATUS,  x+8, y+22,  "Menghubungkan...",             clrGray,    8);
+   MakeLabel(LBL_CMD,     x+8, y+42,  "---",                          clrGray,   18);
+   MakeLabel(LBL_MODE,    x+8, y+72,  "Mode: NORMAL",                 clrSilver,  8);
+   MakeLabel(LBL_PRICE,   x+8, y+86,  "Harga: --- | Zone: ---",      clrSilver,  8);
+   MakeLabel(LBL_TPSL,    x+8, y+100, "TP1: --- TP2: --- SL: ---",   clrSilver,  8);
+   MakeLabel(LBL_CONF,    x+8, y+114, "Conf: --- | Auto: OFF",        clrSilver,  8);
+   MakeLabel(LBL_TRAIL,   x+8, y+128, "Trail: OFF",                   clrGray,    8);
+   MakeLabel(LBL_REENTRY, x+8, y+142, "Re-entry: OFF",                clrGray,    8);
+   MakeLabel(LBL_SEP,     x+8, y+158, "-------------------------------", C'50,50,75', 7);
+   MakeLabel(LBL_BAL,     x+8, y+170, "Balance: ---",                 clrSilver,  8);
+   MakeLabel(LBL_EQ,      x+8, y+184, "Equity:  ---",                 clrSilver,  8);
+   MakeLabel(LBL_PNL,     x+8, y+198, "PnL:     ---",                 clrSilver,  8);
+   MakeLabel(LBL_POS,     x+8, y+212, "Posisi: --- | Entry: ---",     clrSilver,  8);
+   MakeLabel(LBL_TIME,    x+8, y+222, "---",                          C'50,50,75', 7);
 
    ChartRedraw();
 }
@@ -369,22 +587,48 @@ void UpdatePanel(string cmd)
 {
    color  cmdColor;
    string cmdText;
+   if(cmd == "BUY")
+   {
+      cmdColor = clrLime;
+      cmdText  = InpReverseMode ? "▲ BUY [REVERSE dari SELL]" : "▲ BUY  (NAIK)";
+   }
+   else if(cmd == "SELL")
+   {
+      cmdColor = clrRed;
+      cmdText  = InpReverseMode ? "▼ SELL [REVERSE dari BUY]" : "▼ SELL (TURUN)";
+   }
+   else
+   {
+      cmdColor = clrGray;
+      cmdText  = "— HOLD (TUNGGU)";
+   }
 
-   if(cmd == "BUY")        { cmdColor = clrLime;  cmdText = "BUY  (NAIK)";  }
-   else if(cmd == "SELL")  { cmdColor = clrRed;   cmdText = "SELL (TURUN)"; }
-   else                    { cmdColor = clrGray;  cmdText = "HOLD (TUNGGU)";}
-
-   SetLabelText(LBL_CMD,    cmdText,  cmdColor);
-   SetLabelText(LBL_STATUS, "Terhubung (2s)", clrLime);
-   SetLabelText(LBL_PRICE,  "Harga: " + DoubleToString(g_price, 2), clrSilver);
+   SetLabelText(LBL_CMD,    cmdText, cmdColor);
+   SetLabelText(LBL_STATUS, "Terhubung | polling " + IntegerToString(POLL_INTERVAL_SEC) + "s", clrLime);
+   SetLabelText(LBL_MODE,
+      "Mode: " + (InpReverseMode ? "REVERSE" : "NORMAL") + " | Magic#" + IntegerToString(InpMagicNumber),
+      InpReverseMode ? clrOrange : clrAqua);
+   SetLabelText(LBL_PRICE,
+      "Harga: $" + DoubleToString(g_price, 2) + " | Zone: " + DoubleToString(g_entryLow, 2) + "–" + DoubleToString(g_entryHigh, 2),
+      clrSilver);
    SetLabelText(LBL_TPSL,
-      "TP: " + DoubleToString(g_tp, 2) + " | SL: " + DoubleToString(g_sl, 2),
+      "TP1:" + DoubleToString(g_tp1, 2) + " TP2:" + DoubleToString(g_tp2, 2) + " SL:" + DoubleToString(g_sl, 2),
       clrSilver);
    SetLabelText(LBL_CONF,
-      "Conf: " + DoubleToString(g_conf * 100, 0) + "% | Auto=" + (InpAutoTrade ? "ON" : "OFF"),
-      clrSilver);
+      "Conf: " + DoubleToString(g_conf * 100, 0) + "% | Auto: " + (InpAutoTrade ? "ON" : "OFF"),
+      InpAutoTrade ? clrLime : clrGray);
+   SetLabelText(LBL_TRAIL,
+      InpUseTrailing
+         ? "Trail: ON — act=" + IntegerToString(InpTrailActivate) + "p dist=" + IntegerToString(InpTrailDistance) + "p"
+         : "Trail: OFF",
+      InpUseTrailing ? clrAqua : clrGray);
 
-   //--- Account info (langsung baca dari MT5 lokal)
+   if(!g_waitingReentry)
+      SetLabelText(LBL_REENTRY,
+         "Re-entry: " + (InpSmartReentry ? "Aktif (menunggu posisi tutup)" : "OFF"),
+         clrGray);
+
+   // Akun info
    double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
    double totalPnl = 0.0;
@@ -403,16 +647,18 @@ void UpdatePanel(string cmd)
    string pnlSign = (totalPnl >= 0) ? "+" : "";
    color  pnlClr  = (totalPnl >= 0) ? clrLime : clrRed;
 
-   SetLabelText(LBL_BAL, "Balance: " + DoubleToString(balance,  2) + " USD", clrSilver);
-   SetLabelText(LBL_EQ,  "Equity:  " + DoubleToString(equity,   2) + " USD", clrSilver);
+   SetLabelText(LBL_BAL, "Balance: " + DoubleToString(balance, 2) + " USD", clrSilver);
+   SetLabelText(LBL_EQ,  "Equity:  " + DoubleToString(equity,  2) + " USD", clrSilver);
    SetLabelText(LBL_PNL, "PnL:     " + pnlSign + DoubleToString(totalPnl, 2) + " USD", pnlClr);
-   SetLabelText(LBL_POS, "Posisi:  " + IntegerToString(openPos) + " terbuka", clrSilver);
+   SetLabelText(LBL_POS,
+      "Posisi: " + IntegerToString(openPos) + " | Entry: " + (g_lastEntryPrice > 0 ? "$" + DoubleToString(g_lastEntryPrice, 2) : "---"),
+      clrSilver);
 
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
    SetLabelText(LBL_TIME,
-      StringFormat("Update: %02d:%02d:%02d", dt.hour, dt.min, dt.sec),
-      C'55,55,80');
+      StringFormat("Update: %02d:%02d:%02d | SR Smart EA v3", dt.hour, dt.min, dt.sec),
+      C'50,50,75');
 
    ChartRedraw();
 }
@@ -421,9 +667,9 @@ void UpdatePanel(string cmd)
 void DeletePanel()
 {
    string labels[] = {
-      LBL_BG, LBL_TITLE, LBL_STATUS, LBL_CMD,
-      LBL_PRICE, LBL_TPSL, LBL_CONF, LBL_SEP,
-      LBL_BAL, LBL_EQ, LBL_PNL, LBL_POS, LBL_TIME
+      LBL_BG, LBL_TITLE, LBL_STATUS, LBL_CMD, LBL_MODE,
+      LBL_PRICE, LBL_TPSL, LBL_CONF, LBL_TRAIL, LBL_REENTRY,
+      LBL_SEP, LBL_BAL, LBL_EQ, LBL_PNL, LBL_POS, LBL_TIME
    };
    for(int i = 0; i < ArraySize(labels); i++)
       ObjectDelete(0, labels[i]);
