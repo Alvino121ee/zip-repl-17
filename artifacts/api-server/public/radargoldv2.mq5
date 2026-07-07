@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                         RadarGoldSmart.mq5       |
-//|                         Radar Gold Smart EA — GoldRadar.ai       |
+//|                                           radargoldv2.mq5        |
+//|                              Radar Gold v2 EA — GoldRadar.ai     |
 //|  Fitur: Trailing Stop, Smart Re-entry, Reverse Mode             |
 //+------------------------------------------------------------------+
 #property copyright "GoldRadar.ai"
 #property version   "3.00"
-#property description "Radar Gold Smart EA v3 - Trailing Stop + Smart Re-entry + Reverse Mode"
+#property description "Radar Gold v2 EA - Trailing Stop + Smart Re-entry + Reverse Mode"
 
 #include <Trade\Trade.mqh>
 

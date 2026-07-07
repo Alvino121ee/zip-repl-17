@@ -1347,12 +1347,12 @@ function EaPanel() {
           </p>
           <div className="space-y-2">
             <a
-              href="/api/static/RadarGoldSmart.mq5"
-              download="RadarGoldSmart.mq5"
+              href="/api/static/radargoldv2.mq5"
+              download="radargoldv2.mq5"
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-600/15 border border-violet-500/30 text-violet-300 hover:bg-violet-600/25 transition-colors text-sm font-medium"
             >
               <Download className="w-4 h-4" />
-              RadarGoldSmart.mq5
+              radargoldv2.mq5
             </a>
           </div>
           <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1.5 text-[11px] text-muted-foreground">
