@@ -47,7 +47,7 @@ function requireAdmin(
     }
     return next();
   }
-  const auth = (req.headers.authorization as string) ?? (req.query.token as string) ?? "";
+  const auth = (req.headers.authorization as string) ?? "";
   const token = auth.replace(/^Bearer\s+/i, "");
   if (token !== secret) {
     return res.status(403).json({ error: "Forbidden — admin login diperlukan" });
