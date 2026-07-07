@@ -1343,16 +1343,16 @@ function EaPanel() {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs text-muted-foreground">
-            File Expert Advisor siap pakai untuk MetaTrader 5. Isi parameter <code className="text-[10px] font-mono text-cyan-300">ApiUrl</code> dan <code className="text-[10px] font-mono text-cyan-300">EaApiKey</code> di input EA.
+            File Expert Advisor <strong className="text-white">siap pakai</strong> — ApiUrl dan EaApiKey sudah terisi otomatis. Tinggal download, pasang di MT5, aktifkan AutoTrade.
           </p>
           <div className="space-y-2">
             <a
-              href="/api/static/SahamRadarMentorEA.mq5"
-              download="SahamRadarMentorEA.mq5"
+              href="/api/static/RadarGoldSmart.mq5"
+              download="RadarGoldSmart.mq5"
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-600/15 border border-violet-500/30 text-violet-300 hover:bg-violet-600/25 transition-colors text-sm font-medium"
             >
               <Download className="w-4 h-4" />
-              SahamRadarMentorEA.mq5
+              RadarGoldSmart.mq5
             </a>
           </div>
           <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1.5 text-[11px] text-muted-foreground">
