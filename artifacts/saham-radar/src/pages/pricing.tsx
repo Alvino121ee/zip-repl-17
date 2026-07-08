@@ -70,7 +70,7 @@ export default function PricingPage() {
     onError: (err: Error) => {
       if (err.message === "LOGIN_REQUIRED") {
         toast({ title: "Login Diperlukan", description: "Silakan login atau daftar terlebih dahulu", variant: "destructive" });
-        navigate("/login?redirect=/pricing");
+        navigate("/login/member?redirect=/pricing");
         return;
       }
       toast({ title: "Gagal", description: err.message, variant: "destructive" });

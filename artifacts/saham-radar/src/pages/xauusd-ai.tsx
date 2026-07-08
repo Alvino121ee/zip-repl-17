@@ -2740,7 +2740,7 @@ export default function XauusdAi() {
                   Fitur chat Gold AI Trader kini tersedia khusus untuk member. Login sebagai member untuk mengakses percakapan ChatGPT-style dengan AI trading kami.
                 </p>
                 <a
-                  href="/login?role=member&redirect=/member"
+                  href="/login/member?redirect=/member"
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-semibold text-sm transition-colors"
                 >
                   <MessageSquare className="w-4 h-4" />

@@ -56,7 +56,7 @@ export default function MemberPage() {
   // Redirect ke login jika tidak ada token
   const token = getToken();
   useEffect(() => {
-    if (!token) navigate("/login?role=member&redirect=/member");
+    if (!token) navigate("/login/member?redirect=/member");
   }, [token, navigate]);
 
   // Chat mutation
@@ -70,7 +70,7 @@ export default function MemberPage() {
         if (r.status === 401) {
           clearMemberToken();
           clearAdminToken();
-          navigate("/login?role=member&redirect=/member");
+          navigate("/login/member?redirect=/member");
           throw new Error("Sesi berakhir, silakan login kembali");
         }
         throw new Error(`HTTP ${r.status}`);
@@ -108,7 +108,7 @@ export default function MemberPage() {
   const handleLogout = () => {
     clearMemberToken();
     clearAdminToken();
-    navigate("/login?role=member");
+    navigate("/login/member");
   };
 
   useEffect(() => {

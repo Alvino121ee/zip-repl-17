@@ -81,12 +81,12 @@ export default function HomePage() {
 
           {/* Actions */}
           <div className="flex items-center gap-2">
-            <Link href="/login?role=admin">
+            <Link href="/login/admin">
               <button className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5">
                 Admin
               </button>
             </Link>
-            <Link href="/login?role=member&redirect=/member">
+            <Link href="/login/member?redirect=/member">
               <Button size="sm" className="bg-primary hover:bg-primary/90 text-black font-semibold text-xs gap-1.5">
                 <Lock className="w-3 h-3" />
                 Login Member
@@ -131,7 +131,7 @@ export default function HomePage() {
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link href="/login?role=member&redirect=/member">
+            <Link href="/login/member?redirect=/member">
               <Button
                 size="lg"
                 className="bg-primary hover:bg-primary/90 text-black font-bold text-base px-8 h-12 gap-2 shadow-[0_0_24px_rgba(245,158,11,0.3)] hover:shadow-[0_0_32px_rgba(245,158,11,0.45)] transition-shadow"
@@ -251,7 +251,7 @@ export default function HomePage() {
               ))}
             </ul>
 
-            <Link href="/login?role=member&redirect=/member">
+            <Link href="/login/member?redirect=/member">
               <Button className="w-full bg-primary hover:bg-primary/90 text-black font-bold gap-2 h-11 shadow-[0_0_20px_rgba(245,158,11,0.25)]">
                 <Lock className="w-4 h-4" />
                 Login Sekarang
@@ -278,11 +278,11 @@ export default function HomePage() {
           Analisis berbasis algoritma AI — bukan rekomendasi investasi. Selalu gunakan manajemen risiko yang baik.
         </p>
         <div className="flex items-center justify-center gap-4 mt-3">
-          <Link href="/login?role=member&redirect=/member">
+          <Link href="/login/member?redirect=/member">
             <span className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-pointer">Login Member</span>
           </Link>
           <span className="text-muted-foreground/20">·</span>
-          <Link href="/login?role=admin">
+          <Link href="/login/admin">
             <span className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-pointer">Admin</span>
           </Link>
         </div>

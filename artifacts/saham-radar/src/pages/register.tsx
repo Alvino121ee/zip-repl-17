@@ -134,7 +134,7 @@ export default function RegisterPage() {
             Sudah punya akun?{" "}
             <button
               type="button"
-              onClick={() => navigate("/login?role=member")}
+              onClick={() => navigate("/login/member")}
               className="text-primary hover:text-primary/80 font-medium"
             >
               Login di sini

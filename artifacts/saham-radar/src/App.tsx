@@ -8,7 +8,8 @@ import { Layout } from "@/components/Layout";
 import XauusdAi from "@/pages/xauusd-ai";
 import BtcusdAi from "@/pages/btcusd-ai";
 import AdminPanel from "@/pages/admin";
-import LoginPage from "@/pages/login";
+import LoginMemberPage from "@/pages/login-member";
+import LoginAdminPage from "@/pages/login-admin";
 import RegisterPage from "@/pages/register";
 import VerifyEmailPage from "@/pages/verify-email";
 import MemberPage from "@/pages/member";
@@ -23,7 +24,7 @@ function AdminRoute({ component: Component }: { component: React.ComponentType }
   const token = getAdminToken();
 
   useEffect(() => {
-    if (!token) navigate("/login?role=admin&redirect=/admin");
+    if (!token) navigate("/login/admin?redirect=/admin");
   }, [token, navigate]);
 
   if (!token) return null;
@@ -44,7 +45,11 @@ function Router() {
     <Switch>
       {/* Halaman publik & tanpa sidebar */}
       <Route path="/" component={HomePage} />
-      <Route path="/login" component={LoginPage} />
+      <Route path="/login/member" component={LoginMemberPage} />
+      <Route path="/login/admin" component={LoginAdminPage} />
+      <Route path="/login">
+        {() => { window.location.replace("/login/member" + window.location.search); return null; }}
+      </Route>
       <Route path="/register" component={RegisterPage} />
       <Route path="/verify-email" component={VerifyEmailPage} />
       <Route path="/member" component={MemberPage} />

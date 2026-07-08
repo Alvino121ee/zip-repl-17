@@ -101,7 +101,7 @@ function SidebarContent({
             <Link
               key={item.href}
               href={locked
-                ? `/login?role=admin&redirect=${item.href}`
+                ? `/login/admin?redirect=${item.href}`
                 : item.href}
               onClick={onNavigate}
               className={`

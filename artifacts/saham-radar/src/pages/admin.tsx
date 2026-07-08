@@ -905,7 +905,7 @@ export default function AdminPanel() {
 
   // Redirect ke login jika belum auth
   useEffect(() => {
-    if (!token) navigate("/login?role=admin&redirect=/admin");
+    if (!token) navigate("/login/admin?redirect=/admin");
   }, [token, navigate]);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<SystemStatus>({
@@ -914,7 +914,7 @@ export default function AdminPanel() {
       const res = await adminFetch("/api/admin/system");
       if (res.status === 403 || res.status === 401) {
         clearAdminToken();
-        navigate("/login?role=admin&redirect=/admin");
+        navigate("/login/admin?redirect=/admin");
         throw new Error("Sesi admin berakhir");
       }
       if (!res.ok) throw new Error("Gagal memuat status sistem");
@@ -927,7 +927,7 @@ export default function AdminPanel() {
 
   const handleLogout = () => {
     clearAdminToken();
-    navigate("/login?role=admin");
+    navigate("/login/admin");
   };
 
   const learnNowMut = useMutation({
