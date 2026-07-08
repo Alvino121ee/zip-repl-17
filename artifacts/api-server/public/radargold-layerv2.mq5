@@ -383,9 +383,20 @@ void CheckLayerTransitions()
                }
                else
                {
-                  // P2-P10 TP → selesai biasa, tidak re-entry
-                  g_layerState[i] = LAYER_DONE;
-                  Print("[Layer ", i, "] ✅ TP tercapai @", DoubleToString(closePrice, 2), " — selesai, tidak re-entry.");
+                  // P2-P10 TP — re-entry hanya jika P1 masih open/floating
+                  bool p1StillOpen = (g_layerState[1] == LAYER_OPEN && FindLayerPosition(1) != 0);
+                  if(InpReentryEnable && p1StillOpen)
+                  {
+                     Print("[Layer ", i, "] ✅ TP tercapai @", DoubleToString(closePrice, 2),
+                           " — P1 masih open, re-entry LIMIT @", DoubleToString(g_layerEntry[i], 2));
+                     PlaceLayerLimit(i, g_sessionDirection, g_layerEntry[i], g_layerTP[i]);
+                  }
+                  else
+                  {
+                     g_layerState[i] = LAYER_DONE;
+                     Print("[Layer ", i, "] ✅ TP tercapai @", DoubleToString(closePrice, 2),
+                           " — P1 sudah close atau re-entry OFF, layer selesai.");
+                  }
                }
             }
             else if(reason == DEAL_REASON_CLIENT || reason == DEAL_REASON_EXPERT)
