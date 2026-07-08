@@ -17,3 +17,5 @@ The XAUUSD gold trading feature runs an autonomous learning engine (in `api-serv
 - Chat context (from `/xauusd/chat`): indicators + last 3 predictions (with reasoning) + news sentiment + top 6 brain insights with content excerpts — all via `Promise.allSettled`
 - Agent config: only one `xauusd` entry in `agentConfigsTable` (duplicate with wrong BEI training examples removed)
 - Memory trim: batch delete with `inArray` not N individual deletes
+
+**Restoring xauusd_brain from a JSON export:** if given an `xauusd_brain_*.json` attached asset (array of row objects with snake_case keys matching DB columns), restore with a one-off pg script: TRUNCATE `xauusd_brain`, insert rows with explicit `id`, then `setval` the serial sequence to MAX(id). Run such scripts from inside `lib/db/` (or install `pg` at the script location) since `pg` isn't hoisted to the workspace root. Check row count first — only restore into an empty table.

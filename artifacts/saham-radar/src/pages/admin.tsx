@@ -1096,6 +1096,7 @@ function EaPanel() {
   const { toast } = useToast();
   const [showKey, setShowKey] = useState(false);
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  const [eaVariant, setEaVariant] = useState<"standard" | "layer">("standard");
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["admin-ea-key"],
@@ -1268,7 +1269,7 @@ function EaPanel() {
         </CardContent>
       </Card>
 
-      {/* Download MQL5 */}
+      {/* Download MQL5 — pilih varian EA */}
       <Card className="border-border/50">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -1277,29 +1278,85 @@ function EaPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            File Expert Advisor <strong className="text-white">siap pakai</strong> — ApiUrl dan EaApiKey sudah terisi otomatis. Tinggal download, pasang di MT5, aktifkan AutoTrade.
-          </p>
-          <div className="space-y-2">
-            <a
-              href="/api/static/radargoldv2.mq5"
-              download="radargoldv2.mq5"
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-600/15 border border-violet-500/30 text-violet-300 hover:bg-violet-600/25 transition-colors text-sm font-medium"
+          {/* Toggle varian */}
+          <div className="flex gap-2 p-1 rounded-lg bg-zinc-900/60 border border-border/30 w-fit">
+            <button
+              onClick={() => setEaVariant("standard")}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${eaVariant === "standard" ? "bg-violet-600/25 text-violet-300 border border-violet-500/30" : "text-zinc-400 hover:text-white"}`}
             >
-              <Download className="w-4 h-4" />
-              radargoldv2.mq5
-            </a>
+              EA Standard
+            </button>
+            <button
+              onClick={() => setEaVariant("layer")}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${eaVariant === "layer" ? "bg-cyan-600/25 text-cyan-300 border border-cyan-500/30" : "text-zinc-400 hover:text-white"}`}
+            >
+              EA Layer (Grid 10 Layer)
+            </button>
           </div>
-          <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1.5 text-[11px] text-muted-foreground">
-            <p className="font-semibold text-zinc-300 mb-1">Cara pasang EA di MT5:</p>
-            <p>1. Buka MetaTrader 5 → <span className="text-white">Tools &gt; Options &gt; Expert Advisors</span></p>
-            <p>2. Centang <span className="text-white">Allow WebRequest for listed URLs</span></p>
-            <p>3. Tambahkan URL API ini: <code className="font-mono text-cyan-300">{apiBase}</code></p>
-            <p>4. Drag EA ke chart <span className="text-white">XAUUSD</span></p>
-            <p>5. Isi <span className="text-white">ApiUrl</span> = <code className="font-mono text-cyan-300">{apiBase}</code></p>
-            <p>6. Isi <span className="text-white">EaApiKey</span> dengan key yang sudah dibuat di atas</p>
-            <p>7. Aktifkan <span className="text-white">AutoTrade = true</span> jika ingin trading otomatis</p>
-          </div>
+
+          {eaVariant === "standard" ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                File Expert Advisor <strong className="text-white">siap pakai</strong> — ApiUrl dan EaApiKey sudah terisi otomatis. Satu posisi per sinyal, dengan trailing stop dan smart re-entry. Tinggal download, pasang di MT5, aktifkan AutoTrade.
+              </p>
+              <div className="space-y-2">
+                <a
+                  href="/api/static/radargoldv5.mq5"
+                  download="radargoldv5.mq5"
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-600/15 border border-violet-500/30 text-violet-300 hover:bg-violet-600/25 transition-colors text-sm font-medium"
+                >
+                  <Download className="w-4 h-4" />
+                  radargoldv5.mq5
+                </a>
+              </div>
+              <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1.5 text-[11px] text-muted-foreground">
+                <p className="font-semibold text-zinc-300 mb-1">Cara pasang EA di MT5:</p>
+                <p>1. Buka MetaTrader 5 → <span className="text-white">Tools &gt; Options &gt; Expert Advisors</span></p>
+                <p>2. Centang <span className="text-white">Allow WebRequest for listed URLs</span></p>
+                <p>3. Tambahkan URL API ini: <code className="font-mono text-cyan-300">{apiBase}</code></p>
+                <p>4. Drag EA ke chart <span className="text-white">XAUUSD</span></p>
+                <p>5. Isi <span className="text-white">ApiUrl</span> = <code className="font-mono text-cyan-300">{apiBase}</code></p>
+                <p>6. Isi <span className="text-white">EaApiKey</span> dengan key yang sudah dibuat di atas</p>
+                <p>7. Aktifkan <span className="text-white">AutoTrade = true</span> jika ingin trading otomatis</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Versi <strong className="text-white">Grid 10 Layer (DCA)</strong>: layer 1 dibuka sebagai market order, layer 2–10 dipasang sebagai limit order melawan arah trade dengan jarak <strong className="text-white">$1 antar layer</strong>. Semua layer berbagi <strong className="text-white">1 stop loss yang sama</strong>. Setiap layer punya trailing stop dan TP sendiri berdasarkan harga entry masing-masing — jika sebuah layer ditutup via trailing atau manual dan harga balik ke entry layer tersebut, EA otomatis <strong className="text-white">re-entry</strong> di layer itu.
+              </p>
+              <div className="space-y-2">
+                <a
+                  href="/api/static/radargold-layerv2.mq5"
+                  download="radargold-layerv2.mq5"
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-cyan-600/15 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-600/25 transition-colors text-sm font-medium"
+                >
+                  <Download className="w-4 h-4" />
+                  radargold-layerv2.mq5
+                </a>
+              </div>
+              <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1.5 text-[11px] text-muted-foreground">
+                <p className="font-semibold text-zinc-300 mb-1">Cara kerja EA Layer:</p>
+                <p>• <span className="text-white">Layer 1</span> = market order langsung saat sinyal muncul</p>
+                <p>• <span className="text-white">Layer 2–10</span> = limit order melawan arah, jarak $1 per layer (bisa diatur via <code className="font-mono">InpLayerGapUSD</code>)</p>
+                <p>• <span className="text-white">SL</span> sama untuk seluruh layer (dari sinyal) — jika kena, semua posisi ditutup & sisa limit dibatalkan otomatis</p>
+                <p>• <span className="text-white">Trailing stop</span> per layer aktif setelah profit ≥ <code className="font-mono">InpTrailActivateUSD</code>, jarak <code className="font-mono">InpTrailDistanceUSD</code></p>
+                <p>• <span className="text-white">Re-entry</span>: layer yang ditutup via trailing/manual otomatis dipasang ulang sebagai limit di harga entry aslinya, berulang tanpa batas selama sinyal & sesi masih aktif</p>
+                <p>• TP tercapai = layer selesai (tidak re-entry lagi untuk layer itu)</p>
+              </div>
+              <div className="rounded-lg bg-zinc-900/60 border border-border/30 p-3 space-y-1.5 text-[11px] text-muted-foreground">
+                <p className="font-semibold text-zinc-300 mb-1">Cara pasang EA di MT5:</p>
+                <p>1. Buka MetaTrader 5 → <span className="text-white">Tools &gt; Options &gt; Expert Advisors</span></p>
+                <p>2. Centang <span className="text-white">Allow WebRequest for listed URLs</span></p>
+                <p>3. Tambahkan URL API ini: <code className="font-mono text-cyan-300">{apiBase}</code></p>
+                <p>4. Drag EA ke chart <span className="text-white">XAUUSD</span></p>
+                <p>5. Isi <span className="text-white">ApiUrl</span> = <code className="font-mono text-cyan-300">{apiBase}</code></p>
+                <p>6. Isi <span className="text-white">EaApiKey</span> dengan key yang sudah dibuat di atas</p>
+                <p>7. Atur <span className="text-white">InpLotSize</span>, <span className="text-white">InpLayerGapUSD</span>, dan <span className="text-white">InpTpDistanceUSD</span> sesuai risiko yang diinginkan</p>
+                <p>8. Aktifkan <span className="text-white">AutoTrade = true</span> jika ingin trading otomatis</p>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
     </div>

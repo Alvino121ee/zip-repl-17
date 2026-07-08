@@ -137,7 +137,7 @@ export default function HomePage() {
                 className="bg-primary hover:bg-primary/90 text-black font-bold text-base px-8 h-12 gap-2 shadow-[0_0_24px_rgba(245,158,11,0.3)] hover:shadow-[0_0_32px_rgba(245,158,11,0.45)] transition-shadow"
               >
                 <Lock className="w-4 h-4" />
-                Login Member
+                Daftar Member
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             </Link>
