@@ -27,6 +27,7 @@ description: Email+password member registration with SMTP email verification (6-
 ## Backward Compatibility
 - `requireMember` middleware checks in order: admin token → old `member_password` → new session token (backend fallback still exists)
 - The member login UI no longer exposes a legacy "Akses lama (tanpa email)" toggle (removed 2026-07-08) — email+password is the only front-end path now, though the backend fallback remains for any pre-existing token holders
+- The `/api/admin/member-password` route and the `member.hasPassword` field on `getSettingsSummary()`/`/api/admin/system` were already gone from the backend before this — a leftover "Akses Member" admin UI card still referenced `data.member.hasPassword`, causing a crash. Removed that dead card (2026-07-08); real member management is the existing `/api/admin/members` list + `MembersPanel`.
 
 ## Admin Panel
 - Members list at `GET /api/admin/members` — shows email, verified status, join date

@@ -66,7 +66,6 @@ interface SystemStatus {
   };
   livePrice: { price: number | null; change: number | null; changePct: number | null; timestamp: number | null; stale: boolean; error: string | null } | null;
   serverTime: string;
-  member: { hasPassword: boolean };
 }
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -106,8 +105,6 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
   const [aiModelInput, setAiModelInput] = useState(data.settings.aiModel ?? "");
   const [waNumber, setWaNumber] = useState(data.settings.whatsapp.number ?? "");
   const [waEnabled, setWaEnabled] = useState(data.settings.whatsapp.enabled ?? false);
-  const [memberPwd, setMemberPwd] = useState("");
-  const [showMemberPwd, setShowMemberPwd] = useState(false);
 
   useEffect(() => {
     setWaNumber(data.settings.whatsapp.number ?? "");
@@ -180,68 +177,10 @@ function SettingsPanel({ data, onRefetch }: { data: SystemStatus; onRefetch: () 
     onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
   });
 
-  const saveMemberPwdMut = useMutation({
-    mutationFn: (pwd: string) => adminPost("/api/admin/member-password", { password: pwd }),
-    onSuccess: () => { toast({ title: "✅ Password Member Disimpan" }); setMemberPwd(""); void qc.invalidateQueries({ queryKey: ["admin-system"] }); },
-    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
-  });
-
-  const clearMemberPwdMut = useMutation({
-    mutationFn: () => adminPost("/api/admin/member-password", { password: "" }),
-    onSuccess: () => { toast({ title: "Akses Member Dinonaktifkan" }); void qc.invalidateQueries({ queryKey: ["admin-system"] }); },
-    onError: (e) => toast({ title: "Error", description: String(e), variant: "destructive" }),
-  });
-
   const validTimeframes = data.settings.validTimeframes ?? [15, 30];
 
   return (
     <div className="space-y-5">
-      {/* Member Password */}
-      <Card className="border-border/50">
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Users className="w-5 h-5 text-blue-400" />
-            Akses Member
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Status Password Member</span>
-            <StatusBadge ok={data.member.hasPassword} label={data.member.hasPassword ? "Aktif" : "Belum diset"} />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Set password untuk akses halaman member (/member). Member hanya bisa menggunakan fitur Chat AI.
-          </p>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                type={showMemberPwd ? "text" : "password"}
-                placeholder="Password baru untuk member..."
-                value={memberPwd}
-                onChange={(e) => setMemberPwd(e.target.value)}
-                className="pr-10"
-              />
-              <button type="button" onClick={() => setShowMemberPwd((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground">
-                {showMemberPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-            <Button
-              size="sm"
-              onClick={() => saveMemberPwdMut.mutate(memberPwd)}
-              disabled={saveMemberPwdMut.isPending || memberPwd.trim().length === 0}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {saveMemberPwdMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Simpan"}
-            </Button>
-          </div>
-          {data.member.hasPassword && (
-            <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300" onClick={() => clearMemberPwdMut.mutate()} disabled={clearMemberPwdMut.isPending}>
-              Nonaktifkan akses member
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-
       {/* DeepSeek API Key */}
       <Card className="border-border/50">
         <CardHeader className="pb-3">
@@ -1053,7 +992,7 @@ export default function AdminPanel() {
             </CardContent>
           </Card>
 
-          {/* Member status */}
+          {/* Admin status */}
           <Card className="border-border/50">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
@@ -1065,10 +1004,6 @@ export default function AdminPanel() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Admin</span>
                 <StatusBadge ok={true} label="Aktif (SESSION_SECRET)" />
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Member</span>
-                <StatusBadge ok={data.member.hasPassword} label={data.member.hasPassword ? "Password diset" : "Belum dikonfigurasi"} />
               </div>
             </CardContent>
           </Card>
