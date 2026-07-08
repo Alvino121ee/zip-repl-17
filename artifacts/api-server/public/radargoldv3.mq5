@@ -26,6 +26,10 @@ input bool   InpUseTrailing   = true;
 input int    InpTrailActivate = 50;  // Profit minimal (pips) sebelum trailing aktif
 input int    InpTrailDistance = 20;  // Jarak trailing SL dari harga (pips)
 
+input group "=== Partial Close (2 Posisi) ==="
+input bool   InpPartialClose = false;   // Buka 2 posisi: P1→TP1, P2→TP2
+input double InpPartialLot   = 0.05;   // Lot per posisi (total = 2×InpPartialLot)
+
 input group "=== Smart Re-entry ==="
 input bool   InpSmartReentry   = true;   // Re-entry jika sinyal sama & harga balik ke zona
 input double InpReentryZonePip = 10.0;   // Lebar zona re-entry ±pip dari harga entry asli
@@ -73,7 +77,7 @@ double   g_conf       = 0;
 
 //--- Re-entry state
 bool     g_waitingReentry     = false;
-datetime g_reentryAvailableAt = 0;    // cooldown: re-entry boleh setelah waktu ini
+datetime g_reentryAvailableAt = 0;
 string   g_lastEntrySignal    = "HOLD";
 double   g_reentryZoneLow     = 0;
 double   g_reentryZoneHigh    = 0;
@@ -81,6 +85,7 @@ double   g_lastEntryPrice     = 0;
 double   g_lastEntryTP        = 0;    // TP1 saat entry → identitas sinyal
 double   g_lastEntrySL        = 0;    // SL saat entry  → identitas sinyal
 int      g_prevPosCount       = 0;
+int      g_prevP1Count        = 0;    // jumlah posisi P1 sebelumnya (partial close)
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -88,6 +93,7 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(20);
    g_prevPosCount = CountOurPositions();
+   g_prevP1Count  = CountPositionsByTag("P1");
 
    if(InpShowPanel) CreatePanel();
 
@@ -140,26 +146,48 @@ int CountOurPositions()
 }
 
 //+------------------------------------------------------------------+
+// Hitung posisi milik EA yang komennya mengandung tag (mis. "P1" atau "P2")
+int CountPositionsByTag(string tag)
+{
+   int count = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))                continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol())  continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT), tag) >= 0) count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
 void CheckPositionsClosed()
 {
    int curCount = CountOurPositions();
-   if(curCount < g_prevPosCount)
+   int curP1    = CountPositionsByTag("P1");
+
+   // Deteksi penutupan: total berkurang ATAU P1 berkurang (saat P2 masih jalan)
+   bool anyClose = (curCount < g_prevPosCount);
+   bool p1Close  = InpPartialClose && (curP1 < g_prevP1Count);
+
+   if(anyClose || p1Close)
    {
       if(g_lastEntrySignal != "HOLD" && g_lastEntrySignal == g_lastCommand)
       {
-         // Zona sempit ±InpReentryZonePip dari harga ENTRY ASLI
-         double pointSize  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
-         double halfZone   = InpReentryZonePip * pointSize * 10.0;
-         double basePrice  = (g_lastEntryPrice > 0) ? g_lastEntryPrice : g_price;
+         double pointSize = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+         double halfZone  = InpReentryZonePip * pointSize * 10.0;
+         double basePrice = (g_lastEntryPrice > 0) ? g_lastEntryPrice : g_price;
 
-         g_waitingReentry      = true;
-         g_reentryAvailableAt  = TimeCurrent() + InpRentryCooldown;  // cooldown dulu
-         g_reentryZoneLow      = NormalizeDouble(basePrice - halfZone, _Digits);
-         g_reentryZoneHigh     = NormalizeDouble(basePrice + halfZone, _Digits);
+         g_waitingReentry     = true;
+         g_reentryAvailableAt = TimeCurrent() + InpRentryCooldown;
+         g_reentryZoneLow     = NormalizeDouble(basePrice - halfZone, _Digits);
+         g_reentryZoneHigh    = NormalizeDouble(basePrice + halfZone, _Digits);
 
-         Print("[Re-entry] Posisi ditutup. Cooldown ", InpRentryCooldown, "s, lalu pantau zona ",
-               DoubleToString(g_reentryZoneLow, 2), " – ", DoubleToString(g_reentryZoneHigh, 2),
-               " (entry asli $", DoubleToString(basePrice, 2), ") | Sinyal: ", g_lastEntrySignal);
+         string info = p1Close && !anyClose ? "P1 (TP1 hit), P2 masih jalan" : "posisi ditutup";
+         Print("[Re-entry] ", info, ". Cooldown ", InpRentryCooldown, "s, lalu pantau zona ",
+               DoubleToString(g_reentryZoneLow, 2), "–", DoubleToString(g_reentryZoneHigh, 2),
+               " | Sinyal: ", g_lastEntrySignal);
          if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: COOLDOWN...", clrOrange);
       }
       else
@@ -169,6 +197,7 @@ void CheckPositionsClosed()
       }
    }
    g_prevPosCount = curCount;
+   g_prevP1Count  = curP1;
 }
 
 //+------------------------------------------------------------------+
@@ -468,6 +497,8 @@ void FetchAndProcess()
          bool inZone = (curPrice >= g_reentryZoneLow - bufSize)
                     && (curPrice <= g_reentryZoneHigh + bufSize);
 
+         bool shouldReturn = true;  // default: tetap dalam re-entry mode
+
          if(!cooldownDone)
          {
             int sisaDetik = (int)(g_reentryAvailableAt - TimeCurrent());
@@ -475,14 +506,27 @@ void FetchAndProcess()
                SetLabelText(LBL_REENTRY,
                   "Re-entry: cooldown " + IntegerToString(sisaDetik) + "s...", clrOrange);
          }
-         else if(inZone && !HasPosition((int)posType))
+         else if(inZone && CountPositionsByTag("P1") == 0)
          {
-            Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
-                  " kembali ke zona sinyal SAMA [TP=", DoubleToString(g_lastEntryTP, 2),
-                  " SL=", DoubleToString(g_lastEntrySL, 2), "] — masuk ulang ", cmd);
-            OpenOrder(orderType);
-            g_waitingReentry = false;
-            if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MASUK! sinyal sama", clrLime);
+            bool p2StillOpen = InpPartialClose && (CountPositionsByTag("P2") > 0);
+
+            if(p2StillOpen)
+            {
+               // Partial: P1 slot kosong, P2 masih jalan → re-open P1 saja
+               Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
+                     " kembali ke zona — masuk ulang ", cmd, " P1 only (P2 masih jalan)");
+               OpenOrder(orderType, true);
+               g_waitingReentry = false;
+               if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MASUK P1! P2 jalan", clrLime);
+            }
+            else
+            {
+               // Semua posisi sudah habis (atau non-partial) → batalkan re-entry,
+               // biarkan fresh entry block di bawah buka P1+P2
+               Print("[Re-entry] Semua posisi habis — reset ke fresh entry");
+               g_waitingReentry = false;
+               shouldReturn = false;  // jangan return, jatuh ke fresh entry block
+            }
          }
          else if(!inZone)
          {
@@ -491,15 +535,16 @@ void FetchAndProcess()
                   "Re-entry: tunggu $" + DoubleToString(g_reentryZoneLow, 2)
                   + "-" + DoubleToString(g_reentryZoneHigh, 2), clrYellow);
          }
-         return;  // masih dalam mode re-entry, jangan proses entry normal
+
+         if(shouldReturn) return;
       }
    }
 
-   //--- Entry fresh: sinyal aktif, tidak ada posisi
+   //--- Entry fresh: sinyal aktif, tidak ada posisi sama sekali
    // (termasuk setelah re-entry dibatalkan karena sinyal baru terdeteksi)
    if(!HasPosition((int)posType))
    {
-      OpenOrder(orderType);
+      OpenOrder(orderType, false);   // false = buka P1+P2 (atau single jika partial off)
       g_lastEntrySignal = cmd;
       double pointSize3 = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
       double halfZone3  = InpReentryZonePip * pointSize3 * 10.0;
@@ -509,33 +554,79 @@ void FetchAndProcess()
 }
 
 //+------------------------------------------------------------------+
-void OpenOrder(ENUM_ORDER_TYPE type)
+// reentryP1 = false → buka fresh (P1+P2 jika partial, single jika tidak)
+// reentryP1 = true  → buka P1 saja (re-entry, P2 mungkin masih jalan)
+void OpenOrder(ENUM_ORDER_TYPE type, bool reentryP1 = false)
 {
    double price  = (type == ORDER_TYPE_BUY)
                  ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                  : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double tpNorm = NormalizeDouble(g_tp1, _Digits);
-   double slNorm = NormalizeDouble(g_sl,  _Digits);
-   string cmt    = "RGS" + (InpReverseMode ? "-REV" : "") + " " + DoubleToString(g_conf * 100, 0) + "%";
+   double tp1Norm = NormalizeDouble(g_tp1, _Digits);
+   double tp2Norm = NormalizeDouble(g_tp2, _Digits);
+   double slNorm  = NormalizeDouble(g_sl,  _Digits);
+   string base    = "RGS" + (InpReverseMode ? "-REV" : "") + " " + DoubleToString(g_conf * 100, 0) + "%";
 
-   bool ok;
-   if(type == ORDER_TYPE_BUY)
-      ok = g_trade.Buy(InpLotSize, Symbol(), price, slNorm, tpNorm, cmt);
-   else
-      ok = g_trade.Sell(InpLotSize, Symbol(), price, slNorm, tpNorm, cmt);
+   bool usePartial = InpPartialClose && g_tp2 > 0 && InpPartialLot > 0;
 
-   if(ok)
+   if(usePartial)
    {
-      g_lastEntryPrice = price;
-      g_lastEntryTP    = tpNorm;   // identitas sinyal: TP saat entry
-      g_lastEntrySL    = slNorm;   // identitas sinyal: SL saat entry
-      Print("[Order] ", EnumToString(type), " OK | tiket=", g_trade.ResultOrder(),
-            " | harga=", DoubleToString(price, _Digits),
-            " | TP=", DoubleToString(tpNorm, _Digits),
-            " | SL=", DoubleToString(slNorm, _Digits));
+      // ── MODE PARTIAL: buka P1 (→TP1) dan jika bukan re-entry juga P2 (→TP2) ──
+      bool okP1;
+      if(type == ORDER_TYPE_BUY)
+         okP1 = g_trade.Buy (InpPartialLot, Symbol(), price, slNorm, tp1Norm, base + " P1");
+      else
+         okP1 = g_trade.Sell(InpPartialLot, Symbol(), price, slNorm, tp1Norm, base + " P1");
+
+      if(okP1)
+      {
+         g_lastEntryPrice = price;
+         g_lastEntryTP    = tp1Norm;
+         g_lastEntrySL    = slNorm;
+         Print("[Order-P1] ", EnumToString(type), " OK | lot=", InpPartialLot,
+               " | harga=", DoubleToString(price, _Digits),
+               " | TP1=",   DoubleToString(tp1Norm, _Digits),
+               " | SL=",    DoubleToString(slNorm,  _Digits));
+      }
+      else
+         Print("[Order-P1] GAGAL | retcode=", g_trade.ResultRetcode(), " | ", g_trade.ResultComment());
+
+      if(!reentryP1)   // P2 hanya dibuka saat fresh entry, bukan saat re-entry P1
+      {
+         bool okP2;
+         if(type == ORDER_TYPE_BUY)
+            okP2 = g_trade.Buy (InpPartialLot, Symbol(), price, slNorm, tp2Norm, base + " P2");
+         else
+            okP2 = g_trade.Sell(InpPartialLot, Symbol(), price, slNorm, tp2Norm, base + " P2");
+
+         if(okP2)
+            Print("[Order-P2] ", EnumToString(type), " OK | lot=", InpPartialLot,
+                  " | TP2=", DoubleToString(tp2Norm, _Digits));
+         else
+            Print("[Order-P2] GAGAL | retcode=", g_trade.ResultRetcode(), " | ", g_trade.ResultComment());
+      }
    }
    else
-      Print("[Order] GAGAL | retcode=", g_trade.ResultRetcode(), " | ", g_trade.ResultComment());
+   {
+      // ── MODE NORMAL: satu posisi full lot ──
+      bool ok;
+      if(type == ORDER_TYPE_BUY)
+         ok = g_trade.Buy (InpLotSize, Symbol(), price, slNorm, tp1Norm, base);
+      else
+         ok = g_trade.Sell(InpLotSize, Symbol(), price, slNorm, tp1Norm, base);
+
+      if(ok)
+      {
+         g_lastEntryPrice = price;
+         g_lastEntryTP    = tp1Norm;
+         g_lastEntrySL    = slNorm;
+         Print("[Order] ", EnumToString(type), " OK | tiket=", g_trade.ResultOrder(),
+               " | harga=", DoubleToString(price, _Digits),
+               " | TP=",    DoubleToString(tp1Norm, _Digits),
+               " | SL=",    DoubleToString(slNorm,  _Digits));
+      }
+      else
+         Print("[Order] GAGAL | retcode=", g_trade.ResultRetcode(), " | ", g_trade.ResultComment());
+   }
 }
 
 //+------------------------------------------------------------------+
