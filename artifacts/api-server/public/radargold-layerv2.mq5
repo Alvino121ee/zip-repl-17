@@ -246,7 +246,57 @@ void CheckSessionInvalidation()
 }
 
 //+------------------------------------------------------------------+
-// Cek transisi status tiap layer (limit terisi, posisi tertutup dsb) & proses re-entry
+// Tutup semua posisi terbuka dan batalkan semua limit order layer 2..N
+// Dipanggil saat P1 (layer 1) close untuk membersihkan seluruh grid
+void CloseAndCancelNonP1Layers()
+{
+   // Tutup posisi yang sudah open (L2-L10)
+   for(int k = 2; k <= MAX_LAYERS; k++)
+   {
+      if(g_layerState[k] == LAYER_OPEN)
+      {
+         ulong posT = FindLayerPosition(k);
+         if(posT != 0) g_trade.PositionClose(posT);
+         g_layerState[k] = LAYER_NONE;
+         g_layerPosId[k] = 0;
+      }
+   }
+   // Batalkan limit order yang masih pending (L2-L10)
+   for(int k = 2; k <= MAX_LAYERS; k++)
+   {
+      if(g_layerState[k] == LAYER_PENDING)
+      {
+         ulong ordT = FindLayerPendingOrder(k);
+         if(ordT != 0) g_trade.OrderDelete(ordT);
+         g_layerState[k] = LAYER_NONE;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+// Helper terpusat: tangani penutupan P1 (bukan SL global)
+// → tutup/batalkan semua P2-P10 → reset sesi → ambil sinyal baru
+// Jika InpReentryEnable=false, sesi hanya direset tanpa FetchAndProcess.
+void HandleP1Close(string closeDesc, double closePrice)
+{
+   Print("[Layer 1] ", closeDesc, " @", DoubleToString(closePrice, 2),
+         " — tutup/batalkan P2-P10 & ", InpReentryEnable ? "refresh sinyal baru." : "reset sesi (re-entry OFF).");
+   g_layerState[1]    = LAYER_NONE;
+   g_layerPosId[1]    = 0;
+   CloseAndCancelNonP1Layers();
+   g_sessionActive    = false;
+   g_sessionDirection = "HOLD";
+   g_sessionSL        = 0;
+   if(InpShowPanel) SetLabelText(LBL_SESSION, "Sesi berakhir — menunggu sinyal baru", clrGray);
+   if(InpReentryEnable) FetchAndProcess(); // ambil sinyal baru, bisa langsung buka sesi baru
+}
+
+//+------------------------------------------------------------------+
+// Cek transisi status tiap layer (limit terisi, posisi tertutup dsb)
+// ATURAN RE-ENTRY: hanya Layer 1 (P1/entry utama) yang boleh re-entry.
+//                 Layer 2-10 (P2-P10/limit grid) TIDAK re-entry.
+// ATURAN P1 CLOSE: saat P1 close (bukan SL global), hapus semua limit
+//                  P2-P10 dan refresh sinyal untuk sesi baru.
 void CheckLayerTransitions()
 {
    for(int i = 1; i <= MAX_LAYERS; i++)
@@ -281,13 +331,7 @@ void CheckLayerTransitions()
             double closePrice = 0;
             int reason = GetLastCloseReasonByPosId(g_layerPosId[i], closePrice);
 
-            if(reason == DEAL_REASON_TP)
-            {
-               // TP tercapai — layer selesai, tidak re-entry
-               g_layerState[i] = LAYER_DONE;
-               Print("[Layer ", i, "] ✅ TP tercapai @", DoubleToString(closePrice, 2), " — selesai, tidak re-entry.");
-            }
-            else if(reason == DEAL_REASON_SL)
+            if(reason == DEAL_REASON_SL)
             {
                // Bedakan: SL global (closePrice ≈ g_sessionSL) vs trailing per-layer
                // Toleransi $0.50 untuk XAUUSD — cukup besar untuk spread tapi tidak bias
@@ -303,43 +347,66 @@ void CheckLayerTransitions()
                   if(InpShowPanel) SetLabelText(LBL_SESSION, "Sesi berakhir (SL global kena)", clrRed);
                   break; // CloseEntireSession() sudah reset semua state, hentikan loop
                }
-               else if(InpReentryEnable)
+               else
                {
-                  // Trailing stop per-layer → re-entry limit di harga entry asli
-                  Print("[Layer ", i, "] Trailing stop kena @", DoubleToString(closePrice, 2),
-                        " — re-entry LIMIT @", DoubleToString(g_layerEntry[i], 2));
-                  PlaceLayerLimit(i, g_sessionDirection, g_layerEntry[i], g_layerTP[i]);
+                  // Trailing stop per-layer kena
+                  if(i == 1)
+                  {
+                     HandleP1Close("⚡ P1 trailing stop kena", closePrice);
+                     break;
+                  }
+                  else
+                  {
+                     // P2-P10 kena trailing → selesai, TIDAK re-entry
+                     g_layerState[i] = LAYER_DONE;
+                     Print("[Layer ", i, "] Trailing stop kena @", DoubleToString(closePrice, 2),
+                           " — layer selesai (P2-P10 tidak re-entry).");
+                  }
+               }
+            }
+            else if(reason == DEAL_REASON_TP)
+            {
+               if(i == 1)
+               {
+                  HandleP1Close("✅ P1 TP tercapai", closePrice);
+                  break;
                }
                else
                {
+                  // P2-P10 TP → selesai biasa, tidak re-entry
                   g_layerState[i] = LAYER_DONE;
-                  Print("[Layer ", i, "] Trailing stop kena @", DoubleToString(closePrice, 2),
-                        " — re-entry OFF, layer selesai.");
+                  Print("[Layer ", i, "] ✅ TP tercapai @", DoubleToString(closePrice, 2), " — selesai, tidak re-entry.");
                }
             }
             else if(reason == DEAL_REASON_CLIENT || reason == DEAL_REASON_EXPERT)
             {
-               // Close manual oleh trader atau script/EA → boleh re-entry
-               if(InpReentryEnable)
+               if(i == 1)
                {
-                  Print("[Layer ", i, "] Manual/expert close @", DoubleToString(closePrice, 2),
-                        " — re-entry LIMIT @", DoubleToString(g_layerEntry[i], 2));
-                  PlaceLayerLimit(i, g_sessionDirection, g_layerEntry[i], g_layerTP[i]);
+                  HandleP1Close("🖐 P1 ditutup manual/expert", closePrice);
+                  break;
                }
                else
                {
+                  // P2-P10 ditutup manual → selesai, TIDAK re-entry
                   g_layerState[i] = LAYER_DONE;
                   Print("[Layer ", i, "] Manual close @", DoubleToString(closePrice, 2),
-                        " — re-entry OFF, layer selesai.");
+                        " — layer selesai (P2-P10 tidak re-entry).");
                }
             }
             else
             {
-               // Alasan tidak diketahui (stopout, margin call, sistem, dll) —
-               // JANGAN re-entry untuk menghindari risiko yang tidak terkontrol
-               g_layerState[i] = LAYER_DONE;
-               Print("[Layer ", i, "] Closed via alasan tidak dikenal (reason=", reason,
-                     ") @", DoubleToString(closePrice, 2), " — layer selesai, tidak re-entry.");
+               // Alasan tidak diketahui (stopout, margin call, sistem, dll)
+               if(i == 1)
+               {
+                  HandleP1Close("❓ P1 closed alasan tidak dikenal (reason=" + IntegerToString(reason) + ")", closePrice);
+                  break;
+               }
+               else
+               {
+                  g_layerState[i] = LAYER_DONE;
+                  Print("[Layer ", i, "] Closed via alasan tidak dikenal (reason=", reason,
+                        ") @", DoubleToString(closePrice, 2), " — layer selesai, tidak re-entry.");
+               }
             }
          }
       }
@@ -348,17 +415,13 @@ void CheckLayerTransitions()
          // Order pending hilang — bisa karena SL global sudah fire, atau dihapus manual
          if(!g_sessionActive)
          {
-            // Sesi sudah berakhir (SL global) — jangan pasang ulang, tandai selesai
+            // Sesi sudah berakhir — tandai selesai
             g_layerState[i] = LAYER_NONE;
             continue;
          }
-         if(InpReentryEnable)
-         {
-            Print("[Layer ", i, "] Order pending hilang — pasang ulang.");
-            PlaceLayerLimit(i, g_sessionDirection, g_layerEntry[i], g_layerTP[i]);
-         }
-         else
-            g_layerState[i] = LAYER_DONE;
+         // P2-P10 pending hilang (terhapus manual, dll) → selesai, TIDAK pasang ulang
+         g_layerState[i] = LAYER_DONE;
+         Print("[Layer ", i, "] Order pending hilang — layer selesai (P2-P10 tidak re-entry).");
       }
    }
 }
