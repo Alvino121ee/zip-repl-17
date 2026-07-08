@@ -357,10 +357,20 @@ void CheckLayerTransitions()
                   }
                   else
                   {
-                     // P2-P10 kena trailing → selesai, TIDAK re-entry
-                     g_layerState[i] = LAYER_DONE;
-                     Print("[Layer ", i, "] Trailing stop kena @", DoubleToString(closePrice, 2),
-                           " — layer selesai (P2-P10 tidak re-entry).");
+                     // P2-P10 kena trailing — re-entry hanya jika P1 masih open/floating
+                     bool p1StillOpen = (g_layerState[1] == LAYER_OPEN && FindLayerPosition(1) != 0);
+                     if(InpReentryEnable && p1StillOpen)
+                     {
+                        Print("[Layer ", i, "] Trailing stop kena @", DoubleToString(closePrice, 2),
+                              " — P1 masih open, re-entry LIMIT @", DoubleToString(g_layerEntry[i], 2));
+                        PlaceLayerLimit(i, g_sessionDirection, g_layerEntry[i], g_layerTP[i]);
+                     }
+                     else
+                     {
+                        g_layerState[i] = LAYER_DONE;
+                        Print("[Layer ", i, "] Trailing stop kena @", DoubleToString(closePrice, 2),
+                              " — P1 sudah close atau re-entry OFF, layer selesai.");
+                     }
                   }
                }
             }
@@ -387,10 +397,20 @@ void CheckLayerTransitions()
                }
                else
                {
-                  // P2-P10 ditutup manual → selesai, TIDAK re-entry
-                  g_layerState[i] = LAYER_DONE;
-                  Print("[Layer ", i, "] Manual close @", DoubleToString(closePrice, 2),
-                        " — layer selesai (P2-P10 tidak re-entry).");
+                  // P2-P10 ditutup manual — re-entry hanya jika P1 masih open/floating
+                  bool p1StillOpen = (g_layerState[1] == LAYER_OPEN && FindLayerPosition(1) != 0);
+                  if(InpReentryEnable && p1StillOpen)
+                  {
+                     Print("[Layer ", i, "] Manual close @", DoubleToString(closePrice, 2),
+                           " — P1 masih open, re-entry LIMIT @", DoubleToString(g_layerEntry[i], 2));
+                     PlaceLayerLimit(i, g_sessionDirection, g_layerEntry[i], g_layerTP[i]);
+                  }
+                  else
+                  {
+                     g_layerState[i] = LAYER_DONE;
+                     Print("[Layer ", i, "] Manual close @", DoubleToString(closePrice, 2),
+                           " — P1 sudah close atau re-entry OFF, layer selesai.");
+                  }
                }
             }
             else
@@ -403,6 +423,7 @@ void CheckLayerTransitions()
                }
                else
                {
+                  // P2-P10 alasan tidak dikenal — JANGAN re-entry, risiko tidak terkontrol
                   g_layerState[i] = LAYER_DONE;
                   Print("[Layer ", i, "] Closed via alasan tidak dikenal (reason=", reason,
                         ") @", DoubleToString(closePrice, 2), " — layer selesai, tidak re-entry.");
