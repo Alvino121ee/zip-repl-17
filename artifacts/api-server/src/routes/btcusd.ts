@@ -40,14 +40,7 @@ function requireAdmin(req: Req, res: Res, next: Next) {
 async function requireMember(req: Req, res: Res, next: Next) {
   const token = ((req.headers.authorization as string) ?? "").replace(/^Bearer\s+/i, "");
   if (!token) return res.status(401).json({ error: "Login diperlukan" });
-  const secret = process.env.SESSION_SECRET;
-  if (secret && token === secret) return next();
-  try {
-    const { getMemberPassword } = await import("../lib/xauusd-settings.js");
-    const pwd = await getMemberPassword();
-    if (pwd && token === pwd) return next();
-  } catch { /**/ }
-  // Cek session token member baru
+  // Hanya session token member (email+password) yang berlaku — admin tidak boleh akses member
   try {
     const { findMemberBySessionToken } = await import("../lib/members-db.js");
     const member = await findMemberBySessionToken(token);

@@ -12,7 +12,6 @@ const KEY_DEEPSEEK = "deepseek_api_key";
 const KEY_TIMEFRAME = "prediction_timeframe_minutes";
 const KEY_WHATSAPP_NUMBER = "whatsapp_number";
 const KEY_WHATSAPP_ENABLED = "whatsapp_enabled";
-const KEY_MEMBER_PASSWORD = "member_password";
 const KEY_XAUUSD_BRAIN_ENABLED = "xauusd_brain_enabled";
 const KEY_BTCUSD_BRAIN_ENABLED = "btcusd_brain_enabled";
 const KEY_AI_API_KEY = "ai_api_key";
@@ -113,21 +112,6 @@ export async function isWhatsappEnabled(): Promise<boolean> {
 
 export async function setWhatsappEnabled(enabled: boolean): Promise<void> {
   await setValue(KEY_WHATSAPP_ENABLED, enabled ? "true" : "false");
-}
-
-// ─── Member password ──────────────────────────────────────────────────────────
-export async function getMemberPassword(): Promise<string | null> {
-  const v = await getValue(KEY_MEMBER_PASSWORD);
-  return v && v.trim().length > 0 ? v.trim() : null;
-}
-
-export async function setMemberPassword(password: string): Promise<void> {
-  await setValue(KEY_MEMBER_PASSWORD, password.trim());
-}
-
-export async function clearMemberPassword(): Promise<void> {
-  await db.delete(xauusdSettingsTable).where(eq(xauusdSettingsTable.key, KEY_MEMBER_PASSWORD));
-  cache = null;
 }
 
 // ─── Brain engine enable/disable ──────────────────────────────────────────────

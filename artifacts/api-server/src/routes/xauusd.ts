@@ -38,7 +38,6 @@ import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
 import { getLatestMentorIndicators } from "../lib/xauusd-mentor-cache.js";
 import {
   getSettingsSummary,
-  getMemberPassword,
   setDeepseekApiKey,
   clearDeepseekApiKey,
   setPredictionTimeframeMinutes,
@@ -877,19 +876,9 @@ function requireAdmin(req: import("express").Request, res: import("express").Res
 async function requireMember(req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) {
   const auth = (req.headers.authorization as string) ?? "";
   const token = auth.replace(/^Bearer\s+/i, "");
-  if (!token) return res.status(401).json({ error: "Login diperlukan — silakan login sebagai member atau admin" });
+  if (!token) return res.status(401).json({ error: "Login diperlukan — silakan login sebagai member" });
 
-  // Admin token juga berlaku untuk akses member
-  const secret = process.env.SESSION_SECRET;
-  if (secret && token === secret) return next();
-
-  // Cek member_password lama (backward compat)
-  try {
-    const memberPwd = await getMemberPassword();
-    if (memberPwd && token === memberPwd) return next();
-  } catch { /* lanjut */ }
-
-  // Cek session token member baru (email+password)
+  // Hanya session token member (email+password) yang berlaku — admin tidak boleh akses member
   try {
     const { findMemberBySessionToken } = await import("../lib/members-db.js");
     const member = await findMemberBySessionToken(token);

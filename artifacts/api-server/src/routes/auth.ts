@@ -9,7 +9,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
-import { getMemberPassword } from "../lib/xauusd-settings.js";
 import {
   findMemberByEmail,
   createMember,
@@ -82,11 +81,6 @@ router.post("/login", loginLimiter, async (req, res) => {
   // ── Member login — email + password ─────────────────────────────────────────
   if (role === "member") {
     if (!email || typeof email !== "string") {
-      // Backward compat: jika tidak ada email, coba cek member_password lama
-      const memberPwd = await getMemberPassword();
-      if (memberPwd && password === memberPwd) {
-        return res.json({ ok: true, role: "member", token: memberPwd, email: null });
-      }
       return res.status(400).json({ ok: false, error: "Email diperlukan" });
     }
 

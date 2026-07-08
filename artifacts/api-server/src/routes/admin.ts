@@ -6,9 +6,6 @@ import { getEngineStatus } from "../lib/xauusd-brain-engine.js";
 import { getBtcEngineStatus } from "../lib/btcusd-brain-engine.js";
 import {
   getSettingsSummary,
-  getMemberPassword,
-  setMemberPassword,
-  clearMemberPassword,
   isXauusdBrainEnabled,
   isBtcusdBrainEnabled,
   setAiApiKey,
@@ -64,8 +61,7 @@ router.get("/system", requireAdmin, async (_req, res) => {
       Promise.resolve(getLatestLivePrice()),
     ]);
 
-    const [memberPwd, xauusdEnabled, btcEnabled] = await Promise.all([
-      getMemberPassword(),
+    const [xauusdEnabled, btcEnabled] = await Promise.all([
       isXauusdBrainEnabled(),
       isBtcusdBrainEnabled(),
     ]);
@@ -77,25 +73,9 @@ router.get("/system", requireAdmin, async (_req, res) => {
       settings,
       livePrice,
       serverTime: new Date().toISOString(),
-      member: { hasPassword: !!memberPwd },
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
-  }
-});
-
-// POST /admin/member-password — set/clear member access password (admin only)
-router.post("/member-password", requireAdmin, async (req, res) => {
-  const { password } = req.body as { password?: string };
-  try {
-    if (!password || password.trim().length === 0) {
-      await clearMemberPassword();
-      return res.json({ ok: true, cleared: true });
-    }
-    await setMemberPassword(password);
-    return res.json({ ok: true, cleared: false });
-  } catch (err) {
-    return res.status(500).json({ error: String(err) });
   }
 });
 
