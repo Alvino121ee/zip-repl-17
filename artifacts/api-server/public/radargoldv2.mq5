@@ -72,13 +72,15 @@ double   g_entryHigh  = 0;
 double   g_conf       = 0;
 
 //--- Re-entry state
-bool     g_waitingReentry    = false;
+bool     g_waitingReentry     = false;
 datetime g_reentryAvailableAt = 0;    // cooldown: re-entry boleh setelah waktu ini
-string   g_lastEntrySignal   = "HOLD";
-double   g_reentryZoneLow    = 0;
-double   g_reentryZoneHigh   = 0;
-double   g_lastEntryPrice    = 0;
-int      g_prevPosCount      = 0;
+string   g_lastEntrySignal    = "HOLD";
+double   g_reentryZoneLow     = 0;
+double   g_reentryZoneHigh    = 0;
+double   g_lastEntryPrice     = 0;
+double   g_lastEntryTP        = 0;    // TP1 saat entry → identitas sinyal
+double   g_lastEntrySL        = 0;    // SL saat entry  → identitas sinyal
+int      g_prevPosCount       = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -431,41 +433,78 @@ void FetchAndProcess()
    //--- Sinyal sama: cek re-entry
    if(InpSmartReentry && g_waitingReentry && g_lastEntrySignal == cmd)
    {
-      double curPrice  = (cmd == "BUY")
-         ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
-         : SymbolInfoDouble(Symbol(), SYMBOL_BID);
       double pointSize = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
-      double bufSize   = InpReentryBufPip * pointSize * 10.0;
+      double pipSize   = pointSize * 10.0;
 
-      bool cooldownDone = (TimeCurrent() >= g_reentryAvailableAt);
-      bool inZone = (curPrice >= g_reentryZoneLow  - bufSize)
-                 && (curPrice <= g_reentryZoneHigh + bufSize);
-
-      if(!cooldownDone)
+      // ── Deteksi sinyal BARU via TP/SL (hanya di non-reverse mode)
+      // Di reverse mode TP/SL berubah tiap tick → tidak bisa jadi identitas sinyal
+      bool newSignalDetected = false;
+      if(!InpReverseMode && g_lastEntryTP > 0 && g_lastEntrySL > 0)
       {
-         // Masih cooldown — tampilkan sisa detik
-         int sisaDetik = (int)(g_reentryAvailableAt - TimeCurrent());
-         if(InpShowPanel)
-            SetLabelText(LBL_REENTRY,
-               "Re-entry: cooldown " + IntegerToString(sisaDetik) + "s...", clrOrange);
+         bool tpChanged = MathAbs(NormalizeDouble(g_tp1, _Digits) - g_lastEntryTP) > pipSize;
+         bool slChanged = MathAbs(NormalizeDouble(g_sl,  _Digits) - g_lastEntrySL) > pipSize;
+         newSignalDetected = (tpChanged || slChanged);
       }
-      else if(inZone && !HasPosition((int)posType))
+
+      if(newSignalDetected)
       {
-         // Cooldown selesai + harga di zona entry asli → re-entry
-         Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
-               " di zona [", DoubleToString(g_reentryZoneLow, 2),
-               "-", DoubleToString(g_reentryZoneHigh, 2), "] — masuk ulang ", cmd);
-         OpenOrder(orderType);
+         Print("[Re-entry] SINYAL BARU terdeteksi (TP/SL berubah) | ",
+               "TP: ", DoubleToString(g_lastEntryTP, 2), "→", DoubleToString(g_tp1, 2), " | ",
+               "SL: ", DoubleToString(g_lastEntrySL, 2), "→", DoubleToString(g_sl,  2),
+               " — batalkan re-entry, masuk fresh");
          g_waitingReentry = false;
-         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MASUK! zona entry", clrLime);
+         if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: SINYAL BARU — fresh entry", clrAqua);
+         // lanjut ke bawah (entry fresh jika belum punya posisi)
       }
-      else if(!inZone)
+      else
       {
-         if(InpShowPanel)
-            SetLabelText(LBL_REENTRY,
-               "Re-entry: tunggu $" + DoubleToString(g_reentryZoneLow, 2)
-               + "-" + DoubleToString(g_reentryZoneHigh, 2), clrYellow);
+         // Sinyal sama persis → cek zona & cooldown, lalu return (jangan masuk entry normal)
+         double curPrice = (cmd == "BUY")
+            ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+            : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+         double bufSize  = InpReentryBufPip * pipSize;
+
+         bool cooldownDone = (TimeCurrent() >= g_reentryAvailableAt);
+         bool inZone = (curPrice >= g_reentryZoneLow - bufSize)
+                    && (curPrice <= g_reentryZoneHigh + bufSize);
+
+         if(!cooldownDone)
+         {
+            int sisaDetik = (int)(g_reentryAvailableAt - TimeCurrent());
+            if(InpShowPanel)
+               SetLabelText(LBL_REENTRY,
+                  "Re-entry: cooldown " + IntegerToString(sisaDetik) + "s...", clrOrange);
+         }
+         else if(inZone && !HasPosition((int)posType))
+         {
+            Print("[Re-entry] Harga $", DoubleToString(curPrice, 2),
+                  " kembali ke zona sinyal SAMA [TP=", DoubleToString(g_lastEntryTP, 2),
+                  " SL=", DoubleToString(g_lastEntrySL, 2), "] — masuk ulang ", cmd);
+            OpenOrder(orderType);
+            g_waitingReentry = false;
+            if(InpShowPanel) SetLabelText(LBL_REENTRY, "Re-entry: MASUK! sinyal sama", clrLime);
+         }
+         else if(!inZone)
+         {
+            if(InpShowPanel)
+               SetLabelText(LBL_REENTRY,
+                  "Re-entry: tunggu $" + DoubleToString(g_reentryZoneLow, 2)
+                  + "-" + DoubleToString(g_reentryZoneHigh, 2), clrYellow);
+         }
+         return;  // masih dalam mode re-entry, jangan proses entry normal
       }
+   }
+
+   //--- Entry fresh: sinyal aktif, tidak ada posisi
+   // (termasuk setelah re-entry dibatalkan karena sinyal baru terdeteksi)
+   if(!HasPosition((int)posType))
+   {
+      OpenOrder(orderType);
+      g_lastEntrySignal = cmd;
+      double pointSize3 = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+      double halfZone3  = InpReentryZonePip * pointSize3 * 10.0;
+      g_reentryZoneLow  = NormalizeDouble(g_lastEntryPrice - halfZone3, _Digits);
+      g_reentryZoneHigh = NormalizeDouble(g_lastEntryPrice + halfZone3, _Digits);
    }
 }
 
@@ -488,6 +527,8 @@ void OpenOrder(ENUM_ORDER_TYPE type)
    if(ok)
    {
       g_lastEntryPrice = price;
+      g_lastEntryTP    = tpNorm;   // identitas sinyal: TP saat entry
+      g_lastEntrySL    = slNorm;   // identitas sinyal: SL saat entry
       Print("[Order] ", EnumToString(type), " OK | tiket=", g_trade.ResultOrder(),
             " | harga=", DoubleToString(price, _Digits),
             " | TP=", DoubleToString(tpNorm, _Digits),
