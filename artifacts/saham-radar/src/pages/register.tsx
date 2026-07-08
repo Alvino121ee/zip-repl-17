@@ -30,17 +30,13 @@ export default function RegisterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
-      const data = (await res.json()) as { ok: boolean; error?: string; email?: string; token?: string; memberId?: number };
+      const data = (await res.json()) as { ok: boolean; error?: string; email?: string; requiresVerification?: boolean };
       if (!res.ok || !data.ok) {
         setError(data.error ?? "Pendaftaran gagal");
         return;
       }
-      // Berhasil — simpan token dan langsung masuk ke member
-      if (data.token) {
-        sessionStorage.setItem("gr_member_token", data.token);
-        sessionStorage.setItem("gr_member_email", data.email ?? email.trim());
-      }
-      navigate("/member");
+      // Perlu verifikasi email — arahkan ke halaman verifikasi kode
+      navigate(`/verify-email?email=${encodeURIComponent(data.email ?? email.trim())}`);
     } catch {
       setError("Gagal terhubung ke server");
     } finally {

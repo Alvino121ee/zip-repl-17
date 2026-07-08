@@ -20,8 +20,7 @@ import {
   generateVerificationCode,
   clearSessionToken,
 } from "../lib/members-db.js";
-import { sendVerificationEmail } from "../lib/email-smtp.js";
-import { getSmtpSettings } from "../lib/xauusd-settings.js";
+import { sendVerificationEmail } from "../lib/email-resend.js";
 
 const router = Router();
 
@@ -122,21 +121,32 @@ router.post("/register", registerLimiter, async (req, res) => {
 
   const existing = await findMemberByEmail(email.trim());
   if (existing) {
-    // Akun sudah ada (verified atau belum) — langsung auto-verify dan login
-    if (!existing.emailVerified) {
-      await markEmailVerified(existing.id);
+    if (existing.emailVerified) {
+      return res.status(409).json({ ok: false, error: "Email sudah terdaftar. Silakan login." });
     }
-    const token = await createSessionToken(existing.id);
-    return res.json({ ok: true, token, email: existing.email, memberId: existing.id });
+    // Akun sudah ada tapi belum diverifikasi — kirim ulang kode
+    const code = generateVerificationCode();
+    await setVerificationCode(existing.id, code);
+    try {
+      await sendVerificationEmail(existing.email, code);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: `Gagal kirim email verifikasi: ${String(err)}` });
+    }
+    return res.json({ ok: true, requiresVerification: true, email: existing.email, memberId: existing.id });
   }
 
   const hash = await bcrypt.hash(password, 12);
   const member = await createMember(email.trim(), hash);
-  // Langsung tandai terverifikasi — tidak perlu OTP
-  await markEmailVerified(member.id);
-  const token = await createSessionToken(member.id);
 
-  return res.status(201).json({ ok: true, token, email: member.email, memberId: member.id });
+  const code = generateVerificationCode();
+  await setVerificationCode(member.id, code);
+  try {
+    await sendVerificationEmail(member.email, code);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: `Gagal kirim email verifikasi: ${String(err)}` });
+  }
+
+  return res.status(201).json({ ok: true, requiresVerification: true, email: member.email, memberId: member.id });
 });
 
 // ─── POST /auth/verify-email ──────────────────────────────────────────────────
@@ -178,8 +188,7 @@ router.post("/resend-verification", resendLimiter, async (req, res) => {
   const code = generateVerificationCode();
   await setVerificationCode(member.id, code);
   try {
-    const smtp = await getSmtpSettings();
-    await sendVerificationEmail(member.email, code, smtp);
+    await sendVerificationEmail(member.email, code);
   } catch (err) {
     return res.status(500).json({ ok: false, error: `Gagal kirim email: ${String(err)}` });
   }
