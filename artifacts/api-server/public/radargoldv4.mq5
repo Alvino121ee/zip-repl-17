@@ -21,10 +21,15 @@ input bool   InpAutoTrade   = false;
 input int    InpMagicNumber = 202607;
 input bool   InpReverseMode = false;   // true = balik sinyal (BUY->SELL, SELL->BUY)
 
-input group "=== Trailing Stop ==="
-input bool   InpUseTrailing   = true;
-input int    InpTrailActivate = 50;  // Profit minimal (pips) sebelum trailing aktif
-input int    InpTrailDistance = 20;  // Jarak trailing SL dari harga (pips)
+input group "=== Trailing Stop P1 (posisi TP1) ==="
+input bool   InpTrailP1      = true;   // Aktifkan trailing untuk P1
+input int    InpTrailP1Act   = 30;     // Profit minimal (pips) sebelum trailing P1 aktif
+input int    InpTrailP1Dist  = 15;     // Jarak trailing SL P1 dari harga (pips)
+
+input group "=== Trailing Stop P2 (posisi TP2) ==="
+input bool   InpTrailP2      = true;   // Aktifkan trailing untuk P2
+input int    InpTrailP2Act   = 80;     // Profit minimal (pips) sebelum trailing P2 aktif
+input int    InpTrailP2Dist  = 35;     // Jarak trailing SL P2 dari harga (pips)
 
 input group "=== Partial Close (2 Posisi) ==="
 input bool   InpPartialClose = false;   // Buka 2 posisi: P1→TP1, P2→TP2
@@ -101,9 +106,8 @@ int OnInit()
    Print("URL        : ", InpApiUrl);
    Print("Magic#     : ", InpMagicNumber);
    Print("Mode       : ", InpReverseMode ? "REVERSE (sinyal dibalik)" : "NORMAL");
-   Print("TrailStop  : ", InpUseTrailing
-      ? "ON — aktif setelah " + IntegerToString(InpTrailActivate) + " pips profit, jarak " + IntegerToString(InpTrailDistance) + " pips"
-      : "OFF");
+   Print("Trail P1   : ", InpTrailP1 ? "ON — aktif >" + IntegerToString(InpTrailP1Act) + " pip, jarak " + IntegerToString(InpTrailP1Dist) + " pip" : "OFF");
+   Print("Trail P2   : ", InpTrailP2 ? "ON — aktif >" + IntegerToString(InpTrailP2Act) + " pip, jarak " + IntegerToString(InpTrailP2Dist) + " pip" : "OFF");
    Print("Re-entry   : ", InpSmartReentry ? "ON" : "OFF");
 
    FetchAndProcess();
@@ -120,7 +124,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   if(InpUseTrailing)   ManageTrailingStops();
+   if(InpTrailP1 || InpTrailP2) ManageTrailingStops();
    if(InpSmartReentry)  CheckPositionsClosed();
 
    if(TimeCurrent() - g_lastPoll < POLL_INTERVAL_SEC) return;
@@ -205,15 +209,26 @@ void ManageTrailingStops()
 {
    double pointSize = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    int    digits    = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
-   double trailAct  = InpTrailActivate * pointSize * 10.0;
-   double trailDist = InpTrailDistance * pointSize * 10.0;
+   double pip       = pointSize * 10.0;
 
    for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong ticket = PositionGetTicket(i);
-      if(!PositionSelectByTicket(ticket))               continue;
-      if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
+      if(!PositionSelectByTicket(ticket))                continue;
+      if(PositionGetString(POSITION_SYMBOL) != Symbol())  continue;
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+
+      // Tentukan setting trailing berdasarkan tag posisi (P1 / P2 / normal)
+      string comment = PositionGetString(POSITION_COMMENT);
+      bool isP2      = (StringFind(comment, "P2") >= 0);
+      bool isP1      = !isP2 && (StringFind(comment, "P1") >= 0 || !InpPartialClose);
+
+      // Pilih parameter trailing yang sesuai
+      bool   useTrail  = isP2 ? InpTrailP2      : InpTrailP1;
+      double trailAct  = isP2 ? InpTrailP2Act * pip : InpTrailP1Act * pip;
+      double trailDist = isP2 ? InpTrailP2Dist * pip : InpTrailP1Dist * pip;
+
+      if(!useTrail) continue;
 
       ENUM_POSITION_TYPE pt        = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       double             openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -221,6 +236,7 @@ void ManageTrailingStops()
       double             curTP     = PositionGetDouble(POSITION_TP);
       double             ask       = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       double             bid       = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      string             tag       = isP2 ? "P2" : (isP1 ? "P1" : "");
 
       if(pt == POSITION_TYPE_BUY)
       {
@@ -230,7 +246,8 @@ void ManageTrailingStops()
          if(newSL > curSL + pointSize)
          {
             if(g_trade.PositionModify(ticket, newSL, curTP))
-               Print("[Trail] BUY #", ticket, " SL: ", DoubleToString(curSL, digits), " -> ", DoubleToString(newSL, digits));
+               Print("[Trail-", tag, "] BUY #", ticket,
+                     " SL: ", DoubleToString(curSL, digits), "→", DoubleToString(newSL, digits));
          }
       }
       else if(pt == POSITION_TYPE_SELL)
@@ -241,7 +258,8 @@ void ManageTrailingStops()
          if(curSL == 0 || newSL < curSL - pointSize)
          {
             if(g_trade.PositionModify(ticket, newSL, curTP))
-               Print("[Trail] SELL #", ticket, " SL: ", DoubleToString(curSL, digits), " -> ", DoubleToString(newSL, digits));
+               Print("[Trail-", tag, "] SELL #", ticket,
+                     " SL: ", DoubleToString(curSL, digits), "→", DoubleToString(newSL, digits));
          }
       }
    }
@@ -761,11 +779,13 @@ void UpdatePanel(string cmd)
    SetLabelText(LBL_CONF,
       "Conf: " + DoubleToString(g_conf * 100, 0) + "% | Auto: " + (InpAutoTrade ? "ON" : "OFF"),
       InpAutoTrade ? clrLime : clrGray);
+   string trailInfo = "";
+   if(InpTrailP1) trailInfo += "P1:act" + IntegerToString(InpTrailP1Act) + "p/d" + IntegerToString(InpTrailP1Dist) + "p ";
+   if(InpTrailP2) trailInfo += "P2:act" + IntegerToString(InpTrailP2Act) + "p/d" + IntegerToString(InpTrailP2Dist) + "p";
+   bool anyTrail = InpTrailP1 || InpTrailP2;
    SetLabelText(LBL_TRAIL,
-      InpUseTrailing
-         ? "Trail: ON act=" + IntegerToString(InpTrailActivate) + "p dist=" + IntegerToString(InpTrailDistance) + "p"
-         : "Trail: OFF",
-      InpUseTrailing ? C'100,200,255' : clrGray);
+      anyTrail ? "Trail: " + trailInfo : "Trail: OFF",
+      anyTrail ? C'100,200,255' : clrGray);
 
    if(!g_waitingReentry)
       SetLabelText(LBL_REENTRY,
