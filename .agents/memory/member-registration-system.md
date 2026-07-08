@@ -25,8 +25,8 @@ description: Email+password member registration with SMTP email verification (6-
 - `/register`: 10 req/1hr per IP
 
 ## Backward Compatibility
-- `requireMember` middleware checks in order: admin token → old `member_password` → new session token
-- Login UI has "Akses lama (tanpa email)" toggle to hide email field for legacy password users
+- `requireMember` middleware checks in order: admin token → old `member_password` → new session token (backend fallback still exists)
+- The member login UI no longer exposes a legacy "Akses lama (tanpa email)" toggle (removed 2026-07-08) — email+password is the only front-end path now, though the backend fallback remains for any pre-existing token holders
 
 ## Admin Panel
 - Members list at `GET /api/admin/members` — shows email, verified status, join date

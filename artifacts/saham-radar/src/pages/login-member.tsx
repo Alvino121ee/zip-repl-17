@@ -17,19 +17,16 @@ export default function LoginMemberPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
-  const [useLegacy, setUseLegacy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const handleLogin = async () => {
     if (!password.trim()) return;
-    if (!useLegacy && !email.trim()) return setError("Email diperlukan");
+    if (!email.trim()) return setError("Email diperlukan");
     setLoading(true);
     setError("");
     try {
-      const body = !useLegacy
-        ? { role: "member", email: email.trim(), password }
-        : { role: "member", password };
+      const body = { role: "member", email: email.trim(), password };
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -83,21 +80,19 @@ export default function LoginMemberPage() {
       </div>
 
       <div className="bg-card/60 border border-border/50 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
-        {/* Email (not legacy) */}
-        {!useLegacy && (
-          <div className="relative mb-3">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60" />
-            <Input
-              type="email"
-              placeholder="Email Anda"
-              value={email}
-              onChange={(e) => { setEmail(e.target.value); setError(""); }}
-              onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              className="pl-10 bg-background/50 border-border/50 focus:border-primary/50"
-              autoFocus
-            />
-          </div>
-        )}
+        {/* Email */}
+        <div className="relative mb-3">
+          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60" />
+          <Input
+            type="email"
+            placeholder="Email Anda"
+            value={email}
+            onChange={(e) => { setEmail(e.target.value); setError(""); }}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            className="pl-10 bg-background/50 border-border/50 focus:border-primary/50"
+            autoFocus
+          />
+        </div>
 
         {/* Password */}
         <div className="relative mb-4">
@@ -127,33 +122,22 @@ export default function LoginMemberPage() {
 
         <Button
           onClick={handleLogin}
-          disabled={loading || !password.trim() || (!useLegacy && !email.trim())}
+          disabled={loading || !password.trim() || !email.trim()}
           className="w-full bg-primary hover:bg-primary/90 text-black font-semibold"
         >
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Masuk sebagai Member"}
         </Button>
 
-        <div className="mt-4 space-y-2">
-          <div className="text-center text-xs text-muted-foreground">
-            Belum punya akun?{" "}
-            <button
-              type="button"
-              onClick={() => navigate("/register")}
-              className="text-primary hover:text-primary/80 font-medium inline-flex items-center gap-1"
-            >
-              <UserPlus className="w-3 h-3" />
-              Daftar sekarang
-            </button>
-          </div>
-          <div className="text-center">
-            <button
-              type="button"
-              onClick={() => { setUseLegacy((v) => !v); setError(""); setEmail(""); }}
-              className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-            >
-              {useLegacy ? "← Kembali ke login email" : "Akses lama (tanpa email)"}
-            </button>
-          </div>
+        <div className="mt-4 text-center text-xs text-muted-foreground">
+          Belum punya akun?{" "}
+          <button
+            type="button"
+            onClick={() => navigate("/register")}
+            className="text-primary hover:text-primary/80 font-medium inline-flex items-center gap-1"
+          >
+            <UserPlus className="w-3 h-3" />
+            Daftar sekarang
+          </button>
         </div>
       </div>
 
