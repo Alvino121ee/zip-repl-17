@@ -78,6 +78,24 @@ interface EaAccountResponse {
   data: EaAccountData | null;
 }
 
+interface EnsembleVoteEntry { direction: string; confidence: number; label: string }
+interface EnsembleVotes {
+  technical: EnsembleVoteEntry;
+  macro: EnsembleVoteEntry;
+  sentiment: EnsembleVoteEntry;
+  ai: EnsembleVoteEntry;
+  agreementCount: number;
+  finalDirection: "up" | "down";
+}
+
+interface MainPrediction {
+  id: number;
+  direction: string;
+  confidence: number;
+  timeframe: string;
+  indicatorsAtPrediction?: { ensembleVotes?: EnsembleVotes; [key: string]: unknown };
+}
+
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 function resolveDisplay(raw: RawCommand, position: PositionState): DisplayCommand {
@@ -188,6 +206,22 @@ export function MentorModeWidget() {
 
   const ea = eaAccount?.connected ? eaAccount.data : null;
 
+  // ── Prediksi UTAMA AI — untuk perbandingan "Vs. AI Utama" ─────────────────
+  const { data: mainPredictions } = useQuery<MainPrediction[]>({
+    queryKey: ["/api/xauusd/predictions", "main"],
+    queryFn: async () => {
+      const res = await fetch("/api/xauusd/predictions?type=main&limit=1");
+      if (!res.ok) throw new Error("Gagal fetch prediksi utama");
+      return res.json() as Promise<MainPrediction[]>;
+    },
+    refetchInterval: isActive ? 30_000 : false,
+    enabled: isActive,
+    staleTime: 15_000,
+  });
+
+  const ev = mainPredictions?.[0]?.indicatorsAtPrediction?.ensembleVotes;
+  const mainTimeframe = mainPredictions?.[0]?.timeframe ?? null;
+
   // ── Cooldown dinamis berdasarkan sensitivity ───────────────────────────────
   const COOLDOWN_MS = COOLDOWN_BY_SENSITIVITY[sensitivity];
 
@@ -288,6 +322,12 @@ export function MentorModeWidget() {
           </span>
         )}
 
+        {isActive && mainTimeframe && (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border bg-zinc-800 text-zinc-400 border-zinc-700">
+            {mainTimeframe}
+          </span>
+        )}
+
         <select
           data-nodrag
           value={sensitivity}
@@ -367,6 +407,40 @@ export function MentorModeWidget() {
                   </div>
                 </div>
               </div>
+
+              {/* ── Vs. AI Utama ── */}
+              {ev && (
+                <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/40 p-2.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-zinc-400">Vs. AI Utama</span>
+                    <span className={`text-[11px] font-black ${
+                      ev.finalDirection === "up" ? "text-emerald-400" : "text-red-400"
+                    }`}>
+                      Final: {ev.finalDirection === "up" ? "NAIK" : "TURUN"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {([
+                      { key: "technical", label: "Teknikal" },
+                      { key: "ai", label: "AI Rule" },
+                      { key: "macro", label: "Macro" },
+                      { key: "sentiment", label: "Sentimen" },
+                    ] as const).map(({ key, label }) => {
+                      const v = ev[key];
+                      const d = v.direction;
+                      const color = d === "up" ? "text-emerald-400" : d === "down" ? "text-red-400" : "text-amber-400";
+                      return (
+                        <div key={key} className="flex items-center justify-between bg-zinc-900/50 rounded-lg px-2 py-1">
+                          <span className="text-[10px] text-zinc-500">{label}</span>
+                          <span className={`text-[10px] font-bold ${color}`}>
+                            {d === "up" ? "↑" : d === "down" ? "↓" : "↔"} {(v.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* ── Cooldown — HANYA tampil saat benar-benar aktif ── */}
               {cooldownLeft > 0 && (
