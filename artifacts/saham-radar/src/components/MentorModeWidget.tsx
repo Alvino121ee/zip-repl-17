@@ -207,6 +207,8 @@ export function MentorModeWidget() {
 
   // ── Trading state ──────────────────────────────────────────────────────────
   const [stableCmd, setStableCmd]         = useState<DisplayCommand>("TUNGGU");
+  const [stableConf, setStableConf]       = useState<number>(0);
+  const [pendingFlip, setPendingFlip]     = useState(false);
   const [positionState, setPositionState] = useState<PositionState>("NONE");
   const [lastActionableTime, setLastActionableTime] = useState(0);
   const [cooldownLeft, setCooldownLeft]   = useState(0);
@@ -312,33 +314,51 @@ export function MentorModeWidget() {
       if (prevCmdRef.current !== "TUNGGU") {
         prevCmdRef.current = "TUNGGU";
         setStableCmd("TUNGGU");
+        setStableConf(0);
+        setPendingFlip(false);
       }
       return;
     }
 
     const candidate = resolveDisplay(activeCommand, positionState);
-    if (candidate === prevCmdRef.current) return; // nothing to do
+    if (candidate === prevCmdRef.current) {
+      // Same command still holding — keep confidence in sync while not on cooldown
+      if (candidate === "TUNGGU") setStableConf(activeConfidence);
+      setPendingFlip(false);
+      return;
+    }
 
     // TUNGGU is never actionable — allow immediately, no cooldown restart
     if (candidate === "TUNGGU") {
       prevCmdRef.current = "TUNGGU";
       setStableCmd("TUNGGU");
+      setStableConf(activeConfidence);
+      setPendingFlip(false);
       return;
     }
 
-    // Actionable command — respect cooldown
+    // Actionable command — respect cooldown. Confidence is frozen together with
+    // the command so the badge never shows a % that belongs to a different
+    // (not-yet-applied) direction while a flip is waiting out the cooldown.
     const onCooldown = Date.now() - lastActionableTime < COOLDOWN_MS;
-    if (onCooldown) return; // blocked; keep showing current stableCmd
+    if (onCooldown) {
+      setPendingFlip(true); // a new direction is queued behind the cooldown
+      return;
+    }
 
     prevCmdRef.current = candidate;
     setStableCmd(candidate);
+    setStableConf(activeConfidence);
     setLastActionableTime(Date.now());
-  }, [activeCommand, activeReady, positionState, isActive, lastActionableTime]);
+    setPendingFlip(false);
+  }, [activeCommand, activeConfidence, activeReady, positionState, isActive, lastActionableTime]);
 
   // ── Reset when deactivated or mode switched ────────────────────────────────
   useEffect(() => {
     if (!isActive) {
       setStableCmd("TUNGGU");
+      setStableConf(0);
+      setPendingFlip(false);
       setPositionState("NONE");
       setLastActionableTime(0);
       setCooldownLeft(0);
@@ -348,6 +368,8 @@ export function MentorModeWidget() {
 
   useEffect(() => {
     setStableCmd("TUNGGU");
+    setStableConf(0);
+    setPendingFlip(false);
     setLastActionableTime(0);
     setCooldownLeft(0);
     prevCmdRef.current = "TUNGGU";
@@ -513,10 +535,17 @@ export function MentorModeWidget() {
                 <div className="text-right shrink-0">
                   <div className="text-[10px] text-zinc-500">Conf.</div>
                   <div className={`text-sm font-bold ${style.text}`}>
-                    {activeReady ? `${Math.round(activeConfidence * 100)}%` : "—"}
+                    {activeReady ? `${Math.round(stableConf * 100)}%` : "—"}
                   </div>
                 </div>
               </div>
+
+              {/* ── Sinyal baru menunggu cooldown ── */}
+              {pendingFlip && (
+                <div className="text-[10px] text-amber-500/80 bg-amber-500/10 rounded-lg px-2 py-1.5 border border-amber-500/20">
+                  ⏳ Arah baru terdeteksi — menunggu cooldown sebelum ganti sinyal
+                </div>
+              )}
 
               {/* ── Vs. AI Utama ── */}
               {ev && (
