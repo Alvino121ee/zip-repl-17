@@ -21,15 +21,23 @@ input string InpSensitivity = "aggressive"; // super_aggressive|aggressive|norma
                                              // ai_utama = sinyal dari total % 4 agen ensemble (Teknikal/AI Rule/Macro/Sentimen), SL memakai skala mode "aggressive"
 
 input group "=== Trading ==="
-input double InpLotSize     = 0.01;    // Lot per layer (sama untuk semua layer)
+input double InpLotSize     = 0.01;    // Lot per layer (sama untuk semua layer) — dipakai jika Martingale OFF
 input bool   InpAutoTrade   = false;
 input int    InpMagicNumber = 202608;
 input bool   InpReverseMode = false;   // true = balik sinyal (BUY->SELL, SELL->BUY)
+
+input group "=== Martingale (naik lot setelah menang, reset setelah kalah) ==="
+input bool   InpMartingaleEnable = false;   // ON = pakai g_currentLot bertingkat, bukan InpLotSize tetap
+input double InpMartingaleBaseLot = 0.01;   // Lot awal / lot setelah kalah
+input double InpMartingaleStep    = 0.01;   // Kenaikan lot setiap kali sesi P1 menang (TP/trailing profit)
 
 input group "=== Layer Grid (DCA melawan arah) ==="
 input int    InpLayerCount    = 10;    // Jumlah layer aktif (1 Market + sisanya Limit), maks 10
 input double InpLayerGapUSD   = 1.0;   // Jarak antar layer ($) — BUY: limit di bawah, SELL: limit di atas
 input double InpTpDistanceUSD = 3.0;   // Jarak TP dari harga entry MASING-MASING layer ($)
+
+input group "=== Entry Filter (P1) ==="
+input double InpEntryToleranceUSD = 1.0;  // P1 hanya entry market jika |harga sekarang - harga sinyal AI| <= toleransi ($)
 
 input group "=== Trailing Stop (berlaku per layer, dari harga entry masing-masing) ==="
 input bool   InpTrailEnable      = true;
@@ -65,6 +73,8 @@ bool     g_sessionActive    = false;
 string   g_sessionDirection = "HOLD";   // BUY | SELL
 double   g_sessionSL        = 0;
 
+double   g_currentLot       = 0;   // lot aktif martingale (P1 & seluruh layer sesi berjalan)
+
 enum LayerState { LAYER_NONE, LAYER_PENDING, LAYER_OPEN, LAYER_DONE };
 
 double     g_layerEntry[MAX_LAYERS + 1];  // index 1..10 — harga entry tetap per layer
@@ -84,6 +94,8 @@ int OnInit()
       g_layerPosId[i] = 0;
    }
 
+   g_currentLot = InpMartingaleEnable ? InpMartingaleBaseLot : InpLotSize;
+
    RestoreSessionFromExisting();
 
    if(InpShowPanel) CreatePanel();
@@ -94,6 +106,8 @@ int OnInit()
    Print("Layers     : ", InpLayerCount, " | Gap: $", InpLayerGapUSD, " | TP dist: $", InpTpDistanceUSD);
    Print("Trailing   : ", InpTrailEnable ? "ON — aktif >$" + DoubleToString(InpTrailActivateUSD,2) + ", jarak $" + DoubleToString(InpTrailDistanceUSD,2) : "OFF");
    Print("Re-entry   : ", InpReentryEnable ? "ON (per layer)" : "OFF");
+   Print("Martingale : ", InpMartingaleEnable ? "ON — base=" + DoubleToString(InpMartingaleBaseLot,2) + " step=" + DoubleToString(InpMartingaleStep,2) + " | lot saat ini=" + DoubleToString(g_currentLot,2) : "OFF");
+   Print("EntryToler : $", DoubleToString(InpEntryToleranceUSD, 2), " (P1 hanya market entry jika harga dalam toleransi dari sinyal AI)");
 
    FetchAndProcess();
    return INIT_SUCCEEDED;
@@ -239,6 +253,7 @@ void CheckSessionInvalidation()
    {
       Print("[Layer] ⛔ SL GLOBAL KENA @", DoubleToString(g_sessionSL, 2),
             " — tutup semua posisi & batalkan sisa limit order. Sesi berakhir (tidak ada re-entry).");
+      ApplyMartingaleResult(g_sessionDirection, g_layerEntry[1], g_sessionSL);
       CloseEntireSession();
       g_sessionActive    = false;
       g_sessionDirection = "HOLD";
@@ -275,6 +290,26 @@ void CloseAndCancelNonP1Layers()
 }
 
 //+------------------------------------------------------------------+
+// Martingale: naik lot InpMartingaleStep jika menang (closePrice untung dari entry P1),
+// reset ke InpMartingaleBaseLot jika kalah/rugi.
+void ApplyMartingaleResult(string dir, double entryPrice, double closePrice)
+{
+   if(!InpMartingaleEnable) return;
+
+   bool win = (dir == "BUY") ? (closePrice > entryPrice) : (closePrice < entryPrice);
+   double oldLot = g_currentLot;
+
+   if(win)
+      g_currentLot = NormalizeDouble(g_currentLot + InpMartingaleStep, 2);
+   else
+      g_currentLot = InpMartingaleBaseLot;
+
+   Print("[Martingale] ", win ? "MENANG ✅" : "KALAH ❌",
+         " (entry=", DoubleToString(entryPrice, 2), " close=", DoubleToString(closePrice, 2),
+         ") — lot ", DoubleToString(oldLot, 2), " → ", DoubleToString(g_currentLot, 2));
+}
+
+//+------------------------------------------------------------------+
 // Helper terpusat: tangani penutupan P1 (bukan SL global)
 // → tutup/batalkan semua P2-P10 → reset sesi → ambil sinyal baru
 // Jika InpReentryEnable=false, sesi hanya direset tanpa FetchAndProcess.
@@ -282,6 +317,7 @@ void HandleP1Close(string closeDesc, double closePrice)
 {
    Print("[Layer 1] ", closeDesc, " @", DoubleToString(closePrice, 2),
          " — tutup/batalkan P2-P10 & ", InpReentryEnable ? "refresh sinyal baru." : "reset sesi (re-entry OFF).");
+   ApplyMartingaleResult(g_sessionDirection, g_layerEntry[1], closePrice);
    g_layerState[1]    = LAYER_NONE;
    g_layerPosId[1]    = 0;
    CloseAndCancelNonP1Layers();
@@ -509,11 +545,12 @@ void OpenLayerMarket(int i, string cmd, double entry, double tp)
 {
    string tag = GetLayerTag(i);
    bool   ok;
+   double lot = InpMartingaleEnable ? g_currentLot : InpLotSize;
 
    if(cmd == "BUY")
-      ok = g_trade.Buy(InpLotSize, Symbol(), 0, g_sessionSL, tp, tag);
+      ok = g_trade.Buy(lot, Symbol(), 0, g_sessionSL, tp, tag);
    else
-      ok = g_trade.Sell(InpLotSize, Symbol(), 0, g_sessionSL, tp, tag);
+      ok = g_trade.Sell(lot, Symbol(), 0, g_sessionSL, tp, tag);
 
    if(ok)
    {
@@ -536,11 +573,12 @@ void PlaceLayerLimit(int i, string cmd, double entry, double tp)
 {
    string tag = GetLayerTag(i);
    bool   ok;
+   double lot = InpMartingaleEnable ? g_currentLot : InpLotSize;
 
    if(cmd == "BUY")
-      ok = g_trade.BuyLimit(InpLotSize, entry, Symbol(), g_sessionSL, tp, ORDER_TIME_GTC, 0, tag);
+      ok = g_trade.BuyLimit(lot, entry, Symbol(), g_sessionSL, tp, ORDER_TIME_GTC, 0, tag);
    else
-      ok = g_trade.SellLimit(InpLotSize, entry, Symbol(), g_sessionSL, tp, ORDER_TIME_GTC, 0, tag);
+      ok = g_trade.SellLimit(lot, entry, Symbol(), g_sessionSL, tp, ORDER_TIME_GTC, 0, tag);
 
    if(ok)
    {
@@ -567,6 +605,19 @@ void StartNewSession(string cmd)
    double price  = (cmd == "BUY") ? SymbolInfoDouble(Symbol(), SYMBOL_ASK) : SymbolInfoDouble(Symbol(), SYMBOL_BID);
    int    dir    = (cmd == "BUY") ? 1 : -1;
    int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+
+   // Filter entry P1: harga sekarang harus dalam toleransi $InpEntryToleranceUSD dari harga sinyal AI (g_price)
+   if(g_price > 0)
+   {
+      double priceDiff = MathAbs(price - g_price);
+      if(priceDiff > InpEntryToleranceUSD)
+      {
+         Print("[Layer] ⏳ P1 DITAHAN — harga sekarang $", DoubleToString(price, 2),
+               " beda $", DoubleToString(priceDiff, 2), " dari harga sinyal AI $", DoubleToString(g_price, 2),
+               " (toleransi $", DoubleToString(InpEntryToleranceUSD, 2), "). Menunggu harga mendekat.");
+         return;
+      }
+   }
 
    // Tetapkan SL sesi dulu — dipakai di dalam OpenLayerMarket/PlaceLayerLimit
    g_sessionSL = NormalizeDouble(g_sl, digits);
