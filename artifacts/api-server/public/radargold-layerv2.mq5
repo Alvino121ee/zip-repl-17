@@ -30,6 +30,7 @@ input group "=== Martingale (naik lot setelah menang, reset setelah kalah) ==="
 input bool   InpMartingaleEnable = false;   // ON = pakai g_currentLot bertingkat, bukan InpLotSize tetap
 input double InpMartingaleBaseLot = 0.01;   // Lot awal / lot setelah kalah
 input double InpMartingaleStep    = 0.01;   // Kenaikan lot setiap kali sesi P1 menang (TP/trailing profit)
+input int    InpMartingaleMaxWinStreak = 5; // Setelah menang beruntun sebanyak ini (lot capai maksimum), lot balik ke base
 
 input group "=== Layer Grid (DCA melawan arah) ==="
 input int    InpLayerCount    = 10;    // Jumlah layer aktif (1 Market + sisanya Limit), maks 10
@@ -67,6 +68,8 @@ CTrade   g_trade;
 datetime g_lastPoll    = 0;
 string   g_rawCommand  = "HOLD";
 double   g_price       = 0;
+string   g_anchorCmd         = "HOLD";  // arah sinyal saat anchor entry terakhir dicatat
+double   g_anchorEntryPrice  = 0;       // harga saat sinyal BUY/SELL ini PERTAMA kali muncul (bukan harga live yg terus berubah)
 double   g_sl          = 0;
 double   g_conf        = 0;
 
@@ -77,6 +80,7 @@ double   g_sessionSL        = 0;
 double   g_currentLot       = 0;   // lot aktif martingale (P1 & seluruh layer sesi berjalan)
 
 int      g_winCount         = 0;
+int      g_winStreak        = 0;   // menang beruntun saat ini (untuk cap martingale)
 int      g_lossCount        = 0;
 double   g_totalWinUSD      = 0.0;
 double   g_totalLossUSD     = 0.0;   // disimpan sebagai nilai positif (total rugi)
@@ -327,15 +331,33 @@ void ApplyMartingaleResult(string dir, double entryPrice, double closePrice)
    if(!InpMartingaleEnable) return;
 
    double oldLot = g_currentLot;
+   string streakNote = "";
 
    if(win)
-      g_currentLot = NormalizeDouble(g_currentLot + InpMartingaleStep, 2);
+   {
+      g_winStreak++;
+      if(g_winStreak >= InpMartingaleMaxWinStreak)
+      {
+         // Menang beruntun sudah mencapai batas (lot sudah di level maksimum) → balik ke lot awal
+         g_currentLot = InpMartingaleBaseLot;
+         g_winStreak  = 0;
+         streakNote   = " [streak " + IntegerToString(InpMartingaleMaxWinStreak) + "x tercapai → reset]";
+      }
+      else
+      {
+         g_currentLot = NormalizeDouble(g_currentLot + InpMartingaleStep, 2);
+      }
+   }
    else
+   {
       g_currentLot = InpMartingaleBaseLot;
+      g_winStreak  = 0;
+   }
 
-   Print("[Martingale] ", win ? "MENANG ✅" : "KALAH ❌",
+   Print("[Martingale] ", win ? "MENANG ✅" : "KALAH ❌", streakNote,
          " (entry=", DoubleToString(entryPrice, 2), " close=", DoubleToString(closePrice, 2),
-         ") — lot ", DoubleToString(oldLot, 2), " → ", DoubleToString(g_currentLot, 2));
+         ") — lot ", DoubleToString(oldLot, 2), " → ", DoubleToString(g_currentLot, 2),
+         " | win streak: ", g_winStreak);
 }
 
 //+------------------------------------------------------------------+
@@ -635,15 +657,18 @@ void StartNewSession(string cmd)
    int    dir    = (cmd == "BUY") ? 1 : -1;
    int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
 
-   // Filter entry P1: harga sekarang harus dalam toleransi $InpEntryToleranceUSD dari harga sinyal AI (g_price)
-   if(g_price > 0)
+   // Filter entry P1: harga sekarang harus dalam toleransi $InpEntryToleranceUSD dari harga ANCHOR
+   // (harga saat sinyal arah ini PERTAMA kali muncul) — bukan dari g_price live, karena g_price selalu
+   // mengikuti harga pasar saat ini sehingga tidak pernah bisa mendeteksi "harga sudah jauh dari sinyal awal".
+   double refPrice = (g_anchorCmd == cmd && g_anchorEntryPrice > 0) ? g_anchorEntryPrice : g_price;
+   if(refPrice > 0)
    {
-      double priceDiff = MathAbs(price - g_price);
+      double priceDiff = MathAbs(price - refPrice);
       if(priceDiff > InpEntryToleranceUSD)
       {
          Print("[Layer] ⏳ P1 DITAHAN — harga sekarang $", DoubleToString(price, 2),
-               " beda $", DoubleToString(priceDiff, 2), " dari harga sinyal AI $", DoubleToString(g_price, 2),
-               " (toleransi $", DoubleToString(InpEntryToleranceUSD, 2), "). Menunggu harga mendekat.");
+               " beda $", DoubleToString(priceDiff, 2), " dari harga sinyal awal $", DoubleToString(refPrice, 2),
+               " (toleransi $", DoubleToString(InpEntryToleranceUSD, 2), "). Menunggu harga mendekat / sinyal baru.");
          return;
       }
    }
@@ -884,6 +909,24 @@ void FetchAndProcess()
          " | $", DoubleToString(g_price, 2),
          " | SL=", DoubleToString(g_sl, 2),
          " | Conf=", DoubleToString(g_conf * 100, 0), "%");
+
+   //--- Catat "anchor" harga entry HANYA saat arah sinyal ini pertama kali muncul.
+   // Server selalu mengirim harga live saat ini (bukan harga historis saat sinyal dibuat), jadi kita
+   // sendiri yang harus menandai harga acuan supaya bisa deteksi "harga sudah jauh dari sinyal awal".
+   if(cmd == "BUY" || cmd == "SELL")
+   {
+      if(g_anchorCmd != cmd)
+      {
+         g_anchorCmd        = cmd;
+         g_anchorEntryPrice = g_price;
+         Print("[Anchor] Sinyal ", cmd, " baru terdeteksi — anchor entry dicatat @$", DoubleToString(g_anchorEntryPrice, 2));
+      }
+   }
+   else
+   {
+      g_anchorCmd        = "HOLD";
+      g_anchorEntryPrice = 0;
+   }
 
    if(InpShowPanel) UpdatePanel(cmd);
 
