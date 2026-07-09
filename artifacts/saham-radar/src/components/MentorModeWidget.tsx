@@ -72,6 +72,11 @@ interface EaAccountData {
   leverage: number;
   currency: string;
   updatedAt: string;
+  winCount: number;
+  lossCount: number;
+  totalWinUSD: number;
+  totalLossUSD: number;
+  currentLot: number;
 }
 
 interface EaAccountResponse {
@@ -729,6 +734,31 @@ export function MentorModeWidget() {
                       <div className="text-right">
                         <div className="text-[9px] text-zinc-500">Posisi</div>
                         <div className="text-[11px] font-bold text-zinc-300">{ea.positions.length} terbuka</div>
+                      </div>
+                    </div>
+
+                    {/* Total trade & keuntungan EA (win/loss) */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div className="bg-zinc-800/50 rounded-lg px-2 py-1.5">
+                        <div className="text-[9px] text-zinc-500 mb-0.5">Total Trade EA</div>
+                        <div className="text-[11px] font-bold text-zinc-200 font-mono">
+                          {ea.winCount + ea.lossCount}
+                          <span className="text-[9px] text-zinc-500 ml-1">
+                            ({ea.winCount}W / {ea.lossCount}L)
+                          </span>
+                        </div>
+                      </div>
+                      <div className={`rounded-lg px-2 py-1.5 border ${
+                        ea.totalWinUSD - ea.totalLossUSD >= 0
+                          ? "bg-emerald-500/8 border-emerald-500/20"
+                          : "bg-red-500/8 border-red-500/20"
+                      }`}>
+                        <div className="text-[9px] text-zinc-500 mb-0.5">Keuntungan EA</div>
+                        <div className={`text-[11px] font-bold font-mono ${
+                          ea.totalWinUSD - ea.totalLossUSD >= 0 ? "text-emerald-400" : "text-red-400"
+                        }`}>
+                          {fmtCurrency(ea.totalWinUSD - ea.totalLossUSD, ea.currency)}
+                        </div>
                       </div>
                     </div>
 

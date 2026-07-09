@@ -816,6 +816,11 @@ void PushAccountData()
       + ",\"broker\":\""      + AccountInfoString(ACCOUNT_COMPANY) + "\""
       + ",\"leverage\":"      + IntegerToString(AccountInfoInteger(ACCOUNT_LEVERAGE))
       + ",\"currency\":\""    + AccountInfoString(ACCOUNT_CURRENCY) + "\""
+      + ",\"winCount\":"      + IntegerToString(g_winCount)
+      + ",\"lossCount\":"     + IntegerToString(g_lossCount)
+      + ",\"totalWinUSD\":"   + DoubleToString(g_totalWinUSD, 2)
+      + ",\"totalLossUSD\":"  + DoubleToString(g_totalLossUSD, 2)
+      + ",\"currentLot\":"    + DoubleToString(InpMartingaleEnable ? g_currentLot : InpLotSize, 2)
       + "}";
 
    uchar  postBuf[];

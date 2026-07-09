@@ -79,6 +79,11 @@ interface EaAccountData {
   leverage: number;
   currency: string;
   updatedAt: string;
+  winCount: number;
+  lossCount: number;
+  totalWinUSD: number;
+  totalLossUSD: number;
+  currentLot: number;
 }
 let eaAccountStore: EaAccountData | null = null;
 let eaAccountUpdatedAt = 0;
@@ -1499,6 +1504,11 @@ xauusdRouter.post("/ea-account", async (req, res) => {
       leverage:      body.leverage      ?? 0,
       currency:      body.currency      ?? "USD",
       updatedAt:     new Date().toISOString(),
+      winCount:      body.winCount      ?? 0,
+      lossCount:     body.lossCount     ?? 0,
+      totalWinUSD:   body.totalWinUSD   ?? 0,
+      totalLossUSD:  body.totalLossUSD  ?? 0,
+      currentLot:    body.currentLot    ?? 0,
     };
     eaAccountUpdatedAt = Date.now();
     return res.json({ ok: true });
