@@ -59,6 +59,7 @@ input bool   InpShowPanel = true;
 #define LBL_LAYERS   "RGL_LAYERS"
 #define LBL_PNL      "RGL_PNL"
 #define LBL_CONF     "RGL_CONF"
+#define LBL_STATS    "RGL_STATS"
 #define LBL_TIME     "RGL_TIME"
 
 //--- Global state
@@ -74,6 +75,11 @@ string   g_sessionDirection = "HOLD";   // BUY | SELL
 double   g_sessionSL        = 0;
 
 double   g_currentLot       = 0;   // lot aktif martingale (P1 & seluruh layer sesi berjalan)
+
+int      g_winCount         = 0;
+int      g_lossCount        = 0;
+double   g_totalWinUSD      = 0.0;
+double   g_totalLossUSD     = 0.0;   // disimpan sebagai nilai positif (total rugi)
 
 enum LayerState { LAYER_NONE, LAYER_PENDING, LAYER_OPEN, LAYER_DONE };
 
@@ -291,12 +297,35 @@ void CloseAndCancelNonP1Layers()
 
 //+------------------------------------------------------------------+
 // Martingale: naik lot InpMartingaleStep jika menang (closePrice untung dari entry P1),
-// reset ke InpMartingaleBaseLot jika kalah/rugi.
+// reset ke InpMartingaleBaseLot jika kalah/rugi. Juga mencatat statistik win/loss (jumlah & $ total),
+// yang berjalan terlepas dari InpMartingaleEnable ON/OFF.
 void ApplyMartingaleResult(string dir, double entryPrice, double closePrice)
 {
+   bool   win        = (dir == "BUY") ? (closePrice > entryPrice) : (closePrice < entryPrice);
+   double lotUsed     = InpMartingaleEnable ? g_currentLot : InpLotSize;
+   double contractSz  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_CONTRACT_SIZE);
+   if(contractSz <= 0) contractSz = 100; // fallback umum untuk XAUUSD
+   double priceDiff   = (dir == "BUY") ? (closePrice - entryPrice) : (entryPrice - closePrice);
+   double resultUSD   = priceDiff * lotUsed * contractSz;
+
+   if(win)
+   {
+      g_winCount++;
+      g_totalWinUSD += MathAbs(resultUSD);
+   }
+   else
+   {
+      g_lossCount++;
+      g_totalLossUSD += MathAbs(resultUSD);
+   }
+
+   Print("[Stats] ", win ? "MENANG ✅" : "KALAH ❌",
+         " ~$", DoubleToString(MathAbs(resultUSD), 2),
+         " | Total Menang: ", g_winCount, " ($", DoubleToString(g_totalWinUSD, 2), ")",
+         " | Total Kalah: ", g_lossCount, " ($", DoubleToString(g_totalLossUSD, 2), ")");
+
    if(!InpMartingaleEnable) return;
 
-   bool win = (dir == "BUY") ? (closePrice > entryPrice) : (closePrice < entryPrice);
    double oldLot = g_currentLot;
 
    if(win)
@@ -920,7 +949,7 @@ void CountLayerStates(int &open_, int &pending_, int &done_)
 //+------------------------------------------------------------------+
 void CreatePanel()
 {
-   int x = 10, y = 25, w = 300, h = 175;
+   int x = 10, y = 25, w = 300, h = 205;
    if(ObjectFind(0, LBL_BG) >= 0) DeletePanel();
 
    ObjectCreate(0, LBL_BG, OBJ_RECTANGLE_LABEL, 0, 0, 0);
@@ -941,7 +970,8 @@ void CreatePanel()
    MakeLabel(LBL_LAYERS,  x+8, y+86,  "Menunggu sinyal...",            clrSilver,    8);
    MakeLabel(LBL_PNL,     x+8, y+100, "Floating P/L: $0.00",           clrSilver,    8);
    MakeLabel(LBL_CONF,    x+8, y+114, "Conf: --- | Auto: OFF",         clrSilver,    8);
-   MakeLabel(LBL_TIME,    x+8, y+140, "---",                           C'0,90,105',  7);
+   MakeLabel(LBL_STATS,   x+8, y+128, "Menang:0 ($0.00) | Kalah:0 ($0.00)", clrSilver, 8);
+   MakeLabel(LBL_TIME,    x+8, y+170, "---",                           C'0,90,105',  7);
 
    ChartRedraw();
 }
@@ -981,6 +1011,14 @@ void UpdatePanel(string cmd)
    SetLabelText(LBL_CONF,
       "Conf: " + DoubleToString(g_conf * 100, 0) + "% | Auto: " + (InpAutoTrade ? "ON" : "OFF"),
       InpAutoTrade ? clrLime : clrGray);
+
+   double netUSD = g_totalWinUSD - g_totalLossUSD;
+   SetLabelText(LBL_STATS,
+      "Menang:" + IntegerToString(g_winCount) + " ($" + DoubleToString(g_totalWinUSD, 2) + ")" +
+      " | Kalah:" + IntegerToString(g_lossCount) + " ($" + DoubleToString(g_totalLossUSD, 2) + ")" +
+      " | Net: " + (netUSD >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(netUSD), 2) +
+      (InpMartingaleEnable ? " | Lot: " + DoubleToString(g_currentLot, 2) : ""),
+      netUSD >= 0 ? clrLime : clrRed);
 
    if(g_sessionActive)
    {
@@ -1025,7 +1063,7 @@ void DeletePanel()
 {
    string labels[] = {
       LBL_BG, LBL_TITLE, LBL_STATUS, LBL_CMD, LBL_SESSION,
-      LBL_LAYERS, LBL_PNL, LBL_CONF, LBL_TIME
+      LBL_LAYERS, LBL_PNL, LBL_CONF, LBL_STATS, LBL_TIME
    };
    for(int i = 0; i < ArraySize(labels); i++)
       ObjectDelete(0, labels[i]);
