@@ -68,8 +68,6 @@ CTrade   g_trade;
 datetime g_lastPoll    = 0;
 string   g_rawCommand  = "HOLD";
 double   g_price       = 0;
-string   g_anchorCmd         = "HOLD";  // arah sinyal saat anchor entry terakhir dicatat
-double   g_anchorEntryPrice  = 0;       // harga saat sinyal BUY/SELL ini PERTAMA kali muncul (bukan harga live yg terus berubah)
 double   g_sl          = 0;
 double   g_conf        = 0;
 
@@ -657,18 +655,17 @@ void StartNewSession(string cmd)
    int    dir    = (cmd == "BUY") ? 1 : -1;
    int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
 
-   // Filter entry P1: harga sekarang harus dalam toleransi $InpEntryToleranceUSD dari harga ANCHOR
-   // (harga saat sinyal arah ini PERTAMA kali muncul) — bukan dari g_price live, karena g_price selalu
-   // mengikuti harga pasar saat ini sehingga tidak pernah bisa mendeteksi "harga sudah jauh dari sinyal awal".
-   double refPrice = (g_anchorCmd == cmd && g_anchorEntryPrice > 0) ? g_anchorEntryPrice : g_price;
-   if(refPrice > 0)
+   // Filter entry P1: harga eksekusi sekarang harus dalam toleransi $InpEntryToleranceUSD dari
+   // "Harga" pada kartu sinyal (g_price) — nilai ini SELALU ikut ter-update tiap sinyal baru masuk,
+   // jadi begitu sinyal refresh, batas toleransi otomatis ikut geser ke harga terbaru juga.
+   if(g_price > 0)
    {
-      double priceDiff = MathAbs(price - refPrice);
+      double priceDiff = MathAbs(price - g_price);
       if(priceDiff > InpEntryToleranceUSD)
       {
-         Print("[Layer] ⏳ P1 DITAHAN — harga sekarang $", DoubleToString(price, 2),
-               " beda $", DoubleToString(priceDiff, 2), " dari harga sinyal awal $", DoubleToString(refPrice, 2),
-               " (toleransi $", DoubleToString(InpEntryToleranceUSD, 2), "). Menunggu harga mendekat / sinyal baru.");
+         Print("[Layer] ⏳ P1 DITAHAN — harga eksekusi $", DoubleToString(price, 2),
+               " beda $", DoubleToString(priceDiff, 2), " dari harga sinyal $", DoubleToString(g_price, 2),
+               " (toleransi $", DoubleToString(InpEntryToleranceUSD, 2), "). Menunggu sinyal baru / harga mendekat.");
          return;
       }
    }
@@ -909,24 +906,6 @@ void FetchAndProcess()
          " | $", DoubleToString(g_price, 2),
          " | SL=", DoubleToString(g_sl, 2),
          " | Conf=", DoubleToString(g_conf * 100, 0), "%");
-
-   //--- Catat "anchor" harga entry HANYA saat arah sinyal ini pertama kali muncul.
-   // Server selalu mengirim harga live saat ini (bukan harga historis saat sinyal dibuat), jadi kita
-   // sendiri yang harus menandai harga acuan supaya bisa deteksi "harga sudah jauh dari sinyal awal".
-   if(cmd == "BUY" || cmd == "SELL")
-   {
-      if(g_anchorCmd != cmd)
-      {
-         g_anchorCmd        = cmd;
-         g_anchorEntryPrice = g_price;
-         Print("[Anchor] Sinyal ", cmd, " baru terdeteksi — anchor entry dicatat @$", DoubleToString(g_anchorEntryPrice, 2));
-      }
-   }
-   else
-   {
-      g_anchorCmd        = "HOLD";
-      g_anchorEntryPrice = 0;
-   }
 
    if(InpShowPanel) UpdatePanel(cmd);
 
