@@ -25,6 +25,7 @@ type Sensitivity = "super_aggressive" | "aggressive" | "normal" | "conservative"
 type RawCommand = "BUY" | "SHORT" | "HOLD";
 type PositionState = "NONE" | "BUY" | "SHORT";
 type DisplayCommand = "BUKA BUY" | "BUKA SHORT" | "CLOSE BUY" | "CLOSE SHORT" | "TUNGGU";
+type SignalMode = "mentor" | "ai_utama";
 
 interface MentorSignal {
   command: RawCommand;
@@ -137,11 +138,68 @@ const COOLDOWN_BY_SENSITIVITY: Record<Sensitivity, number> = {
   conservative: 20_000,
 };
 
+const AI_UTAMA_LABELS: Record<keyof Pick<EnsembleVotes, "technical" | "ai" | "macro" | "sentiment">, string> = {
+  technical: "Teknikal",
+  ai: "AI Rule",
+  macro: "Macro",
+  sentiment: "Sentimen",
+};
+
+/**
+ * Mode "AI Utama" — beda dari Mentor Mode biasa (yang pakai skor indikator teknikal
+ * mentah). Di sini sinyal ditentukan dari akumulasi persentase confidence 4 agen
+ * ensemble (Teknikal/AI Rule/Macro/Sentimen): jika total % arah naik > total % arah
+ * turun → sinyal NAIK (BUY), sebaliknya SHORT. Seri → HOLD.
+ */
+function computeAiUtamaVote(ev: EnsembleVotes | undefined): {
+  command: RawCommand;
+  confidence: number;
+  upTotal: number;
+  downTotal: number;
+  reasons: string[];
+} {
+  if (!ev) return { command: "HOLD", confidence: 0, upTotal: 0, downTotal: 0, reasons: [] };
+
+  const keys = ["technical", "ai", "macro", "sentiment"] as const;
+  let upTotal = 0;
+  let downTotal = 0;
+  const upParts: string[] = [];
+  const downParts: string[] = [];
+
+  for (const key of keys) {
+    const v = ev[key];
+    const pct = Math.round(v.confidence * 100);
+    const label = AI_UTAMA_LABELS[key];
+    if (v.direction === "up") {
+      upTotal += pct;
+      upParts.push(`${label} ${pct}%`);
+    } else if (v.direction === "down") {
+      downTotal += pct;
+      downParts.push(`${label} ${pct}%`);
+    }
+  }
+
+  const total = upTotal + downTotal;
+  const command: RawCommand = upTotal === downTotal ? "HOLD" : upTotal > downTotal ? "BUY" : "SHORT";
+  const confidence = total > 0 ? Math.max(upTotal, downTotal) / total : 0;
+
+  const reasons = [
+    `Naik: ${upParts.length ? upParts.join(" + ") : "0%"} = ${upTotal}%`,
+    `Turun: ${downParts.length ? downParts.join(" + ") : "0%"} = ${downTotal}%`,
+    upTotal === downTotal
+      ? "Seri — menunggu konfirmasi berikutnya"
+      : `${upTotal > downTotal ? "Naik" : "Turun"} dominan (${Math.max(upTotal, downTotal)}% vs ${Math.min(upTotal, downTotal)}%)`,
+  ];
+
+  return { command, confidence, upTotal, downTotal, reasons };
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function MentorModeWidget() {
   // ── Widget UI ──────────────────────────────────────────────────────────────
   const [isActive, setIsActive]       = useState(false);
+  const [mode, setMode]               = useState<SignalMode>("mentor");
   const [sensitivity, setSensitivity] = useState<Sensitivity>("normal");
   const [showHistory, setShowHistory] = useState(false);
   const [showReasons, setShowReasons] = useState(true);
@@ -222,6 +280,14 @@ export function MentorModeWidget() {
   const ev = mainPredictions?.[0]?.indicatorsAtPrediction?.ensembleVotes;
   const mainTimeframe = mainPredictions?.[0]?.timeframe ?? null;
 
+  // ── AI Utama — vote akumulasi persen dari 4 agen ensemble ──────────────────
+  const aiUtama = computeAiUtamaVote(ev);
+  const activeCommand: RawCommand = mode === "ai_utama" ? aiUtama.command : (signal?.command ?? "HOLD");
+  const activeConfidence = mode === "ai_utama" ? aiUtama.confidence : (signal?.confidence ?? 0);
+  const activeReasons = mode === "ai_utama" ? aiUtama.reasons : (signal?.reasons ?? []);
+  const activeReady = mode === "ai_utama" ? !!ev : !!signal;
+  const activePrice = mode === "ai_utama" ? (mainPredictions?.[0]?.indicatorsAtPrediction?.price as number | undefined) ?? null : (signal?.price ?? null);
+
   // ── Cooldown dinamis berdasarkan sensitivity ───────────────────────────────
   const COOLDOWN_MS = COOLDOWN_BY_SENSITIVITY[sensitivity];
 
@@ -238,9 +304,9 @@ export function MentorModeWidget() {
 
   // ── Command resolution — runs on new signal OR position change ────────────
   useEffect(() => {
-    if (!isActive || !signal) return;
+    if (!isActive || !activeReady) return;
 
-    const candidate = resolveDisplay(signal.command, positionState);
+    const candidate = resolveDisplay(activeCommand, positionState);
     if (candidate === prevCmdRef.current) return; // nothing to do
 
     // TUNGGU is never actionable — allow immediately, no cooldown restart
@@ -257,9 +323,9 @@ export function MentorModeWidget() {
     prevCmdRef.current = candidate;
     setStableCmd(candidate);
     setLastActionableTime(Date.now());
-  }, [signal, positionState, isActive, lastActionableTime]);
+  }, [activeCommand, activeReady, positionState, isActive, lastActionableTime]);
 
-  // ── Reset when deactivated ─────────────────────────────────────────────────
+  // ── Reset when deactivated or mode switched ────────────────────────────────
   useEffect(() => {
     if (!isActive) {
       setStableCmd("TUNGGU");
@@ -270,14 +336,21 @@ export function MentorModeWidget() {
     }
   }, [isActive]);
 
+  useEffect(() => {
+    setStableCmd("TUNGGU");
+    setLastActionableTime(0);
+    setCooldownLeft(0);
+    prevCmdRef.current = "TUNGGU";
+  }, [mode]);
+
   // ── Confirm action (immediate — not blocked by cooldown) ───────────────────
   function handleConfirmAction() {
     const cmd = stableCmd;
     // Add to history before changing state
-    if (signal?.price) {
+    if (activePrice != null) {
       const entry: HistoryEntry = {
         command: cmd,
-        price: signal.price,
+        price: activePrice,
         time: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       };
       setHistory(prev => [entry, ...prev].slice(0, 10));
@@ -311,8 +384,10 @@ export function MentorModeWidget() {
       <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/60 border-b border-border/40 cursor-grab active:cursor-grabbing">
         <GripVertical className="w-4 h-4 text-zinc-500 shrink-0" />
         <GraduationCap className="w-4 h-4 text-amber-400 shrink-0" />
-        <span className="text-xs font-semibold text-foreground flex-1">Mentor Mode</span>
-        {isActive && signal && (
+        <span className="text-xs font-semibold text-foreground flex-1">
+          {mode === "ai_utama" ? "AI Utama" : "Mentor Mode"}
+        </span>
+        {isActive && mode === "mentor" && signal && (
           <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
             isLive
               ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
@@ -330,14 +405,25 @@ export function MentorModeWidget() {
 
         <select
           data-nodrag
-          value={sensitivity}
-          onChange={e => setSensitivity(e.target.value as Sensitivity)}
+          value={mode === "ai_utama" ? "ai_utama" : sensitivity}
+          onChange={e => {
+            const v = e.target.value;
+            if (v === "ai_utama") {
+              setMode("ai_utama");
+            } else {
+              setMode("mentor");
+              setSensitivity(v as Sensitivity);
+            }
+          }}
           className={`text-[10px] border rounded-md px-1.5 py-0.5 cursor-pointer focus:outline-none ${
-            sensitivity === "super_aggressive"
+            mode === "ai_utama"
+              ? "bg-blue-950/60 border-blue-500/50 text-blue-300 font-bold"
+              : sensitivity === "super_aggressive"
               ? "bg-red-950/60 border-red-500/50 text-red-300 font-bold"
               : "bg-zinc-800 border-zinc-700 text-zinc-300"
           }`}
         >
+          <option value="ai_utama">🤖 AI Utama</option>
           <option value="super_aggressive">⚡ Super Agresif</option>
           <option value="aggressive">Agresif</option>
           <option value="normal">Normal</option>
@@ -367,8 +453,14 @@ export function MentorModeWidget() {
 
       {!minimized && (
         <div className="p-3 space-y-3">
+          {mode === "ai_utama" && (
+            <p className="text-[9px] text-zinc-500 leading-relaxed -mt-1">
+              Sinyal dari total % 4 agen (Teknikal/AI Rule/Macro/Sentimen) — arah dengan jumlah % lebih besar jadi dominan.
+            </p>
+          )}
+
           {/* ── Super Agresif warning banner ── */}
-          {sensitivity === "super_aggressive" && (
+          {mode === "mentor" && sensitivity === "super_aggressive" && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-2">
               <div className="flex items-center gap-1.5 mb-1">
                 <span className="text-red-400 text-xs font-black">⚡ SCALPING MODE</span>
@@ -382,7 +474,7 @@ export function MentorModeWidget() {
 
           {!isActive ? (
             <div className="text-center py-4">
-              <p className="text-xs text-zinc-500">Mentor Mode nonaktif</p>
+              <p className="text-xs text-zinc-500">{mode === "ai_utama" ? "AI Utama" : "Mentor Mode"} nonaktif</p>
               <p className="text-[10px] text-zinc-600 mt-1">Tekan tombol power untuk mulai</p>
             </div>
           ) : (
@@ -392,18 +484,26 @@ export function MentorModeWidget() {
                 <div className={style.text}>{style.icon}</div>
                 <div className="flex-1 min-w-0">
                   <div className={`text-xl font-black tracking-wide ${style.text}`}>{stableCmd}</div>
-                  {signal?.price && (
+                  {mode === "mentor" && signal?.price && (
                     <div className="text-[10px] text-zinc-400 mt-0.5">
                       Harga: <span className="text-zinc-300 font-mono">{fmt(signal.price)}</span>
                       {" · "}
                       <span className="text-zinc-500">↑{signal.bullishScore} ↓{signal.bearishScore}</span>
                     </div>
                   )}
+                  {mode === "ai_utama" && (
+                    <div className="text-[10px] text-zinc-400 mt-0.5">
+                      {activePrice != null && (
+                        <>Harga: <span className="text-zinc-300 font-mono">{fmt(activePrice)}</span>{" · "}</>
+                      )}
+                      <span className="text-zinc-500">↑{aiUtama.upTotal}% ↓{aiUtama.downTotal}%</span>
+                    </div>
+                  )}
                 </div>
                 <div className="text-right shrink-0">
                   <div className="text-[10px] text-zinc-500">Conf.</div>
                   <div className={`text-sm font-bold ${style.text}`}>
-                    {signal ? `${Math.round(signal.confidence * 100)}%` : "—"}
+                    {activeReady ? `${Math.round(activeConfidence * 100)}%` : "—"}
                   </div>
                 </div>
               </div>
@@ -459,7 +559,7 @@ export function MentorModeWidget() {
               )}
 
               {/* ── TP / SL ── */}
-              {signal && signal.command !== "HOLD" && (
+              {mode === "mentor" && signal && signal.command !== "HOLD" && (
                 <div className="grid grid-cols-2 gap-2">
                   <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
                     <div className="text-[10px] text-zinc-500 mb-0.5">TP Minimal</div>
@@ -503,7 +603,7 @@ export function MentorModeWidget() {
               </div>
 
               {/* ── Alasan sinyal ── */}
-              {signal && signal.reasons.length > 0 && (
+              {activeReasons.length > 0 && (
                 <div>
                   <button
                     data-nodrag
@@ -511,14 +611,14 @@ export function MentorModeWidget() {
                     className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 mb-1 w-full"
                   >
                     <AlertCircle className="w-3 h-3" />
-                    Alasan ({signal.reasons.length})
+                    Alasan ({activeReasons.length})
                     {showReasons
                       ? <ChevronUp className="w-3 h-3 ml-auto" />
                       : <ChevronDown className="w-3 h-3 ml-auto" />}
                   </button>
                   {showReasons && (
                     <ul className="space-y-1">
-                      {signal.reasons.slice(0, 5).map((r, i) => (
+                      {activeReasons.slice(0, 5).map((r, i) => (
                         <li key={i} className="text-[10px] text-zinc-400 flex items-start gap-1.5">
                           <span className="text-amber-500 mt-0.5 shrink-0">•</span>
                           {r}
@@ -530,15 +630,21 @@ export function MentorModeWidget() {
               )}
 
               {/* ── Peringatan data lama ── */}
-              {snapshotOld && (
+              {mode === "mentor" && snapshotOld && (
                 <div className="text-[10px] text-amber-500/80 bg-amber-500/10 rounded-lg px-2 py-1.5 border border-amber-500/20">
                   ⚠ Snapshot &gt;10 mnt — menunggu siklus berikutnya
                 </div>
               )}
 
-              {isError && (
+              {mode === "mentor" && isError && (
                 <div className="text-[10px] text-red-400 bg-red-500/10 rounded-lg px-2 py-1.5 border border-red-500/20">
                   Gagal ambil sinyal — periksa koneksi server
+                </div>
+              )}
+
+              {mode === "ai_utama" && !ev && (
+                <div className="text-[10px] text-amber-500/80 bg-amber-500/10 rounded-lg px-2 py-1.5 border border-amber-500/20">
+                  Menunggu prediksi AI Utama pertama dari siklus belajar...
                 </div>
               )}
 
