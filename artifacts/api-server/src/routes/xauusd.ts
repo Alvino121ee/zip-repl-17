@@ -1251,6 +1251,101 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
       return res.status(403).json({ error: "EA API key tidak valid" });
     }
 
+    // ── Mode "AI Utama" — sinyal dari akumulasi % 4 agen ensemble ─────────────
+    // (Teknikal/AI Rule/Macro/Sentimen), bukan dari skor indikator mentah.
+    // Arah dengan total % lebih besar jadi dominan → dipakai EA langsung.
+    const mode = req.query.mode === "ai_utama" ? "ai_utama" : "mentor";
+    if (mode === "ai_utama") {
+      const mainRows = await db
+        .select()
+        .from(xauusdPredictionsTable)
+        .where(eq(xauusdPredictionsTable.predictionType, "main"))
+        .orderBy(desc(xauusdPredictionsTable.predictedAt))
+        .limit(1);
+
+      const livePriceAi = getLatestLivePrice();
+      const mainRow = mainRows[0];
+      const indicators = mainRow?.indicatorsAtPrediction as
+        | { ensembleVotes?: Record<string, { direction: string; confidence: number }>; atr14?: number; price?: number }
+        | undefined;
+      const ev = indicators?.ensembleVotes;
+
+      if (!ev) {
+        const noDataResp = { command: "HOLD", price: livePriceAi?.price ?? null, tp: null, sl: null, confidence: 0, mode, timestamp: new Date().toISOString() };
+        if (req.query.format === "plain") return res.type("text/plain").send(`HOLD|${livePriceAi?.price ?? 0}|0|0|0`);
+        return res.json(noDataResp);
+      }
+
+      const keys = ["technical", "ai", "macro", "sentiment"];
+      let upTotal = 0, downTotal = 0;
+      for (const key of keys) {
+        const v = ev[key];
+        if (!v || typeof v.confidence !== "number" || !Number.isFinite(v.confidence)) continue;
+        // clamp ke [0,1] — data ensemble seharusnya sudah dalam rentang ini, tapi
+        // divalidasi ulang di sini agar EA tidak menerima persentase absurd
+        const conf = Math.min(1, Math.max(0, v.confidence));
+        const pct = Math.round(conf * 100);
+        if (v.direction === "up") upTotal += pct;
+        else if (v.direction === "down") downTotal += pct;
+      }
+
+      const p = livePriceAi?.price ?? mainRow?.priceAtPrediction ?? indicators?.price ?? 0;
+
+      // Fail-safe: tanpa harga valid, jangan kirim sinyal actionable ke EA
+      if (!(p > 0)) {
+        const noPriceResp = { command: "HOLD", price: null, tp: null, sl: null, confidence: 0, mode, timestamp: new Date().toISOString() };
+        if (req.query.format === "plain") return res.type("text/plain").send(`HOLD|0|0|0|0`);
+        return res.json(noPriceResp);
+      }
+
+      let rawCommand: "BUY" | "SELL" | "HOLD";
+      let confidence: number;
+      const total = upTotal + downTotal;
+      if (upTotal === downTotal || total === 0) {
+        rawCommand = "HOLD"; confidence = 0;
+      } else if (upTotal > downTotal) {
+        rawCommand = "BUY"; confidence = parseFloat((upTotal / total).toFixed(2));
+      } else {
+        rawCommand = "SELL"; confidence = parseFloat((downTotal / total).toFixed(2));
+      }
+
+      const atr = indicators?.atr14 ?? 5;
+      const tpDist = parseFloat((atr * 0.45).toFixed(2));
+      const slDist = parseFloat((tpDist * 0.80).toFixed(2));
+      const tp = rawCommand === "BUY" ? parseFloat((p + tpDist).toFixed(2))
+        : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
+      const sl = rawCommand === "BUY" ? parseFloat((p - slDist).toFixed(2))
+        : rawCommand === "SELL" ? parseFloat((p + slDist).toFixed(2)) : null;
+      const timestamp = new Date().toISOString();
+
+      if (req.query.format === "plain2") {
+        const dir2 = rawCommand === "BUY" ? 1 : rawCommand === "SELL" ? -1 : 0;
+        const tp1v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.45).toFixed(2)) : p;
+        const tp2v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.80).toFixed(2)) : p;
+        const tp3v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 1.30).toFixed(2)) : p;
+        const slv  = dir2 !== 0 ? parseFloat((p - dir2 * atr * 0.30).toFixed(2)) : p;
+        const elv  = parseFloat((p - atr * 0.08).toFixed(2));
+        const ehv  = parseFloat((p + atr * 0.08).toFixed(2));
+        return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp1v}|${tp2v}|${tp3v}|${slv}|${elv}|${ehv}|${confidence}`);
+      }
+      if (req.query.format === "plain") {
+        return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp ?? 0}|${sl ?? 0}|${confidence}`);
+      }
+
+      return res.json({
+        command: rawCommand,
+        price: p,
+        tp,
+        sl,
+        tpDistance: tp !== null ? parseFloat(Math.abs(tp - p).toFixed(2)) : null,
+        confidence,
+        upTotal,
+        downTotal,
+        mode,
+        timestamp,
+      });
+    }
+
     // ── Reuse mentor-signal logic ────────────────────────────────────────────
     const sensitivity = (["super_aggressive", "aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
       ? req.query.sensitivity

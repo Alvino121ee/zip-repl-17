@@ -181,7 +181,7 @@ function computeAiUtamaVote(ev: EnsembleVotes | undefined): {
 
   const total = upTotal + downTotal;
   const command: RawCommand = upTotal === downTotal ? "HOLD" : upTotal > downTotal ? "BUY" : "SHORT";
-  const confidence = total > 0 ? Math.max(upTotal, downTotal) / total : 0;
+  const confidence = command === "HOLD" || total === 0 ? 0 : Math.max(upTotal, downTotal) / total;
 
   const reasons = [
     `Naik: ${upParts.length ? upParts.join(" + ") : "0%"} = ${upTotal}%`,
@@ -304,7 +304,17 @@ export function MentorModeWidget() {
 
   // ── Command resolution — runs on new signal OR position change ────────────
   useEffect(() => {
-    if (!isActive || !activeReady) return;
+    if (!isActive) return;
+
+    // Data tidak tersedia (misal ev hilang di mode AI Utama) — jangan pertahankan
+    // command aktif lama, paksa kembali ke TUNGGU agar tidak menyesatkan.
+    if (!activeReady) {
+      if (prevCmdRef.current !== "TUNGGU") {
+        prevCmdRef.current = "TUNGGU";
+        setStableCmd("TUNGGU");
+      }
+      return;
+    }
 
     const candidate = resolveDisplay(activeCommand, positionState);
     if (candidate === prevCmdRef.current) return; // nothing to do
