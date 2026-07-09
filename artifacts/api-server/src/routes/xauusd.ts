@@ -1309,9 +1309,16 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
         rawCommand = "SELL"; confidence = parseFloat((downTotal / total).toFixed(2));
       }
 
+      // SL/TP untuk AI Utama selalu mengikuti skala sensitivity "aggressive"
+      // (bukan super_aggressive) — sama seperti mentor-signal/ea-signal biasa.
+      const aiUtamaSensitivity = ["super_aggressive", "aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
+        ? (req.query.sensitivity as string)
+        : "aggressive";
       const atr = indicators?.atr14 ?? 5;
-      const tpDist = parseFloat((atr * 0.45).toFixed(2));
-      const slDist = parseFloat((tpDist * 0.80).toFixed(2));
+      const aiTpMultiplier = aiUtamaSensitivity === "super_aggressive" ? 0.20 : 0.45;
+      const aiSlMultiplier = aiUtamaSensitivity === "super_aggressive" ? 0.12 : 0.80;
+      const tpDist = parseFloat((atr * aiTpMultiplier).toFixed(2));
+      const slDist = parseFloat((tpDist * aiSlMultiplier).toFixed(2));
       const tp = rawCommand === "BUY" ? parseFloat((p + tpDist).toFixed(2))
         : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
       const sl = rawCommand === "BUY" ? parseFloat((p - slDist).toFixed(2))
@@ -1323,7 +1330,7 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
         const tp1v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.45).toFixed(2)) : p;
         const tp2v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.80).toFixed(2)) : p;
         const tp3v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 1.30).toFixed(2)) : p;
-        const slv  = dir2 !== 0 ? parseFloat((p - dir2 * atr * 0.30).toFixed(2)) : p;
+        const slv  = dir2 !== 0 ? parseFloat((p - dir2 * slDist).toFixed(2)) : p;
         const elv  = parseFloat((p - atr * 0.08).toFixed(2));
         const ehv  = parseFloat((p + atr * 0.08).toFixed(2));
         return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp1v}|${tp2v}|${tp3v}|${slv}|${elv}|${ehv}|${confidence}`);

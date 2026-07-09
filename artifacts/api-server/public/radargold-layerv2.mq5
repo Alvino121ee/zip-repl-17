@@ -17,7 +17,8 @@
 input group "=== Koneksi API ==="
 input string InpApiUrl      = "";   // Isi dengan URL API dari halaman admin
 input string InpEaApiKey    = "";   // Isi dengan EA API Key dari halaman admin
-input string InpSensitivity = "aggressive"; // super_aggressive|aggressive|normal|conservative
+input string InpSensitivity = "aggressive"; // super_aggressive|aggressive|normal|conservative|ai_utama
+                                             // ai_utama = sinyal dari total % 4 agen ensemble (Teknikal/AI Rule/Macro/Sentimen), SL memakai skala mode "aggressive"
 
 input group "=== Trading ==="
 input double InpLotSize     = 0.01;    // Lot per layer (sama untuk semua layer)
@@ -725,9 +726,15 @@ void PushAccountData()
 //+------------------------------------------------------------------+
 void FetchAndProcess()
 {
+   bool useAiUtama = (InpSensitivity == "ai_utama");
+
    string url = InpApiUrl + "/api/xauusd/ea-signal"
-              + "?key="         + InpEaApiKey
-              + "&sensitivity=" + InpSensitivity
+              + "?key=" + InpEaApiKey
+              + (useAiUtama
+                    // Mode AI Utama: arah dari total % 4 agen ensemble, SL/TP tetap
+                    // pakai skala sensitivity "aggressive" (default server: SL=0.80*ATR*0.45)
+                    ? "&mode=ai_utama&sensitivity=aggressive"
+                    : "&sensitivity=" + InpSensitivity)
               + "&format=plain2";
 
    uchar  sendBuf[];
