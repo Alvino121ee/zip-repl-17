@@ -89,6 +89,12 @@ let eaAccountStore: EaAccountData | null = null;
 let eaAccountUpdatedAt = 0;
 const EA_ACCOUNT_STALE_MS = 10_000; // anggap stale setelah 10 detik tidak ada update
 
+// ─── In-memory EA Only mode state ─────────────────────────────────────────────
+// Saat EA Only aktif, /ea-signal mengirim sinyal mentor ke EA.
+// Saat tidak aktif, /ea-signal selalu mengembalikan HOLD.
+type EaModeState = { enabled: boolean; sensitivity: string; enabledAt: number | null };
+let eaModeState: EaModeState = { enabled: false, sensitivity: "normal", enabledAt: null };
+
 // ─── GET /xauusd/live-price — realtime price ticker (polled every 1s) ────────
 xauusdRouter.get("/live-price", (_req, res) => {
   return res.json(getLatestLivePrice());
@@ -1256,205 +1262,112 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
       return res.status(403).json({ error: "EA API key tidak valid" });
     }
 
-    // ── Mode "AI Utama" — sinyal dari akumulasi % 4 agen ensemble ─────────────
-    // (Teknikal/AI Rule/Macro/Sentimen), bukan dari skor indikator mentah.
-    // Arah dengan total % lebih besar jadi dominan → dipakai EA langsung.
-    const mode = req.query.mode === "ai_utama" ? "ai_utama" : "mentor";
-    if (mode === "ai_utama") {
-      const mainRows = await db
-        .select()
-        .from(xauusdPredictionsTable)
-        .where(eq(xauusdPredictionsTable.predictionType, "main"))
-        .orderBy(desc(xauusdPredictionsTable.predictedAt))
-        .limit(1);
-
-      const livePriceAi = getLatestLivePrice();
-      const mainRow = mainRows[0];
-      const indicators = mainRow?.indicatorsAtPrediction as
-        | { ensembleVotes?: Record<string, { direction: string; confidence: number }>; atr14?: number; price?: number }
-        | undefined;
-      const ev = indicators?.ensembleVotes;
-
-      if (!ev) {
-        const noDataResp = { command: "HOLD", price: livePriceAi?.price ?? null, tp: null, sl: null, confidence: 0, mode, timestamp: new Date().toISOString() };
-        if (req.query.format === "plain") return res.type("text/plain").send(`HOLD|${livePriceAi?.price ?? 0}|0|0|0`);
-        return res.json(noDataResp);
-      }
-
-      const keys = ["technical", "ai", "macro", "sentiment"];
-      let upTotal = 0, downTotal = 0;
-      for (const key of keys) {
-        const v = ev[key];
-        if (!v || typeof v.confidence !== "number" || !Number.isFinite(v.confidence)) continue;
-        // clamp ke [0,1] — data ensemble seharusnya sudah dalam rentang ini, tapi
-        // divalidasi ulang di sini agar EA tidak menerima persentase absurd
-        const conf = Math.min(1, Math.max(0, v.confidence));
-        const pct = Math.round(conf * 100);
-        if (v.direction === "up") upTotal += pct;
-        else if (v.direction === "down") downTotal += pct;
-      }
-
-      const p = livePriceAi?.price ?? mainRow?.priceAtPrediction ?? indicators?.price ?? 0;
-
-      // Fail-safe: tanpa harga valid, jangan kirim sinyal actionable ke EA
-      if (!(p > 0)) {
-        const noPriceResp = { command: "HOLD", price: null, tp: null, sl: null, confidence: 0, mode, timestamp: new Date().toISOString() };
-        if (req.query.format === "plain") return res.type("text/plain").send(`HOLD|0|0|0|0`);
-        return res.json(noPriceResp);
-      }
-
-      let rawCommand: "BUY" | "SELL" | "HOLD";
-      let confidence: number;
-      const total = upTotal + downTotal;
-      if (upTotal === downTotal || total === 0) {
-        rawCommand = "HOLD"; confidence = 0;
-      } else if (upTotal > downTotal) {
-        rawCommand = "BUY"; confidence = parseFloat((upTotal / total).toFixed(2));
-      } else {
-        rawCommand = "SELL"; confidence = parseFloat((downTotal / total).toFixed(2));
-      }
-
-      // SL/TP untuk AI Utama selalu mengikuti skala sensitivity "aggressive"
-      // (bukan super_aggressive) — sama seperti mentor-signal/ea-signal biasa.
-      const aiUtamaSensitivity = ["super_aggressive", "aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
-        ? (req.query.sensitivity as string)
-        : "aggressive";
-      const atr = indicators?.atr14 ?? 5;
-      const aiTpMultiplier = aiUtamaSensitivity === "super_aggressive" ? 0.20 : 0.45;
-      const aiSlMultiplier = aiUtamaSensitivity === "super_aggressive" ? 0.12 : 0.80;
-      const tpDist = parseFloat((atr * aiTpMultiplier).toFixed(2));
-      const slDist = parseFloat((tpDist * aiSlMultiplier).toFixed(2));
-      const tp = rawCommand === "BUY" ? parseFloat((p + tpDist).toFixed(2))
-        : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
-      const sl = rawCommand === "BUY" ? parseFloat((p - slDist).toFixed(2))
-        : rawCommand === "SELL" ? parseFloat((p + slDist).toFixed(2)) : null;
-      const timestamp = new Date().toISOString();
-
-      if (req.query.format === "plain2") {
-        const dir2 = rawCommand === "BUY" ? 1 : rawCommand === "SELL" ? -1 : 0;
-        const tp1v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.45).toFixed(2)) : p;
-        const tp2v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.80).toFixed(2)) : p;
-        const tp3v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 1.30).toFixed(2)) : p;
-        const slv  = dir2 !== 0 ? parseFloat((p - dir2 * slDist).toFixed(2)) : p;
-        const elv  = parseFloat((p - atr * 0.08).toFixed(2));
-        const ehv  = parseFloat((p + atr * 0.08).toFixed(2));
-        return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp1v}|${tp2v}|${tp3v}|${slv}|${elv}|${ehv}|${confidence}`);
-      }
-      if (req.query.format === "plain") {
-        return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp ?? 0}|${sl ?? 0}|${confidence}`);
-      }
-
-      return res.json({
-        command: rawCommand,
-        price: p,
-        tp,
-        sl,
-        tpDistance: tp !== null ? parseFloat(Math.abs(tp - p).toFixed(2)) : null,
-        confidence,
-        upTotal,
-        downTotal,
-        mode,
-        timestamp,
-      });
+    // ── Gate: hanya kirim sinyal saat AI Utama mode aktif di widget ──────────
+    if (!eaModeState.enabled) {
+      const lp = getLatestLivePrice();
+      const holdResp = {
+        command: "HOLD",
+        price: lp?.price ?? null,
+        tp: null,
+        sl: null,
+        confidence: 0,
+        comment: "radargold",
+        mode: "ai_utama_disabled",
+        reason: "AI Utama mode tidak aktif di widget — aktifkan dari Mentor Mode widget",
+        timestamp: new Date().toISOString(),
+      };
+      if (req.query.format === "plain2") return res.type("text/plain").send(`HOLD|${lp?.price ?? 0}|0|0|0|0|0|0|0`);
+      if (req.query.format === "plain")  return res.type("text/plain").send(`HOLD|${lp?.price ?? 0}|0|0|0`);
+      return res.json(holdResp);
     }
 
-    // ── Reuse mentor-signal logic ────────────────────────────────────────────
-    const sensitivity = (["super_aggressive", "aggressive", "normal", "conservative"].includes(req.query.sensitivity as string)
-      ? req.query.sensitivity
-      : "normal") as "super_aggressive" | "aggressive" | "normal" | "conservative";
+    // ── Sinyal AI Utama: akumulasi % dari 4 agen ensemble ────────────────────
+    // Sumber: prediksi UTAMA terbaru di DB (bukan indikator teknikal mentah).
+    // Arah dengan total % lebih besar → BUY/SELL, seri → HOLD.
+    const mainRows = await db
+      .select()
+      .from(xauusdPredictionsTable)
+      .where(eq(xauusdPredictionsTable.predictionType, "main"))
+      .orderBy(desc(xauusdPredictionsTable.predictedAt))
+      .limit(1);
 
     const livePrice = getLatestLivePrice();
-    const price = livePrice?.price ?? null;
+    const mainRow = mainRows[0];
+    const indicators = mainRow?.indicatorsAtPrediction as
+      | { ensembleVotes?: Record<string, { direction: string; confidence: number }>; atr14?: number; price?: number }
+      | undefined;
+    const ev = indicators?.ensembleVotes;
 
-    const cached = getLatestMentorIndicators();
-    const useLiveCache = cached.indicators !== null && !cached.stale;
-    let snap: typeof cached.indicators | null = useLiveCache ? cached.indicators : null;
-    let dataSource: "live" | "snapshot" = "live";
-
-    if (!snap) {
-      const snapRows = await db.select().from(xauusdSnapshotsTable).orderBy(desc(xauusdSnapshotsTable.snapshotAt)).limit(1);
-      if (!snapRows.length) {
-        const noDataResp = { command: "HOLD", price, tp: null, sl: null, confidence: 0, dataSource: "snapshot", timestamp: new Date().toISOString(), sensitivity };
-        if (req.query.format === "plain") return res.type("text/plain").send(`HOLD|${price ?? 0}|0|0|0`);
-        return res.json(noDataResp);
-      }
-      const row = snapRows[0];
-      const bbW = row.bbUpper != null && row.bbLower != null && row.bbMiddle != null && row.bbMiddle !== 0
-        ? parseFloat(((row.bbUpper - row.bbLower) / row.bbMiddle * 100).toFixed(3)) : null;
-      snap = {
-        price: row.price, open: row.price, high: row.price, low: row.price, volume: row.volume ?? 0,
-        rsi14: row.rsi14, ema9: row.ema9, ema21: row.ema21, ema50: row.ema50, ema200: row.ema200,
-        macdLine: row.macdLine, macdSignal: row.macdSignal, macdHistogram: row.macdHistogram,
-        bbUpper: row.bbUpper, bbMiddle: row.bbMiddle, bbLower: row.bbLower, bbWidth: bbW, atr14: row.atr14,
-        trend: (row.trend as "bullish" | "bearish" | "sideways") ?? "sideways",
-        rsiSignal: (row.rsiSignal as "overbought" | "oversold" | "neutral") ?? "neutral",
-        macdSignalType: (row.macdSignalType as "bullish_cross" | "bearish_cross" | "neutral") ?? "neutral",
-        emaAlignment: (row.emaAlignment as "bullish_stack" | "bearish_stack" | "mixed") ?? "mixed",
-        supportLevel: row.supportLevel, resistanceLevel: row.resistanceLevel,
+    if (!ev) {
+      const p0 = livePrice?.price ?? mainRow?.priceAtPrediction ?? 0;
+      const noDataResp = {
+        command: "HOLD", price: p0 || null, tp: null, sl: null, confidence: 0,
+        comment: "radargold",
+        mode: "ai_utama", reason: "Menunggu prediksi AI Utama pertama dari siklus belajar",
+        timestamp: new Date().toISOString(),
       };
-      dataSource = "snapshot";
+      if (req.query.format === "plain2") return res.type("text/plain").send(`HOLD|${p0}|0|0|0|0|0|0|0`);
+      if (req.query.format === "plain")  return res.type("text/plain").send(`HOLD|${p0}|0|0|0`);
+      return res.json(noDataResp);
     }
 
-    const p = price ?? snap.price ?? 0;
-    let bullishScore = 0, bearishScore = 0;
-    if (snap.emaAlignment === "bullish_stack") bullishScore++; else if (snap.emaAlignment === "bearish_stack") bearishScore++;
-    if (snap.rsi14 != null) {
-      if (snap.rsi14 <= 30) bullishScore++; else if (snap.rsi14 <= 50) bearishScore++;
-      else if (snap.rsi14 < 70) bullishScore++; else bearishScore++;
-    }
-    if (snap.macdSignalType === "bullish_cross") bullishScore++; else if (snap.macdSignalType === "bearish_cross") bearishScore++;
-    if (snap.macdHistogram != null) { if (snap.macdHistogram > 0) bullishScore++; else if (snap.macdHistogram < 0) bearishScore++; }
-    if (snap.ema50 != null) { if (p > snap.ema50) bullishScore++; else bearishScore++; }
-    if (snap.trend === "bullish") bullishScore++; else if (snap.trend === "bearish") bearishScore++;
-    if (snap.bbLower != null && snap.bbUpper != null && snap.bbMiddle != null) {
-      if (p < snap.bbLower) bullishScore++; else if (p > snap.bbUpper) bearishScore++;
-      else if (p < snap.bbMiddle) bearishScore += 0.5; else bullishScore += 0.5;
-    }
-    if (snap.supportLevel != null && snap.resistanceLevel != null) {
-      const mid = (snap.supportLevel + snap.resistanceLevel) / 2;
-      if (p > mid) bullishScore++; else bearishScore++;
+    // Akumulasi persentase dari 4 agen
+    const agentKeys = ["technical", "ai", "macro", "sentiment"];
+    let upTotal = 0, downTotal = 0;
+    for (const key of agentKeys) {
+      const v = ev[key];
+      if (!v || typeof v.confidence !== "number" || !Number.isFinite(v.confidence)) continue;
+      const conf = Math.min(1, Math.max(0, v.confidence));
+      const pct = Math.round(conf * 100);
+      if (v.direction === "up") upTotal += pct;
+      else if (v.direction === "down") downTotal += pct;
     }
 
-    const thresholds = { super_aggressive: 1, aggressive: 2, normal: 3, conservative: 4 };
-    const threshold = thresholds[sensitivity];
-    const maxPossible = 8.5;
+    const p = livePrice?.price ?? mainRow?.priceAtPrediction ?? indicators?.price ?? 0;
+
+    if (!(p > 0)) {
+      const noPriceResp = {
+        command: "HOLD", price: null, tp: null, sl: null, confidence: 0,
+        comment: "radargold",
+        mode: "ai_utama", timestamp: new Date().toISOString(),
+      };
+      if (req.query.format === "plain2") return res.type("text/plain").send(`HOLD|0|0|0|0|0|0|0|0`);
+      if (req.query.format === "plain")  return res.type("text/plain").send(`HOLD|0|0|0|0`);
+      return res.json(noPriceResp);
+    }
+
+    const total = upTotal + downTotal;
     let rawCommand: "BUY" | "SELL" | "HOLD";
     let confidence: number;
-    if (bullishScore >= threshold && bullishScore > bearishScore) {
-      rawCommand = "BUY"; confidence = parseFloat(Math.min(0.95, bullishScore / maxPossible).toFixed(2));
-    } else if (bearishScore >= threshold && bearishScore > bullishScore) {
-      rawCommand = "SELL"; confidence = parseFloat(Math.min(0.95, bearishScore / maxPossible).toFixed(2)); // SELL = SHORT untuk EA
+    if (upTotal === downTotal || total === 0) {
+      rawCommand = "HOLD"; confidence = 0;
+    } else if (upTotal > downTotal) {
+      rawCommand = "BUY"; confidence = parseFloat((upTotal / total).toFixed(2));
     } else {
-      rawCommand = "HOLD"; confidence = parseFloat(Math.min(0.4, Math.max(bullishScore, bearishScore) / maxPossible).toFixed(2));
+      rawCommand = "SELL"; confidence = parseFloat((downTotal / total).toFixed(2));
     }
 
-    const atr = snap.atr14 ?? 5;
-    const eaTpMultiplier = sensitivity === "super_aggressive" ? 0.20 : 0.45;
-    const eaSlMultiplier = sensitivity === "super_aggressive" ? 0.12 : 0.80;
-    const tpDist = parseFloat((atr * eaTpMultiplier).toFixed(2));
-    const slDist = parseFloat((tpDist * eaSlMultiplier).toFixed(2));
-    const tp = rawCommand === "BUY" ? parseFloat((p + tpDist).toFixed(2))
-      : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
-    const sl = rawCommand === "BUY" ? parseFloat((p - slDist).toFixed(2))
-      : rawCommand === "SELL" ? parseFloat((p + slDist).toFixed(2)) : null;
-
+    // TP/SL dari ATR prediksi utama (skala aggressive)
+    const atr = indicators?.atr14 ?? 5;
+    const tpDist = parseFloat((atr * 0.45).toFixed(2));
+    const slDist = parseFloat((tpDist * 0.80).toFixed(2));
+    const tp = rawCommand === "BUY"  ? parseFloat((p + tpDist).toFixed(2))
+             : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
+    const sl = rawCommand === "BUY"  ? parseFloat((p - slDist).toFixed(2))
+             : rawCommand === "SELL" ? parseFloat((p + slDist).toFixed(2)) : null;
     const timestamp = new Date().toISOString();
 
     if (req.query.format === "plain2") {
-      // Format richer untuk Smart EA v3: CMD|PRICE|TP1|TP2|TP3|SL|ENTRY_LOW|ENTRY_HIGH|CONFIDENCE
-      const atrV = snap.atr14 ?? 5;
       const dir2 = rawCommand === "BUY" ? 1 : rawCommand === "SELL" ? -1 : 0;
-      const tp1v = dir2 !== 0 ? parseFloat((p + dir2 * atrV * 0.45).toFixed(2)) : p;
-      const tp2v = dir2 !== 0 ? parseFloat((p + dir2 * atrV * 0.80).toFixed(2)) : p;
-      const tp3v = dir2 !== 0 ? parseFloat((p + dir2 * atrV * 1.30).toFixed(2)) : p;
-      const slv  = dir2 !== 0 ? parseFloat((p - dir2 * atrV * 0.30).toFixed(2)) : p;
-      const elv  = parseFloat((p - atrV * 0.08).toFixed(2));
-      const ehv  = parseFloat((p + atrV * 0.08).toFixed(2));
+      const tp1v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.45).toFixed(2)) : p;
+      const tp2v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.80).toFixed(2)) : p;
+      const tp3v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 1.30).toFixed(2)) : p;
+      const slv  = dir2 !== 0 ? parseFloat((p - dir2 * slDist).toFixed(2)) : p;
+      const elv  = parseFloat((p - atr * 0.08).toFixed(2));
+      const ehv  = parseFloat((p + atr * 0.08).toFixed(2));
       return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp1v}|${tp2v}|${tp3v}|${slv}|${elv}|${ehv}|${confidence}`);
     }
-
     if (req.query.format === "plain") {
-      // Format lama: COMMAND|PRICE|TP|SL|CONFIDENCE  — backward compat
       return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp ?? 0}|${sl ?? 0}|${confidence}`);
     }
 
@@ -1465,10 +1378,10 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
       sl,
       tpDistance: tp !== null ? parseFloat(Math.abs(tp - p).toFixed(2)) : null,
       confidence,
-      bullishScore: parseFloat(bullishScore.toFixed(1)),
-      bearishScore: parseFloat(bearishScore.toFixed(1)),
-      sensitivity,
-      dataSource,
+      upTotal,
+      downTotal,
+      comment: "radargold",
+      mode: "ai_utama",
       timestamp,
     });
   } catch (err) {
@@ -1523,4 +1436,34 @@ xauusdRouter.get("/ea-account", async (_req, res) => {
     return res.json({ connected: false, data: null });
   }
   return res.json({ connected: true, data: eaAccountStore });
+});
+
+// ─── GET /xauusd/ea-mode — status EA Only mode saat ini ──────────────────────
+xauusdRouter.get("/ea-mode", (_req, res) => {
+  return res.json({
+    enabled: eaModeState.enabled,
+    sensitivity: eaModeState.sensitivity,
+    enabledAt: eaModeState.enabledAt,
+  });
+});
+
+// ─── POST /xauusd/ea-mode — aktifkan/nonaktifkan EA Only mode ────────────────
+// Auth: Bearer SESSION_SECRET (admin token) — karena mengontrol pengiriman sinyal ke EA.
+// Body: { enabled: boolean, sensitivity?: string }
+// Saat enabled=true, /ea-signal akan mengirim sinyal mentor dengan sensitivity yg dipilih.
+// Saat enabled=false, /ea-signal selalu mengembalikan HOLD.
+xauusdRouter.post("/ea-mode", requireAdmin, (req, res) => {
+  const { enabled, sensitivity } = req.body as { enabled?: boolean; sensitivity?: string };
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "Field 'enabled' (boolean) diperlukan" });
+  }
+  const validSensitivities = ["super_aggressive", "aggressive", "normal", "conservative"];
+  const newSensitivity = validSensitivities.includes(sensitivity ?? "") ? sensitivity! : "normal";
+  eaModeState = {
+    enabled,
+    sensitivity: enabled ? newSensitivity : eaModeState.sensitivity,
+    enabledAt: enabled ? Date.now() : null,
+  };
+  console.info(`[EA Mode] ${enabled ? `Diaktifkan (sensitivity=${newSensitivity})` : "Dinonaktifkan"}`);
+  return res.json({ ok: true, ...eaModeState });
 });

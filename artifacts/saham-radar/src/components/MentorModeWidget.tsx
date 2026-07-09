@@ -12,11 +12,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   TrendingUp, TrendingDown, Minus, GraduationCap,
   Power, PowerOff, ChevronDown, ChevronUp, History,
-  AlertCircle, X, GripVertical, Wifi, WifiOff, DollarSign,
+  AlertCircle, X, GripVertical, Wifi, WifiOff, DollarSign, Radio,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -26,6 +26,12 @@ type RawCommand = "BUY" | "SHORT" | "HOLD";
 type PositionState = "NONE" | "BUY" | "SHORT";
 type DisplayCommand = "BUKA BUY" | "BUKA SHORT" | "CLOSE BUY" | "CLOSE SHORT" | "TUNGGU";
 type SignalMode = "mentor" | "ai_utama";
+
+interface EaModeStatus {
+  enabled: boolean;
+  sensitivity: string;
+  enabledAt: number | null;
+}
 
 interface MentorSignal {
   command: RawCommand;
@@ -203,12 +209,12 @@ function computeAiUtamaVote(ev: EnsembleVotes | undefined): {
 
 export function MentorModeWidget() {
   // ── Widget UI ──────────────────────────────────────────────────────────────
-  const [isActive, setIsActive]       = useState(false);
-  const [mode, setMode]               = useState<SignalMode>("mentor");
-  const [sensitivity, setSensitivity] = useState<Sensitivity>("normal");
-  const [showHistory, setShowHistory] = useState(false);
-  const [showReasons, setShowReasons] = useState(true);
-  const [minimized, setMinimized]     = useState(false);
+  const [isActive, setIsActive]         = useState(false);
+  const [mode, setMode]                 = useState<SignalMode>("mentor");
+  const [sensitivity, setSensitivity]   = useState<Sensitivity>("normal");
+  const [showHistory, setShowHistory]   = useState(false);
+  const [showReasons, setShowReasons]   = useState(true);
+  const [minimized, setMinimized]       = useState(false);
 
   // ── Trading state ──────────────────────────────────────────────────────────
   const [stableCmd, setStableCmd]         = useState<DisplayCommand>("TUNGGU");
@@ -243,6 +249,49 @@ export function MentorModeWidget() {
   }, []);
 
   const onPointerUp = useCallback(() => { dragging.current = false; }, []);
+
+  // ── Mutation: aktifkan/nonaktifkan EA mode di server ─────────────────────
+  // Saat AI Utama aktif di widget → server ea-mode enabled → /ea-signal kirim sinyal AI Utama ke EA.
+  // Membutuhkan admin token (SESSION_SECRET).
+  const eaModeMut = useMutation({
+    mutationFn: async (payload: { enabled: boolean }) => {
+      const adminToken = sessionStorage.getItem("gr_admin_token") ?? "";
+      const res = await fetch("/api/xauusd/ea-mode", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(adminToken ? { "Authorization": `Bearer ${adminToken}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("Perlu login admin untuk mengaktifkan sinyal ke EA");
+        }
+        throw new Error("Gagal mengatur EA mode");
+      }
+      return res.json() as Promise<EaModeStatus>;
+    },
+  });
+
+  // ── Sync EA mode ke server saat AI Utama aktif/nonaktif ───────────────────
+  useEffect(() => {
+    const shouldEnable = mode === "ai_utama" && isActive;
+    eaModeMut.mutate({ enabled: shouldEnable });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, isActive]);
+
+  // ── Status EA mode dari server (untuk konfirmasi badge) ───────────────────
+  const { data: eaModeStatus } = useQuery<EaModeStatus>({
+    queryKey: ["/api/xauusd/ea-mode"],
+    queryFn: async () => {
+      const res = await fetch("/api/xauusd/ea-mode");
+      if (!res.ok) throw new Error("Gagal fetch EA mode");
+      return res.json() as Promise<EaModeStatus>;
+    },
+    refetchInterval: mode === "ai_utama" && isActive ? 5000 : false,
+    staleTime: 4000,
+  });
 
   // ── Data fetch (every 2s when active) ─────────────────────────────────────
   const { data: signal, isError } = useQuery<MentorSignal>({
@@ -294,6 +343,9 @@ export function MentorModeWidget() {
   const activeReasons = mode === "ai_utama" ? aiUtama.reasons : (signal?.reasons ?? []);
   const activeReady = mode === "ai_utama" ? !!ev : !!signal;
   const activePrice = mode === "ai_utama" ? (mainPredictions?.[0]?.indicatorsAtPrediction?.price as number | undefined) ?? null : (signal?.price ?? null);
+
+  // ── AI Utama → EA: konfirmasi dari server bahwa sinyal dikirim ke EA ────────
+  const eaServerConfirmed = mode === "ai_utama" && isActive && (eaModeStatus?.enabled === true);
 
   // ── Cooldown dinamis berdasarkan sensitivity ───────────────────────────────
   const COOLDOWN_MS = COOLDOWN_BY_SENSITIVITY[sensitivity];
@@ -440,6 +492,14 @@ export function MentorModeWidget() {
           </span>
         )}
 
+        {/* Badge EA aktif — muncul saat AI Utama terkonfirmasi server */}
+        {eaServerConfirmed && (
+          <span className="flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full border bg-emerald-950/60 text-emerald-400 border-emerald-500/40 animate-pulse">
+            <Radio className="w-2.5 h-2.5" />
+            → EA
+          </span>
+        )}
+
         <select
           data-nodrag
           value={mode === "ai_utama" ? "ai_utama" : sensitivity}
@@ -496,6 +556,22 @@ export function MentorModeWidget() {
             </p>
           )}
 
+          {/* ── AI Utama → EA: status pengiriman ke EA ── */}
+          {mode === "ai_utama" && isActive && (
+            <div className="rounded-lg border border-blue-500/30 bg-blue-500/8 px-2.5 py-1.5 flex items-center gap-1.5">
+              <Radio className="w-3 h-3 text-blue-400 shrink-0" />
+              {eaServerConfirmed
+                ? <span className="text-[9px] text-emerald-400 font-bold">● Sinyal AI Utama aktif dikirim ke EA</span>
+                : <span className="text-[9px] text-amber-400">Menghubungkan ke EA...</span>
+              }
+              {eaModeMut.isError && (
+                <span className="text-[9px] text-red-400 ml-auto">
+                  ⚠ {eaModeMut.error instanceof Error ? eaModeMut.error.message : "Gagal"}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* ── Super Agresif warning banner ── */}
           {mode === "mentor" && sensitivity === "super_aggressive" && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-2">
@@ -511,7 +587,9 @@ export function MentorModeWidget() {
 
           {!isActive ? (
             <div className="text-center py-4">
-              <p className="text-xs text-zinc-500">{mode === "ai_utama" ? "AI Utama" : "Mentor Mode"} nonaktif</p>
+              <p className="text-xs text-zinc-500">
+                {mode === "ai_utama" ? "AI Utama" : "Mentor Mode"} nonaktif
+              </p>
               <p className="text-[10px] text-zinc-600 mt-1">Tekan tombol power untuk mulai</p>
             </div>
           ) : (
@@ -605,14 +683,14 @@ export function MentorModeWidget() {
               {/* ── TP / SL ── */}
               {mode === "mentor" && signal && signal.command !== "HOLD" && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
+                  <div className="rounded-lg p-2 text-center bg-zinc-800/60">
                     <div className="text-[10px] text-zinc-500 mb-0.5">TP Minimal</div>
                     <div className="text-xs font-bold text-emerald-400 font-mono">{fmt(signal.minTP)}</div>
                     {signal.minTPDistance && (
                       <div className="text-[9px] text-zinc-600">+{fmt(signal.minTPDistance)}</div>
                     )}
                   </div>
-                  <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
+                  <div className="rounded-lg p-2 text-center bg-zinc-800/60">
                     <div className="text-[10px] text-zinc-500 mb-0.5">SL Minimal</div>
                     <div className="text-xs font-bold text-red-400 font-mono">{fmt(signal.minSL)}</div>
                   </div>
