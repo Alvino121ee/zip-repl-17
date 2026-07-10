@@ -25,6 +25,21 @@ import {
   startBtcBrainEngine, stopBtcBrainEngine,
   generateBtcOnDemandPrediction,
 } from "../lib/btcusd-brain-engine.js";
+import {
+  getBtcQuantStatus,
+  getBtcQuantRecentPredictions,
+} from "../lib/btc-quant-engine.js";
+import { getBtcTechnicalBrainStats } from "../lib/btc-quant-technical-brain.js";
+import { getBtcFundamentalBrainStats } from "../lib/btc-quant-fundamental-brain.js";
+import { getBtcMacroBrainStats } from "../lib/btc-quant-macro-brain.js";
+import { db } from "@workspace/db";
+import {
+  btcQuantBrainPredictionsTable,
+  btcQuantTechnicalBrainTable,
+  btcQuantFundamentalBrainTable,
+  btcQuantMacroBrainTable,
+} from "@workspace/db/schema";
+import { sql as drizzleSql, eq as drizzleEq } from "drizzle-orm";
 
 type Req = import("express").Request;
 type Res = import("express").Response;
@@ -564,5 +579,81 @@ btcusdRouter.post("/chat", requireMember, async (req, res) => {
     }
   } catch (err) {
     return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── BTC Quant Bot (3 independent brains — scalping, TP/SL max $1000) ─────────
+
+// Status lengkap semua brain + ensemble signal
+btcusdRouter.get("/quant/status", (_req, res) => {
+  res.json(getBtcQuantStatus());
+});
+
+// Prediksi ensemble terbaru
+btcusdRouter.get("/quant/predictions", async (_req, res) => {
+  try {
+    const predictions = await getBtcQuantRecentPredictions(20);
+    res.json(predictions);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Statistik per-brain: insights & akurasi
+btcusdRouter.get("/quant/brain-stats", async (_req, res) => {
+  try {
+    const [techStats, fundStats, macroStats, techCount, fundCount, macroCount, brainAccuracy] = await Promise.all([
+      getBtcTechnicalBrainStats(),
+      getBtcFundamentalBrainStats(),
+      getBtcMacroBrainStats(),
+      db.select({ count: drizzleSql<number>`count(*)`, avgConf: drizzleSql<number>`avg(confidence)` })
+        .from(btcQuantTechnicalBrainTable).where(drizzleEq(btcQuantTechnicalBrainTable.isActive, true)),
+      db.select({ count: drizzleSql<number>`count(*)`, avgConf: drizzleSql<number>`avg(confidence)` })
+        .from(btcQuantFundamentalBrainTable).where(drizzleEq(btcQuantFundamentalBrainTable.isActive, true)),
+      db.select({ count: drizzleSql<number>`count(*)`, avgConf: drizzleSql<number>`avg(confidence)` })
+        .from(btcQuantMacroBrainTable).where(drizzleEq(btcQuantMacroBrainTable.isActive, true)),
+      db.execute(
+        drizzleSql`SELECT brain_type,
+          COUNT(*) FILTER (WHERE is_verified = true) as verified,
+          COUNT(*) FILTER (WHERE is_verified = true AND is_correct = true) as correct
+          FROM btc_quant_brain_predictions GROUP BY brain_type`
+      ),
+    ]);
+    res.json({
+      scalping_constraint: { max_tp_sl_usd: 1000, fixed_brain_distance_usd: 500 },
+      technical: {
+        cycles: techStats.cycleCount,
+        lastSignal: techStats.lastSignal?.signal ?? null,
+        insights: { count: Number(techCount[0]?.count ?? 0), avgConfidence: Number(techCount[0]?.avgConf ?? 0) },
+      },
+      fundamental: {
+        cycles: fundStats.cycleCount,
+        lastSignal: fundStats.lastSignal?.signal ?? null,
+        halvingPhase: fundStats.lastSignal?.halvingPhase ?? null,
+        fearGreedScore: fundStats.lastSignal?.fearGreedScore ?? null,
+        insights: { count: Number(fundCount[0]?.count ?? 0), avgConfidence: Number(fundCount[0]?.avgConf ?? 0) },
+      },
+      macro: {
+        cycles: macroStats.cycleCount,
+        lastSignal: macroStats.lastSignal?.signal ?? null,
+        macroRegime: macroStats.lastSignal?.macroRegime ?? null,
+        insights: { count: Number(macroCount[0]?.count ?? 0), avgConfidence: Number(macroCount[0]?.avgConf ?? 0) },
+      },
+      accuracy: brainAccuracy.rows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Per-brain standalone predictions (tracking akurasi tiap brain secara adil)
+btcusdRouter.get("/quant/brain-predictions", async (_req, res) => {
+  try {
+    const rows = await db.select().from(btcQuantBrainPredictionsTable)
+      .orderBy(btcQuantBrainPredictionsTable.predictedAt)
+      .limit(30);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });

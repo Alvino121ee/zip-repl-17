@@ -10,6 +10,10 @@ import { startTechnicalBrain } from "./lib/quant-technical-brain.js";
 import { startFundamentalBrain } from "./lib/quant-fundamental-brain.js";
 import { startMacroBrain } from "./lib/quant-macro-brain.js";
 import { startQuantBotEngine } from "./lib/quant-bot-engine.js";
+import { startBtcTechnicalBrain } from "./lib/btc-quant-technical-brain.js";
+import { startBtcFundamentalBrain } from "./lib/btc-quant-fundamental-brain.js";
+import { startBtcMacroBrain } from "./lib/btc-quant-macro-brain.js";
+import { startBtcQuantEngine } from "./lib/btc-quant-engine.js";
 
 const port = Number(process.env["PORT"] ?? "8080");
 
@@ -63,10 +67,20 @@ app.listen(port, async (err) => {
   // Start 30s indicator cache for Mentor Mode (live TradingView data, no DB)
   startMentorIndicatorsTicker();
 
-  // ── Quant Bot: 3 independent AI brains ──────────────────────────────────────
+  // ── Quant Bot XAUUSD: 3 independent AI brains ───────────────────────────────
   startTechnicalBrain();
   startFundamentalBrain();
   startMacroBrain();
   // Orchestrator starts after brains (10s delay built-in)
   startQuantBotEngine();
+
+  // ── Quant Bot BTC: 3 independent AI brains (scalping, TP/SL max $1000) ─────
+  // BTC Brain v2 lama tetap jalan — brain baru belajar paralel
+  if (btcEnabled) {
+    startBtcTechnicalBrain();
+    startBtcFundamentalBrain();
+    startBtcMacroBrain();
+    // Orchestrator starts 15s after brains init
+    startBtcQuantEngine();
+  }
 });
