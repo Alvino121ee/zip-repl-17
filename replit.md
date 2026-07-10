@@ -51,6 +51,14 @@ File EA tersedia di `artifacts/api-server/public/`:
 - `/member` — Chat AI (perlu login member)
 - `/admin` — Panel admin (perlu token admin = `SESSION_SECRET`)
 
+## Setup Awal (sudah dilakukan)
+
+Langkah-langkah berikut sudah dijalankan saat import ke Replit:
+
+1. `pnpm install` — install semua dependensi workspace
+2. `pnpm --filter @workspace/db run push` — push schema ke PostgreSQL Replit
+3. Workflow frontend & API server dikonfigurasi dan dijalankan
+
 ## User Preferences
 
 - Bahasa antarmuka: **Bahasa Indonesia**

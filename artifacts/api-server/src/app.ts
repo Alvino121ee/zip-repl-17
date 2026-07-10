@@ -10,6 +10,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app: Express = express();
 
+// Replit routes semua traffic melalui reverse proxy — trust satu hop agar
+// express-rate-limit bisa membaca IP asli user dari X-Forwarded-For.
+app.set("trust proxy", 1);
+
 app.use(
   pinoHttp({
     logger,
