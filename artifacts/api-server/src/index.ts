@@ -5,6 +5,10 @@ import { startBtcBrainEngine } from "./lib/btcusd-brain-engine.js";
 import { startXauusdLivePriceTicker } from "./lib/xauusd-live-price.js";
 import { startMentorIndicatorsTicker } from "./lib/xauusd-mentor-cache.js";
 import { ensureAgentsExist } from "./lib/agent-engine.js";
+import { startTechnicalBrain } from "./lib/quant-technical-brain.js";
+import { startFundamentalBrain } from "./lib/quant-fundamental-brain.js";
+import { startMacroBrain } from "./lib/quant-macro-brain.js";
+import { startQuantBotEngine } from "./lib/quant-bot-engine.js";
 
 const port = Number(process.env["PORT"] ?? "8080");
 
@@ -56,4 +60,11 @@ app.listen(port, async (err) => {
 
   // Start 30s indicator cache for Mentor Mode (live TradingView data, no DB)
   startMentorIndicatorsTicker();
+
+  // ── Quant Bot: 3 independent AI brains ──────────────────────────────────────
+  startTechnicalBrain();
+  startFundamentalBrain();
+  startMacroBrain();
+  // Orchestrator starts after brains (10s delay built-in)
+  startQuantBotEngine();
 });

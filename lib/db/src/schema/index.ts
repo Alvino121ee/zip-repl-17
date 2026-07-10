@@ -5,3 +5,4 @@ export * from "./xauusd";
 export * from "./btcusd";
 export * from "./members";
 export * from "./payments";
+export * from "./quant";

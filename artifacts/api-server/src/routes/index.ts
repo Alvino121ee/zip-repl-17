@@ -5,6 +5,7 @@ import authRouter from "./auth";
 import paymentRouter from "./payment";
 import { xauusdRouter } from "./xauusd";
 import { btcusdRouter } from "./btcusd";
+import { quantRouter } from "./quant";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use("/admin", adminRouter);
 router.use("/payment", paymentRouter);
 router.use("/xauusd", xauusdRouter);
 router.use("/btcusd", btcusdRouter);
+router.use("/quant", quantRouter);
 
 export default router;

@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { TrendingUp, Settings, Menu, X, Zap, Lock, Bitcoin } from "lucide-react";
+import { TrendingUp, Settings, Menu, X, Zap, Lock, Bitcoin, Bot } from "lucide-react";
 import { isAdmin } from "@/lib/auth";
 
 // Layout hanya digunakan untuk halaman admin
 const navItems = [
   { href: "/admin", label: "XAUUSD AI", sublabel: "Gold trading AI & analisis", icon: TrendingUp, role: "admin" as const },
   { href: "/admin/btc", label: "BTCUSD AI", sublabel: "Bitcoin trading AI & analisis", icon: Bitcoin, role: "admin" as const },
+  { href: "/quant-bot", label: "Quant Bot", sublabel: "3-brain autonomous trader", icon: Bot, role: "admin" as const },
   { href: "/admin/settings", label: "Pengaturan", sublabel: "Konfigurasi sistem", icon: Settings, role: "admin" as const },
 ];
 
