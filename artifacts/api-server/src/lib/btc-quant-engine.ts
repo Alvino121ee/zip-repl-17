@@ -202,7 +202,10 @@ async function runOrchestrationCycle() {
 
   try {
     // 1. Ambil sinyal dari 3 brain + data konteks secara paralel
-    const [techSignal, fundSignal, macroSignal, indicators, fearGreed, fundingData, halvingCtx] =
+    // getBtcHalvingContext adalah synchronous — tidak perlu await
+    const halvingCtxSync = (() => { try { return getBtcHalvingContext(); } catch { return null; } })();
+
+    const [techSignal, fundSignal, macroSignal, indicators, fearGreed, fundingData] =
       await Promise.all([
         getBtcTechnicalSignal().catch((e) => { console.error("[BTC Quant] Tech error:", e.message); return null; }),
         getBtcFundamentalSignal().catch((e) => { console.error("[BTC Quant] Fund error:", e.message); return null; }),
@@ -210,8 +213,8 @@ async function runOrchestrationCycle() {
         fetchBtcusdIndicators("5").catch(() => null),
         fetchFearGreedIndex().catch(() => null),
         fetchBtcFundingRate().catch(() => null),
-        getBtcHalvingContext().catch(() => null),
       ]);
+    const halvingCtx = halvingCtxSync;
 
     if (!techSignal || !fundSignal || !macroSignal) {
       console.log(`[BTC Quant Orchestrator] Cycle #${cycleNum}: brain signals belum siap, skip`);

@@ -101,8 +101,68 @@ interface BrainPredictionsResponse {
   macro: { latest: BrainPrediction | null; stats: BrainPredictionStats };
 }
 
+// ─── BTC Quant Types ───────────────────────────────────────────────────────────
+interface BtcQuantStatus {
+  isActive: boolean;
+  lastUpdateAt: string | null;
+  cycleCount: number;
+  technical: (BrainSignal & { keySetup: string }) | null;
+  fundamental: (BrainSignal & {
+    fundamentalBias: string; keyDriver: string;
+    halvingPhase: string; fearGreedScore: number | null;
+  }) | null;
+  macro: (BrainSignal & {
+    macroRegime: string; correlationBias: string; psychologyNarrative: string;
+  }) | null;
+  ensemble: {
+    signal: "BUY" | "SELL" | "HOLD";
+    direction: "up" | "down" | "neutral";
+    confidence: number;
+    votes: { technical: string; fundamental: string; macro: string };
+    weights: { technical: number; fundamental: number; macro: number };
+    consensus: "strong" | "moderate" | "weak" | "split";
+  } | null;
+  prediction: {
+    entryPrice: number; tp: number; sl: number;
+    tpDistance: number; slDistance: number;
+    riskReward: number; constraintApplied: boolean;
+  } | null;
+  context: {
+    fearGreedIndex: number | null;
+    fundingRate: number | null;
+    halvingPhase: string | null;
+    session: string;
+  };
+}
+
+interface BtcBrainPrediction {
+  id: number;
+  brainType: "technical" | "fundamental" | "macro";
+  predictedAt: string;
+  direction: "up" | "down";
+  signal: "BUY" | "SELL";
+  confidence: number;
+  entryPrice: number;
+  tp: number;
+  sl: number;
+  fixedDistance: number;
+  reasoning: string | null;
+  isVerified: boolean;
+  isCorrect: boolean | null;
+}
+
+interface BtcBrainStats {
+  scalping_constraint: { max_tp_sl_usd: number; fixed_brain_distance_usd: number };
+  technical: { cycles: number; lastSignal: string | null; insights: { count: number; avgConfidence: number } };
+  fundamental: { cycles: number; lastSignal: string | null; halvingPhase: string | null; fearGreedScore: number | null; insights: { count: number; avgConfidence: number } };
+  macro: { cycles: number; lastSignal: string | null; macroRegime: string | null; insights: { count: number; avgConfidence: number } };
+  accuracy: Array<{ brain_type: string; verified: string; correct: string }>;
+}
+
 // ─── API helpers ───────────────────────────────────────────────────────────────
 const API = "/api/quant";
+const BTC_API = "/api/btcusd/quant";
+
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     ...opts,
@@ -111,6 +171,14 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const data = await res.json();
   if (!data.ok) throw new Error(data.error ?? "API error");
   return data.data;
+}
+
+async function btcApiFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${BTC_API}${path}`, {
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<T>;
 }
 
 // ─── Colour helpers ────────────────────────────────────────────────────────────
@@ -629,24 +697,128 @@ function NewsPanel({ news, apiProvider }: { news: QuantStatus["news"]; apiProvid
   );
 }
 
+// ─── BTC Scalping Prediction Panel ────────────────────────────────────────────
+function BtcScalpingPanel({
+  prediction, context, ensemble,
+}: {
+  prediction: BtcQuantStatus["prediction"];
+  context: BtcQuantStatus["context"];
+  ensemble: BtcQuantStatus["ensemble"] | null;
+}) {
+  const fg = context.fearGreedIndex;
+  const fgLabel = fg !== null
+    ? fg < 25 ? "Extreme Fear 😱" : fg < 45 ? "Fear 😨" : fg < 55 ? "Neutral 😐" : fg < 75 ? "Greed 😏" : "Extreme Greed 🤑"
+    : null;
+  const fgColor = fg !== null
+    ? fg < 25 ? "text-blue-400" : fg < 45 ? "text-blue-300" : fg < 55 ? "text-zinc-400" : fg < 75 ? "text-yellow-400" : "text-orange-400"
+    : "text-zinc-500";
+
+  return (
+    <Card className="border border-orange-500/20 bg-zinc-900/60">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Target className="w-4 h-4 text-orange-400" />
+            <CardTitle className="text-sm font-semibold text-white">Prediksi Scalping</CardTitle>
+            <Badge className="text-[10px] bg-orange-500/20 text-orange-400 border-orange-500/30">
+              MAX $1.000
+            </Badge>
+          </div>
+          <span className="text-xs text-zinc-500 capitalize">{context.session?.replace("_", " ")}</span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Scalping TP/SL */}
+        {prediction && ensemble?.signal !== "HOLD" ? (
+          <div className="space-y-2">
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="bg-white/5 rounded-lg p-2.5 border border-white/5">
+                <div className="text-[10px] text-zinc-500 mb-0.5">Entry</div>
+                <div className="text-sm font-mono font-bold text-white">${prediction.entryPrice.toLocaleString()}</div>
+              </div>
+              <div className="bg-emerald-500/10 rounded-lg p-2.5 border border-emerald-500/20">
+                <div className="text-[10px] text-zinc-500 mb-0.5">TP (+${prediction.tpDistance.toFixed(0)})</div>
+                <div className="text-sm font-mono font-bold text-emerald-400">${prediction.tp.toLocaleString()}</div>
+              </div>
+              <div className="bg-red-500/10 rounded-lg p-2.5 border border-red-500/20">
+                <div className="text-[10px] text-zinc-500 mb-0.5">SL (-${prediction.slDistance.toFixed(0)})</div>
+                <div className="text-sm font-mono font-bold text-red-400">${prediction.sl.toLocaleString()}</div>
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-xs px-1">
+              <span className="text-zinc-500">Risk:Reward</span>
+              <span className="text-amber-400 font-semibold">1 : {prediction.riskReward.toFixed(2)}</span>
+              {prediction.constraintApplied && (
+                <Badge className="text-[10px] bg-orange-500/20 text-orange-400 border-orange-500/30">
+                  ⚠ Cap aktif
+                </Badge>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="text-center py-4 text-zinc-600 text-xs">
+            {ensemble?.signal === "HOLD" ? "Sinyal HOLD — tidak ada prediksi scalping" : "Menunggu sinyal pertama..."}
+          </div>
+        )}
+
+        {/* Context pills */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-white/5 rounded-lg p-2.5 border border-white/5">
+            <div className="text-[10px] text-zinc-500 mb-1">Fear & Greed</div>
+            {fg !== null ? (
+              <>
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="flex-1 bg-gradient-to-r from-blue-600 via-zinc-600 to-orange-500 h-1.5 rounded-full relative">
+                    <div
+                      className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-white rounded-full border border-zinc-800"
+                      style={{ left: `calc(${fg}% - 5px)` }}
+                    />
+                  </div>
+                  <span className={`text-xs font-bold tabular-nums ${fgColor}`}>{fg}</span>
+                </div>
+                <div className={`text-[10px] ${fgColor}`}>{fgLabel}</div>
+              </>
+            ) : (
+              <div className="text-xs text-zinc-600">N/A</div>
+            )}
+          </div>
+          <div className="bg-white/5 rounded-lg p-2.5 border border-white/5 space-y-1.5">
+            <div className="flex justify-between text-[10px]">
+              <span className="text-zinc-500">Halving Phase</span>
+              <span className="text-orange-300 font-medium capitalize">{context.halvingPhase?.replace(/_/g, " ") ?? "—"}</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="text-zinc-500">Funding Rate</span>
+              <span className={`font-mono font-medium ${(context.fundingRate ?? 0) > 0.05 ? "text-red-400" : (context.fundingRate ?? 0) < -0.02 ? "text-emerald-400" : "text-zinc-300"}`}>
+                {context.fundingRate !== null ? `${(context.fundingRate * 100).toFixed(4)}%` : "—"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main page ─────────────────────────────────────────────────────────────────
 export default function QuantBotPage() {
-  const { toast } = useToast();
+  const { toast: _toast } = useToast();
+  const [activeAsset, setActiveAsset] = useState<"xauusd" | "btc">("xauusd");
 
+  // ── XAUUSD queries ──────────────────────────────────────────────────────────
   const { data: status, isLoading, isError, refetch, dataUpdatedAt } = useQuery<QuantStatus>({
     queryKey: ["quant-status"],
     queryFn: () => apiFetch<QuantStatus>("/status"),
-    refetchInterval: 30_000,
+    refetchInterval: activeAsset === "xauusd" ? 30_000 : false,
     retry: 2,
   });
 
   const { data: newsData } = useQuery<{ news: QuantStatus["news"]; newsApiProvider: string }>({
     queryKey: ["quant-news"],
     queryFn: () => apiFetch("/news"),
-    refetchInterval: 5 * 60_000,
+    refetchInterval: activeAsset === "xauusd" ? 5 * 60_000 : false,
   });
 
-  // Data harga real-time XAUUSD & BTCUSD — dikumpulkan tiap 1 detik
   const { data: live } = useQuery<LivePrices>({
     queryKey: ["quant-live-prices"],
     queryFn: () => apiFetch<LivePrices>("/live-prices"),
@@ -654,11 +826,32 @@ export default function QuantBotPage() {
     retry: false,
   });
 
-  // Prediksi mandiri masing-masing brain (Technical/Fundamental/Macro) — SL/TP 100 pips, adil & sama
   const { data: brainPredictions } = useQuery<BrainPredictionsResponse>({
     queryKey: ["quant-brain-predictions"],
     queryFn: () => apiFetch<BrainPredictionsResponse>("/brain-predictions"),
-    refetchInterval: 15_000,
+    refetchInterval: activeAsset === "xauusd" ? 15_000 : false,
+    retry: false,
+  });
+
+  // ── BTC queries ─────────────────────────────────────────────────────────────
+  const { data: btcStatus, isLoading: btcLoading, refetch: btcRefetch } = useQuery<BtcQuantStatus>({
+    queryKey: ["btc-quant-status"],
+    queryFn: () => btcApiFetch<BtcQuantStatus>("/status"),
+    refetchInterval: activeAsset === "btc" ? 15_000 : false,
+    retry: 2,
+  });
+
+  const { data: btcBrainStats } = useQuery<BtcBrainStats>({
+    queryKey: ["btc-quant-brain-stats"],
+    queryFn: () => btcApiFetch<BtcBrainStats>("/brain-stats"),
+    refetchInterval: activeAsset === "btc" ? 30_000 : false,
+    retry: false,
+  });
+
+  const { data: btcBrainPredictions } = useQuery<BtcBrainPrediction[]>({
+    queryKey: ["btc-quant-brain-predictions"],
+    queryFn: () => btcApiFetch<BtcBrainPrediction[]>("/brain-predictions"),
+    refetchInterval: activeAsset === "btc" ? 15_000 : false,
     retry: false,
   });
 
@@ -679,6 +872,10 @@ export default function QuantBotPage() {
   const ensemble = status?.ensemble;
   const isActive = status?.isActive ?? false;
 
+  const activeEnsemble = activeAsset === "xauusd" ? ensemble : btcStatus?.ensemble ?? null;
+  const activeLoading = activeAsset === "xauusd" ? isLoading : btcLoading;
+  const handleRefresh = () => activeAsset === "xauusd" ? refetch() : btcRefetch();
+
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
       {/* ── Header ── */}
@@ -698,13 +895,39 @@ export default function QuantBotPage() {
                 <p className="text-xs text-zinc-500">3-Brain Autonomous Trader</p>
               </div>
             </div>
-            {isActive && (
+
+            {/* Tab switcher XAUUSD / BTC */}
+            <div className="flex items-center bg-zinc-900 border border-white/10 rounded-lg p-0.5 gap-0.5">
+              <button
+                onClick={() => setActiveAsset("xauusd")}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
+                  activeAsset === "xauusd"
+                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                ⚡ XAU/USD
+              </button>
+              <button
+                onClick={() => setActiveAsset("btc")}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
+                  activeAsset === "btc"
+                    ? "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                ₿ BTC/USD
+              </button>
+            </div>
+
+            {/* Active badge */}
+            {(activeAsset === "xauusd" ? isActive : btcStatus?.isActive) && (
               <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs animate-pulse">
                 ● AKTIF
               </Badge>
             )}
 
-            {/* Ticker harga real-time XAUUSD & BTCUSD — update tiap 1 detik */}
+            {/* Ticker harga real-time */}
             <div className="hidden md:flex items-center gap-3 pl-3 ml-1 border-l border-white/10">
               <LiveTickerPill label="XAU/USD" ticker={live?.xauusd} />
               <LiveTickerPill label="BTC/USD" ticker={live?.btcusd} />
@@ -713,35 +936,35 @@ export default function QuantBotPage() {
 
           <div className="flex items-center gap-3">
             {/* Ensemble signal pill */}
-            {ensemble && (
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${signalBg(ensemble.signal)}`}>
-                {ensemble.signal === "BUY" ? <ArrowUpRight className="w-4 h-4 text-emerald-400" /> :
-                 ensemble.signal === "SELL" ? <ArrowDownRight className="w-4 h-4 text-red-400" /> :
+            {activeEnsemble && (
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${signalBg(activeEnsemble.signal)}`}>
+                {activeEnsemble.signal === "BUY" ? <ArrowUpRight className="w-4 h-4 text-emerald-400" /> :
+                 activeEnsemble.signal === "SELL" ? <ArrowDownRight className="w-4 h-4 text-red-400" /> :
                  <Minus className="w-4 h-4 text-yellow-400" />}
-                <span className={`text-sm font-bold ${signalColor(ensemble.signal)}`}>{ensemble.signal}</span>
-                <span className="text-xs text-zinc-500">{Math.round(ensemble.confidence * 100)}%</span>
+                <span className={`text-sm font-bold ${signalColor(activeEnsemble.signal)}`}>{activeEnsemble.signal}</span>
+                <span className="text-xs text-zinc-500">{Math.round(activeEnsemble.confidence * 100)}%</span>
               </div>
             )}
 
-            {lastUpdate && (
+            {lastUpdate && activeAsset === "xauusd" && (
               <span className="text-xs text-zinc-600 hidden sm:block">
                 {lastUpdate.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
               </span>
             )}
 
             <Button
-              onClick={() => refetch()}
-              disabled={isLoading}
+              onClick={handleRefresh}
+              disabled={activeLoading}
               variant="ghost"
               size="sm"
               className="h-7 w-7 p-0 text-zinc-400 hover:text-white"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${activeLoading ? "animate-spin" : ""}`} />
             </Button>
           </div>
         </div>
 
-        {/* Ticker mobile — full width di layar kecil */}
+        {/* Ticker mobile */}
         <div className="flex md:hidden items-center justify-around gap-3 px-4 py-2 border-t border-white/5 bg-zinc-950/60">
           <LiveTickerPill label="XAU/USD" ticker={live?.xauusd} />
           <LiveTickerPill label="BTC/USD" ticker={live?.btcusd} />
@@ -749,135 +972,270 @@ export default function QuantBotPage() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* Loading skeleton */}
-        {isLoading && !status && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-48 bg-zinc-900/50 rounded-xl border border-white/5 animate-pulse" />
-            ))}
-          </div>
-        )}
 
-        {/* ── 3 Brain Cards ── */}
-        {status && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <BrainCard
-              type="technical"
-              icon={BarChart2}
-              title="Technical Brain"
-              subtitle="Price action & indicators"
-              signal={status.technical?.signal ?? "HOLD"}
-              confidence={status.technical?.confidence ?? 0}
-              reasoning={status.technical?.reasoning ?? ["Menunggu siklus belajar pertama..."]}
-              extraInfo={[
-                { label: "Setup", value: status.technical?.keySetup?.substring(0, 25) ?? "—" },
-              ]}
-              insights={status.technical?.insights ?? 0}
-              loading={isLoading}
-              prediction={brainPredictions?.technical.latest}
-              predictionStats={brainPredictions?.technical.stats}
-            />
-            <BrainCard
-              type="fundamental"
-              icon={LineChart}
-              title="Fundamental Brain"
-              subtitle="Rates, COT & macro drivers"
-              signal={status.fundamental?.signal ?? "HOLD"}
-              confidence={status.fundamental?.confidence ?? 0}
-              reasoning={status.fundamental?.reasoning ?? ["Menunggu siklus belajar pertama..."]}
-              extraInfo={[
-                { label: "Bias", value: status.fundamental?.fundamentalBias?.substring(0, 25) ?? "—" },
-                { label: "Driver", value: status.fundamental?.keyDriver?.substring(0, 20) ?? "—" },
-              ]}
-              insights={status.fundamental?.insights ?? 0}
-              loading={isLoading}
-              prediction={brainPredictions?.fundamental.latest}
-              predictionStats={brainPredictions?.fundamental.stats}
-            />
-            <BrainCard
-              type="macro"
-              icon={Globe}
-              title="Macro Brain"
-              subtitle="DXY, yields & geopolitics"
-              signal={status.macro?.signal ?? "HOLD"}
-              confidence={status.macro?.confidence ?? 0}
-              reasoning={status.macro?.reasoning ?? ["Menunggu siklus belajar pertama..."]}
-              extraInfo={[
-                { label: "Regime", value: status.macro?.macroRegime ?? "—" },
-                { label: "Fed", value: status.macro?.fedBias ?? "—" },
-                { label: "Geo Risk", value: status.macro?.geopoliticalRisk ?? "—" },
-              ]}
-              insights={status.macro?.insights ?? 0}
-              loading={isLoading}
-              prediction={brainPredictions?.macro.latest}
-              predictionStats={brainPredictions?.macro.stats}
-            />
-          </div>
-        )}
-
-        {/* ── Ensemble + Capital ── */}
-        {status?.ensemble && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <EnsemblePanel ensemble={status.ensemble} />
-            <CapitalPanel capital={status.capital} prediction={status.prediction} />
-          </div>
-        )}
-
-        {/* ── Psychology + News ── */}
-        {status && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {status.psychology ? (
-              <PsychologyPanel
-                psychology={status.psychology}
-                macroNarrative={status.macro?.psychologyNarrative}
-              />
-            ) : (
-              <Card className="border border-white/10 bg-zinc-900/60 flex items-center justify-center min-h-48">
-                <div className="text-center text-zinc-600">
-                  <Eye className="w-6 h-6 mx-auto mb-2" />
-                  <p className="text-sm">Analisis psikologi dalam proses...</p>
-                </div>
-              </Card>
+        {/* ════════════════════════════════════════════════
+            XAUUSD TAB
+            ════════════════════════════════════════════ */}
+        {activeAsset === "xauusd" && (
+          <>
+            {/* Loading skeleton */}
+            {isLoading && !status && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-48 bg-zinc-900/50 rounded-xl border border-white/5 animate-pulse" />
+                ))}
+              </div>
             )}
 
-            <NewsPanel
-              news={newsData?.news ?? status.news ?? []}
-              apiProvider={newsData?.newsApiProvider}
-            />
-          </div>
+            {/* ── 3 Brain Cards ── */}
+            {status && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <BrainCard
+                  type="technical" icon={BarChart2} title="Technical Brain"
+                  subtitle="Price action & indicators"
+                  signal={status.technical?.signal ?? "HOLD"}
+                  confidence={status.technical?.confidence ?? 0}
+                  reasoning={status.technical?.reasoning ?? ["Menunggu siklus belajar pertama..."]}
+                  extraInfo={[{ label: "Setup", value: status.technical?.keySetup?.substring(0, 25) ?? "—" }]}
+                  insights={status.technical?.insights ?? 0} loading={isLoading}
+                  prediction={brainPredictions?.technical.latest}
+                  predictionStats={brainPredictions?.technical.stats}
+                />
+                <BrainCard
+                  type="fundamental" icon={LineChart} title="Fundamental Brain"
+                  subtitle="Rates, COT & macro drivers"
+                  signal={status.fundamental?.signal ?? "HOLD"}
+                  confidence={status.fundamental?.confidence ?? 0}
+                  reasoning={status.fundamental?.reasoning ?? ["Menunggu siklus belajar pertama..."]}
+                  extraInfo={[
+                    { label: "Bias", value: status.fundamental?.fundamentalBias?.substring(0, 25) ?? "—" },
+                    { label: "Driver", value: status.fundamental?.keyDriver?.substring(0, 20) ?? "—" },
+                  ]}
+                  insights={status.fundamental?.insights ?? 0} loading={isLoading}
+                  prediction={brainPredictions?.fundamental.latest}
+                  predictionStats={brainPredictions?.fundamental.stats}
+                />
+                <BrainCard
+                  type="macro" icon={Globe} title="Macro Brain"
+                  subtitle="DXY, yields & geopolitics"
+                  signal={status.macro?.signal ?? "HOLD"}
+                  confidence={status.macro?.confidence ?? 0}
+                  reasoning={status.macro?.reasoning ?? ["Menunggu siklus belajar pertama..."]}
+                  extraInfo={[
+                    { label: "Regime", value: status.macro?.macroRegime ?? "—" },
+                    { label: "Fed", value: status.macro?.fedBias ?? "—" },
+                    { label: "Geo Risk", value: status.macro?.geopoliticalRisk ?? "—" },
+                  ]}
+                  insights={status.macro?.insights ?? 0} loading={isLoading}
+                  prediction={brainPredictions?.macro.latest}
+                  predictionStats={brainPredictions?.macro.stats}
+                />
+              </div>
+            )}
+
+            {/* ── Ensemble + Capital ── */}
+            {status?.ensemble && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <EnsemblePanel ensemble={status.ensemble} />
+                <CapitalPanel capital={status.capital} prediction={status.prediction} />
+              </div>
+            )}
+
+            {/* ── Psychology + News ── */}
+            {status && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {status.psychology ? (
+                  <PsychologyPanel psychology={status.psychology} macroNarrative={status.macro?.psychologyNarrative} />
+                ) : (
+                  <Card className="border border-white/10 bg-zinc-900/60 flex items-center justify-center min-h-48">
+                    <div className="text-center text-zinc-600">
+                      <Eye className="w-6 h-6 mx-auto mb-2" />
+                      <p className="text-sm">Analisis psikologi dalam proses...</p>
+                    </div>
+                  </Card>
+                )}
+                <NewsPanel news={newsData?.news ?? status.news ?? []} apiProvider={newsData?.newsApiProvider} />
+              </div>
+            )}
+
+            {/* ── Stats footer ── */}
+            {status && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: "Siklus Total", value: status.cycleCount, icon: Activity },
+                  { label: "Technical Insights", value: status.technical?.insights ?? 0, icon: BarChart2 },
+                  { label: "Fundamental Insights", value: status.fundamental?.insights ?? 0, icon: BookOpen },
+                  { label: "Macro Insights", value: status.macro?.insights ?? 0, icon: Globe },
+                ].map((stat) => (
+                  <Card key={stat.label} className="border border-white/5 bg-zinc-900/40">
+                    <CardContent className="pt-4 pb-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-500">{stat.label}</span>
+                        <stat.icon className="w-3.5 h-3.5 text-zinc-600" />
+                      </div>
+                      <div className="text-2xl font-bold text-white mt-1">{stat.value}</div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            {/* Belum aktif */}
+            {status && !status.isActive && (
+              <div className="border border-amber-500/20 bg-amber-500/5 rounded-xl p-6 text-center">
+                <Loader2 className="w-8 h-8 animate-spin text-amber-400 mx-auto mb-3" />
+                <h3 className="text-white font-semibold mb-1">Quant Bot Sedang Inisialisasi</h3>
+                <p className="text-sm text-zinc-400">3 brain engine sedang memulai siklus belajar pertama. Akan aktif dalam ~1-2 menit.</p>
+                <p className="text-xs text-zinc-600 mt-2">Pastikan DeepSeek API key sudah diset di <Link href="/admin/settings" className="text-amber-400 underline">Pengaturan</Link></p>
+              </div>
+            )}
+          </>
         )}
 
-        {/* ── Stats footer ── */}
-        {status && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: "Siklus Total", value: status.cycleCount, icon: Activity },
-              { label: "Technical Insights", value: status.technical?.insights ?? 0, icon: BarChart2 },
-              { label: "Fundamental Insights", value: status.fundamental?.insights ?? 0, icon: BookOpen },
-              { label: "Macro Insights", value: status.macro?.insights ?? 0, icon: Globe },
-            ].map((stat) => (
-              <Card key={stat.label} className="border border-white/5 bg-zinc-900/40">
-                <CardContent className="pt-4 pb-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-zinc-500">{stat.label}</span>
-                    <stat.icon className="w-3.5 h-3.5 text-zinc-600" />
+        {/* ════════════════════════════════════════════════
+            BTC TAB — Scalping Bot (TP/SL max $1.000)
+            ════════════════════════════════════════════ */}
+        {activeAsset === "btc" && (
+          <>
+            {/* Banner scalping constraint */}
+            <div className="flex items-center gap-3 px-4 py-2.5 bg-orange-500/10 border border-orange-500/20 rounded-xl text-sm">
+              <Zap className="w-4 h-4 text-orange-400 shrink-0" />
+              <span className="text-orange-300 font-medium">Scalping Mode Aktif</span>
+              <span className="text-zinc-400 text-xs">TP/SL maksimal <strong className="text-orange-400">$1.000</strong> dari entry — setiap posisi dibatasi oleh scalping constraint otomatis</span>
+              <Badge className="ml-auto text-[10px] bg-orange-500/20 text-orange-400 border-orange-500/30 shrink-0">
+                Ensemble 40/30/30
+              </Badge>
+            </div>
+
+            {/* Loading skeleton */}
+            {btcLoading && !btcStatus && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-48 bg-zinc-900/50 rounded-xl border border-white/5 animate-pulse" />
+                ))}
+              </div>
+            )}
+
+            {/* ── 3 Brain Cards BTC ── */}
+            {btcStatus && (
+              <>
+                {/* Ambil prediksi per-brain dari array */}
+                {(() => {
+                  const techPred = btcBrainPredictions?.find(p => p.brainType === "technical") ?? null;
+                  const fundPred = btcBrainPredictions?.find(p => p.brainType === "fundamental") ?? null;
+                  const macroPred = btcBrainPredictions?.find(p => p.brainType === "macro") ?? null;
+
+                  // Hitung stats dari accuracy array
+                  const getStats = (brainKey: string) => {
+                    const row = btcBrainStats?.accuracy?.find(a => a.brain_type === brainKey);
+                    const verified = Number(row?.verified ?? 0);
+                    const correct = Number(row?.correct ?? 0);
+                    const open = (btcBrainStats?.[brainKey as "technical" | "fundamental" | "macro"]?.insights?.count ?? 0) > 0 ? 1 : 0;
+                    return { total: verified, correct, wrong: verified - correct, open };
+                  };
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <BrainCard
+                        type="technical" icon={BarChart2} title="BTC Technical Brain"
+                        subtitle="RSI, EMA, BB squeeze & funding rate"
+                        signal={btcStatus.technical?.signal ?? "HOLD"}
+                        confidence={btcStatus.technical?.confidence ?? 0}
+                        reasoning={btcStatus.technical?.reasoning ?? ["Menunggu siklus pertama..."]}
+                        extraInfo={[{ label: "Setup", value: btcStatus.technical?.keySetup?.substring(0, 22) ?? "—" }]}
+                        insights={btcStatus.technical?.insights ?? 0} loading={btcLoading}
+                        prediction={techPred ? { ...techPred, pips: techPred.fixedDistance, symbol: "BTCUSD" } : null}
+                        predictionStats={getStats("technical")}
+                      />
+                      <BrainCard
+                        type="fundamental" icon={LineChart} title="BTC Fundamental Brain"
+                        subtitle="Halving, Fear & Greed, ETF flows"
+                        signal={btcStatus.fundamental?.signal ?? "HOLD"}
+                        confidence={btcStatus.fundamental?.confidence ?? 0}
+                        reasoning={btcStatus.fundamental?.reasoning ?? ["Menunggu siklus pertama..."]}
+                        extraInfo={[
+                          { label: "Bias", value: btcStatus.fundamental?.fundamentalBias?.substring(0, 20) ?? "—" },
+                          { label: "Halving", value: btcStatus.fundamental?.halvingPhase?.replace(/_/g, " ") ?? "—" },
+                          { label: "F&G", value: btcStatus.fundamental?.fearGreedScore != null ? String(btcStatus.fundamental.fearGreedScore) : "—" },
+                        ]}
+                        insights={btcStatus.fundamental?.insights ?? 0} loading={btcLoading}
+                        prediction={fundPred ? { ...fundPred, pips: fundPred.fixedDistance, symbol: "BTCUSD" } : null}
+                        predictionStats={getStats("fundamental")}
+                      />
+                      <BrainCard
+                        type="macro" icon={Globe} title="BTC Macro Brain"
+                        subtitle="Risk regime, Nasdaq & DXY correlation"
+                        signal={btcStatus.macro?.signal ?? "HOLD"}
+                        confidence={btcStatus.macro?.confidence ?? 0}
+                        reasoning={btcStatus.macro?.reasoning ?? ["Menunggu siklus pertama..."]}
+                        extraInfo={[
+                          { label: "Regime", value: btcStatus.macro?.macroRegime ?? "—" },
+                          { label: "Corr Bias", value: btcStatus.macro?.correlationBias?.substring(0, 18) ?? "—" },
+                        ]}
+                        insights={btcStatus.macro?.insights ?? 0} loading={btcLoading}
+                        prediction={macroPred ? { ...macroPred, pips: macroPred.fixedDistance, symbol: "BTCUSD" } : null}
+                        predictionStats={getStats("macro")}
+                      />
+                    </div>
+                  );
+                })()}
+
+                {/* ── Ensemble + Scalping Panel ── */}
+                {btcStatus.ensemble && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <EnsemblePanel ensemble={btcStatus.ensemble} />
+                    <BtcScalpingPanel
+                      prediction={btcStatus.prediction}
+                      context={btcStatus.context}
+                      ensemble={btcStatus.ensemble}
+                    />
                   </div>
-                  <div className="text-2xl font-bold text-white mt-1">{stat.value}</div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                )}
+
+                {/* ── Stats footer BTC ── */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { label: "Siklus Orchestrator", value: btcStatus.cycleCount, icon: Activity },
+                    { label: "Technical Insights", value: btcBrainStats?.technical?.insights?.count ?? btcStatus.technical?.insights ?? 0, icon: BarChart2 },
+                    { label: "Fundamental Insights", value: btcBrainStats?.fundamental?.insights?.count ?? btcStatus.fundamental?.insights ?? 0, icon: BookOpen },
+                    { label: "Macro Insights", value: btcBrainStats?.macro?.insights?.count ?? btcStatus.macro?.insights ?? 0, icon: Globe },
+                  ].map((stat) => (
+                    <Card key={stat.label} className="border border-white/5 bg-zinc-900/40">
+                      <CardContent className="pt-4 pb-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-zinc-500">{stat.label}</span>
+                          <stat.icon className="w-3.5 h-3.5 text-zinc-600" />
+                        </div>
+                        <div className="text-2xl font-bold text-white mt-1">{stat.value}</div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Belum aktif */}
+            {btcStatus && !btcStatus.isActive && (
+              <div className="border border-orange-500/20 bg-orange-500/5 rounded-xl p-6 text-center">
+                <Loader2 className="w-8 h-8 animate-spin text-orange-400 mx-auto mb-3" />
+                <h3 className="text-white font-semibold mb-1">BTC Quant Bot Sedang Inisialisasi</h3>
+                <p className="text-sm text-zinc-400">3 brain BTC sedang memulai siklus belajar pertama (~2 menit).</p>
+              </div>
+            )}
+
+            {/* Belum ada data sama sekali */}
+            {!btcStatus && !btcLoading && (
+              <div className="border border-white/10 bg-zinc-900/40 rounded-xl p-8 text-center">
+                <Bot className="w-8 h-8 text-zinc-600 mx-auto mb-3" />
+                <p className="text-zinc-500 text-sm">Menunggu data BTC Quant Bot...</p>
+                <Button onClick={() => btcRefetch()} variant="outline" size="sm" className="mt-3">
+                  <RefreshCw className="w-3 h-3 mr-1" /> Refresh
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
-        {/* ── Quant not active yet ── */}
-        {status && !status.isActive && (
-          <div className="border border-amber-500/20 bg-amber-500/5 rounded-xl p-6 text-center">
-            <Loader2 className="w-8 h-8 animate-spin text-amber-400 mx-auto mb-3" />
-            <h3 className="text-white font-semibold mb-1">Quant Bot Sedang Inisialisasi</h3>
-            <p className="text-sm text-zinc-400">3 brain engine sedang memulai siklus belajar pertama. Akan aktif dalam ~1-2 menit.</p>
-            <p className="text-xs text-zinc-600 mt-2">Pastikan DeepSeek API key sudah diset di <Link href="/admin/settings" className="text-amber-400 underline">Pengaturan</Link></p>
-          </div>
-        )}
       </div>
     </div>
   );
