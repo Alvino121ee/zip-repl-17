@@ -105,7 +105,13 @@ interface MainPrediction {
   direction: string;
   confidence: number;
   timeframe: string;
-  indicatorsAtPrediction?: { ensembleVotes?: EnsembleVotes; [key: string]: unknown };
+  targetPrice: number | null;
+  stopLoss: number | null;
+  tp2: number | null;
+  tp3: number | null;
+  entryLow: number | null;
+  entryHigh: number | null;
+  indicatorsAtPrediction?: { ensembleVotes?: EnsembleVotes; price?: number; [key: string]: unknown };
 }
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
@@ -696,6 +702,53 @@ export function MentorModeWidget() {
                   </div>
                 </div>
               )}
+
+              {/* ── TP / SL untuk AI Utama (M5) ── */}
+              {mode === "ai_utama" && mainPredictions?.[0] && stableCmd !== "TUNGGU" && (() => {
+                const p = mainPredictions[0];
+                const isLong = p.direction === "up";
+                const tp = p.targetPrice;
+                const sl = p.stopLoss;
+                const tp2 = p.tp2;
+                const entry = activePrice;
+                const tpDist = tp != null && entry != null ? Math.abs(tp - entry) : null;
+                const slDist = sl != null && entry != null ? Math.abs(sl - entry) : null;
+                const rr = tpDist != null && slDist != null && slDist > 0
+                  ? (tpDist / slDist).toFixed(1) : null;
+                return (
+                  <div className="space-y-1.5">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-lg p-2 text-center bg-zinc-800/60">
+                        <div className="text-[10px] text-zinc-500 mb-0.5">TP1 (M5)</div>
+                        <div className="text-xs font-bold text-emerald-400 font-mono">{fmt(tp)}</div>
+                        {tpDist != null && (
+                          <div className="text-[9px] text-zinc-600">
+                            {isLong ? "+" : "-"}{tpDist.toFixed(2)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-lg p-2 text-center bg-zinc-800/60">
+                        <div className="text-[10px] text-zinc-500 mb-0.5">SL (M5)</div>
+                        <div className="text-xs font-bold text-red-400 font-mono">{fmt(sl)}</div>
+                        {slDist != null && (
+                          <div className="text-[9px] text-zinc-600">
+                            {isLong ? "-" : "+"}{slDist.toFixed(2)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {tp2 != null && (
+                      <div className="flex items-center justify-between rounded-lg px-2.5 py-1.5 bg-zinc-800/40 border border-zinc-700/30">
+                        <span className="text-[9px] text-zinc-500">TP2</span>
+                        <span className="text-[10px] font-bold text-emerald-300 font-mono">{fmt(tp2)}</span>
+                        {rr && (
+                          <span className="text-[9px] text-zinc-500">RR {rr}:1</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* ── Posisi aktif ── */}
               <div className="flex items-center gap-2">

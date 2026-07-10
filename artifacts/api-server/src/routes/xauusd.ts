@@ -1347,24 +1347,31 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
       rawCommand = "SELL"; confidence = parseFloat((downTotal / total).toFixed(2));
     }
 
-    // TP/SL dari ATR prediksi utama (skala aggressive)
-    const atr = indicators?.atr14 ?? 5;
-    const tpDist = parseFloat((atr * 0.45).toFixed(2));
-    const slDist = parseFloat((tpDist * 0.80).toFixed(2));
-    const tp = rawCommand === "BUY"  ? parseFloat((p + tpDist).toFixed(2))
-             : rawCommand === "SELL" ? parseFloat((p - tpDist).toFixed(2)) : null;
-    const sl = rawCommand === "BUY"  ? parseFloat((p - slDist).toFixed(2))
-             : rawCommand === "SELL" ? parseFloat((p + slDist).toFixed(2)) : null;
+    // TP/SL dari prediksi UTAMA (targetPrice & stopLoss yang sudah dihitung brain M5)
+    // Fallback ke ATR hanya jika kolom masih null (prediksi lama / rule-based gagal)
+    const atr = (indicators?.atr14 as number | undefined) ?? 5;
+    const tp1Signal = (mainRow?.targetPrice as number | null) ?? null;
+    const slSignal  = (mainRow?.stopLoss   as number | null) ?? null;
+    const tp2Signal = (mainRow?.tp2        as number | null) ?? null;
+    const tp3Signal = (mainRow?.tp3        as number | null) ?? null;
+
+    // Hitung fallback ATR-based jika signal TP/SL null
+    const dir = rawCommand === "BUY" ? 1 : rawCommand === "SELL" ? -1 : 0;
+    const tpFallback = dir !== 0 ? parseFloat((p + dir * atr * 0.45).toFixed(2)) : p;
+    const slFallback = dir !== 0 ? parseFloat((p - dir * atr * 0.36).toFixed(2)) : p;
+
+    const tp1v = tp1Signal ?? tpFallback;
+    const slv  = slSignal  ?? slFallback;
+    const tp2v = tp2Signal ?? (dir !== 0 ? parseFloat((tp1v + dir * atr * 1.5).toFixed(2)) : p);
+    const tp3v = tp3Signal ?? (dir !== 0 ? parseFloat((tp1v + dir * atr * 3.5).toFixed(2)) : p);
+
+    const tp = rawCommand !== "HOLD" ? tp1v : null;
+    const sl = rawCommand !== "HOLD" ? slv  : null;
     const timestamp = new Date().toISOString();
 
     if (req.query.format === "plain2") {
-      const dir2 = rawCommand === "BUY" ? 1 : rawCommand === "SELL" ? -1 : 0;
-      const tp1v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.45).toFixed(2)) : p;
-      const tp2v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 0.80).toFixed(2)) : p;
-      const tp3v = dir2 !== 0 ? parseFloat((p + dir2 * atr * 1.30).toFixed(2)) : p;
-      const slv  = dir2 !== 0 ? parseFloat((p - dir2 * slDist).toFixed(2)) : p;
-      const elv  = parseFloat((p - atr * 0.08).toFixed(2));
-      const ehv  = parseFloat((p + atr * 0.08).toFixed(2));
+      const elv = parseFloat((p - atr * 0.08).toFixed(2));
+      const ehv = parseFloat((p + atr * 0.08).toFixed(2));
       return res.type("text/plain").send(`${rawCommand}|${p.toFixed(2)}|${tp1v}|${tp2v}|${tp3v}|${slv}|${elv}|${ehv}|${confidence}`);
     }
     if (req.query.format === "plain") {
@@ -1376,6 +1383,8 @@ xauusdRouter.get("/ea-signal", async (req, res) => {
       price: p,
       tp,
       sl,
+      tp2: tp2v,
+      tp3: tp3v,
       tpDistance: tp !== null ? parseFloat(Math.abs(tp - p).toFixed(2)) : null,
       confidence,
       upTotal,

@@ -625,13 +625,12 @@ interface RuleBasedPrediction {
   reasoning: string;
 }
 
-// Perbaikan: TP1 (target utama) prediksi harus selalu berada di rentang
-// $5–$20 dari harga entry (≈50–200 pip emas). Target S/R hasil analisis tetap
-// dipakai sebagai acuan arah, tapi jaraknya di-clamp ke rentang ini supaya
-// tidak pernah terlalu dekat (susah profit setelah spread) atau terlalu jauh
-// (tidak realistis tercapai dalam timeframe prediksi).
-const MAIN_TP_MIN_USD = 5;
-const MAIN_TP_MAX_USD = 20;
+// Prediksi UTAMA menggunakan timeframe M5. Rentang TP1 disesuaikan dengan
+// skala M5 XAUUSD: $3–$10 dari entry (≈30–100 pip). Target S/R tetap dipakai
+// sebagai acuan arah, tapi jaraknya di-clamp ke rentang ini supaya tidak
+// terlalu dekat (kalah spread) atau terlalu jauh (tidak realistis di M5).
+const MAIN_TP_MIN_USD = 3;
+const MAIN_TP_MAX_USD = 10;
 
 function clampMainTpDistance(rawDistance: number): number {
   return Math.min(MAIN_TP_MAX_USD, Math.max(MAIN_TP_MIN_USD, rawDistance));
@@ -2642,8 +2641,8 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
       const mainPending = lastMainPendingRows[0];
       const mainPendingDir = mainPending?.direction;
 
-      // Prediksi UTAMA dianggap stale jika > 2 jam tanpa pembaruan (timeframe pendek M5/M15)
-      const MAIN_STALE_MS = 2 * 60 * 60 * 1000;
+      // Prediksi UTAMA dianggap stale jika > 1 jam tanpa pembaruan (M5 — cepat berubah)
+      const MAIN_STALE_MS = 1 * 60 * 60 * 1000;
       const mainAge = mainPending?.predictedAt
         ? Date.now() - new Date(mainPending.predictedAt).getTime()
         : Infinity;
@@ -2657,9 +2656,8 @@ Gunakan Bahasa Indonesia. Hindari jawaban generik.`;
           : isStale && latestDir === mainPendingDir
           ? `prediksi lama stale (${Math.round(mainAge / 3_600_000)}j), refresh arah ${latestDir}`
           : `arah berubah ${mainPendingDir} → ${latestDir}`;
-        // Timeframe utama: M5 → M15 → M1 (rotasi, semua target 50–200 pip)
-        const MAIN_TIMEFRAMES = ["M5", "M15", "M1"] as const;
-        const mainTf = MAIN_TIMEFRAMES[totalCycles % MAIN_TIMEFRAMES.length];
+        // Timeframe utama: selalu M5 — responsif tapi cukup smooth untuk XAUUSD
+        const mainTf = "M5";
         console.log(`[XAUUSD Brain] Prediksi UTAMA dibuat (${mainTf}) — ${changeReason}`);
         await makePrediction(indicators, "main", mainTf);
       }
