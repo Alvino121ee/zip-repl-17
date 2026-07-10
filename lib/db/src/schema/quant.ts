@@ -99,6 +99,27 @@ export const quantBotPredictionsTable = pgTable("quant_bot_predictions", {
   capitalSnapshot: jsonb("capital_snapshot"),
 });
 
+// ─── Per-brain standalone predictions — each brain (technical/fundamental/macro)
+// generates its OWN prediction with a fixed, fair SL/TP distance (100 pips gold) ──
+export const quantBrainPredictionsTable = pgTable("quant_brain_predictions", {
+  id: serial("id").primaryKey(),
+  brainType: text("brain_type").notNull(), // 'technical'|'fundamental'|'macro'
+  symbol: text("symbol").notNull().default("XAUUSD"),
+  predictedAt: timestamp("predicted_at").notNull().defaultNow(),
+  direction: text("direction").notNull(), // 'up'|'down'
+  signal: text("signal").notNull(), // 'BUY'|'SELL'
+  confidence: real("confidence").notNull(),
+  entryPrice: real("entry_price").notNull(),
+  tp: real("tp").notNull(),
+  sl: real("sl").notNull(),
+  pips: real("pips").notNull(), // fixed distance used for both tp & sl (fair across brains)
+  reasoning: text("reasoning"),
+  isVerified: boolean("is_verified").notNull().default(false),
+  isCorrect: boolean("is_correct"),
+  actualPrice: real("actual_price"),
+  verifiedAt: timestamp("verified_at"),
+});
+
 // ─── Market Psychology Log — rich AI-written psychology snapshots ─────────────
 export const quantPsychologyLogTable = pgTable("quant_psychology_log", {
   id: serial("id").primaryKey(),

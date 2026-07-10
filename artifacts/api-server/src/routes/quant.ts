@@ -16,6 +16,12 @@ import { xauusdSettingsTable } from "@workspace/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
 import { getLatestBtcusdLivePrice } from "../lib/btcusd-live-price.js";
+import {
+  getLatestBrainPrediction,
+  getBrainPredictionStats,
+  type BrainType,
+} from "../lib/quant-brain-predictions.js";
+import { quantBrainPredictionsTable } from "@workspace/db/schema";
 
 // ─── Auth middleware (same pattern as xauusd.ts) ──────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -126,6 +132,45 @@ quantRouter.get("/brain-stats", async (_req, res) => {
         macro: { ...stats.macro },
       },
     });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
+});
+
+// GET /api/quant/brain-predictions — latest standalone prediction + accuracy per brain
+// Setiap brain (Technical/Fundamental/Macro) punya prediksi sendiri dengan SL/TP 100 pips (adil, sama untuk ketiganya).
+quantRouter.get("/brain-predictions", async (_req, res) => {
+  try {
+    const brains: BrainType[] = ["technical", "fundamental", "macro"];
+    const [latest, stats] = await Promise.all([
+      Promise.all(brains.map((b) => getLatestBrainPrediction(b))),
+      Promise.all(brains.map((b) => getBrainPredictionStats(b))),
+    ]);
+    const data: Record<string, unknown> = {};
+    brains.forEach((b, i) => {
+      data[b] = { latest: latest[i], stats: stats[i] };
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
+});
+
+// GET /api/quant/brain-predictions/:brain/history — recent predictions for one brain
+quantRouter.get("/brain-predictions/:brain/history", async (req, res) => {
+  try {
+    const brain = req.params.brain as BrainType;
+    if (!["technical", "fundamental", "macro"].includes(brain)) {
+      return res.status(400).json({ ok: false, error: "brain harus technical|fundamental|macro" });
+    }
+    const limit = Math.min(50, Number(req.query["limit"] ?? 20));
+    const rows = await db
+      .select()
+      .from(quantBrainPredictionsTable)
+      .where(eq(quantBrainPredictionsTable.brainType, brain))
+      .orderBy(desc(quantBrainPredictionsTable.id))
+      .limit(limit);
+    res.json({ ok: true, data: rows });
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
   }

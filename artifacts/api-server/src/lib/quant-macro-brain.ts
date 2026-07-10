@@ -15,6 +15,7 @@ import {
 import { desc, eq, sql } from "drizzle-orm";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 import { fetchXauusdIndicators } from "./xauusd-data.js";
+import { generateBrainPrediction, verifyBrainPredictions } from "./quant-brain-predictions.js";
 
 export interface MacroBrainSignal {
   signal: "BUY" | "SELL" | "HOLD";
@@ -209,7 +210,18 @@ async function runLearningCycle() {
     }
 
     if (cycleCount % 8 === 0) await applyForgetCurve();
-    await getMacroSignal();
+    const signal = await getMacroSignal();
+
+    // Setiap cycle: verifikasi prediksi lama, lalu buat prediksi baru sendiri
+    // (SL/TP tetap 100 pips — adil & sama dengan brain lain)
+    await verifyBrainPredictions("macro", price, snap?.high, snap?.low).catch(() => 0);
+    await generateBrainPrediction({
+      brainType: "macro",
+      signal: signal.signal,
+      confidence: signal.confidence,
+      entryPrice: price,
+      reasoning: signal.macroRegime,
+    }).catch(() => null);
 
     await db.insert(quantLearningLogTable).values({
       brainType: "macro",

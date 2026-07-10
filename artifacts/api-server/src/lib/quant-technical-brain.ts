@@ -13,6 +13,7 @@ import {
 import { desc, eq, sql } from "drizzle-orm";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 import { fetchXauusdIndicators } from "./xauusd-data.js";
+import { generateBrainPrediction, verifyBrainPredictions } from "./quant-brain-predictions.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface TechnicalBrainSignal {
@@ -281,7 +282,18 @@ async function runLearningCycle() {
     if (cycleCount % 10 === 0) await applyForgetCurve();
 
     // Refresh signal
-    await getTechnicalSignal();
+    const signal = await getTechnicalSignal();
+
+    // Setiap cycle: verifikasi prediksi lama, lalu buat prediksi baru sendiri
+    // (SL/TP tetap 100 pips — adil & sama dengan brain lain)
+    await verifyBrainPredictions("technical", snap.price, indicators.high, indicators.low).catch(() => 0);
+    await generateBrainPrediction({
+      brainType: "technical",
+      signal: signal.signal,
+      confidence: signal.confidence,
+      entryPrice: snap.price,
+      reasoning: signal.keySetup,
+    }).catch(() => null);
 
     await db.insert(quantLearningLogTable).values({
       brainType: "technical",

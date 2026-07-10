@@ -75,6 +75,32 @@ interface LivePrices {
   updatedAt: string;
 }
 
+// Prediksi mandiri per-brain — masing-masing brain punya SL/TP sendiri (100 pips, adil & sama untuk ketiganya)
+interface BrainPrediction {
+  id: number;
+  brainType: "technical" | "fundamental" | "macro";
+  symbol: string;
+  predictedAt: string;
+  direction: "up" | "down";
+  signal: "BUY" | "SELL";
+  confidence: number;
+  entryPrice: number;
+  tp: number;
+  sl: number;
+  pips: number;
+  reasoning: string | null;
+  isVerified: boolean;
+  isCorrect: boolean | null;
+  actualPrice: number | null;
+  verifiedAt: string | null;
+}
+interface BrainPredictionStats { total: number; correct: number; wrong: number; open: number }
+interface BrainPredictionsResponse {
+  technical: { latest: BrainPrediction | null; stats: BrainPredictionStats };
+  fundamental: { latest: BrainPrediction | null; stats: BrainPredictionStats };
+  macro: { latest: BrainPrediction | null; stats: BrainPredictionStats };
+}
+
 // ─── API helpers ───────────────────────────────────────────────────────────────
 const API = "/api/quant";
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -148,8 +174,56 @@ function LiveTickerPill({ label, ticker }: { label: string; ticker?: LiveTicker 
   );
 }
 
+// Kotak prediksi mandiri brain — SL/TP tetap 100 pips, sama & adil untuk semua brain
+function BrainPredictionBox({ prediction, stats }: { prediction: BrainPrediction | null; stats?: BrainPredictionStats }) {
+  if (!prediction) {
+    return (
+      <div className="border border-white/10 rounded-lg p-2.5 text-center text-xs text-zinc-600">
+        Belum ada prediksi mandiri — menunggu sinyal BUY/SELL
+      </div>
+    );
+  }
+  const up = prediction.direction === "up";
+  return (
+    <div className="border border-white/10 rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-2.5 py-1.5 bg-white/5">
+        <span className="text-[10px] text-zinc-500 font-medium">Prediksi Mandiri</span>
+        <div className="flex items-center gap-1.5">
+          {prediction.isVerified ? (
+            prediction.isCorrect ? (
+              <Badge className="text-[10px] bg-emerald-500/20 text-emerald-400 border-emerald-500/30">✓ Benar</Badge>
+            ) : (
+              <Badge className="text-[10px] bg-red-500/20 text-red-400 border-red-500/30">✗ Salah</Badge>
+            )
+          ) : (
+            <Badge className="text-[10px] bg-blue-500/20 text-blue-400 border-blue-500/30">● Open</Badge>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-0 divide-x divide-white/5 text-center">
+        <div className="px-2 py-1.5">
+          <div className="text-[10px] text-zinc-500">Entry</div>
+          <div className="text-xs font-mono text-white">${prediction.entryPrice.toFixed(2)}</div>
+        </div>
+        <div className="px-2 py-1.5">
+          <div className="text-[10px] text-zinc-500">TP</div>
+          <div className="text-xs font-mono text-emerald-400">${prediction.tp.toFixed(2)}</div>
+        </div>
+        <div className="px-2 py-1.5">
+          <div className="text-[10px] text-zinc-500">SL</div>
+          <div className="text-xs font-mono text-red-400">${prediction.sl.toFixed(2)}</div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between px-2.5 py-1 border-t border-white/5 text-[10px] text-zinc-500">
+        <span>{up ? "▲ BUY" : "▼ SELL"} · {prediction.pips} pips</span>
+        {stats && <span>{stats.correct}✓ / {stats.wrong}✗ / {stats.open} open</span>}
+      </div>
+    </div>
+  );
+}
+
 function BrainCard({
-  type, icon: Icon, title, subtitle, signal, confidence, reasoning, extraInfo, insights, loading,
+  type, icon: Icon, title, subtitle, signal, confidence, reasoning, extraInfo, insights, loading, prediction, predictionStats,
 }: {
   type: "technical" | "fundamental" | "macro";
   icon: React.ElementType;
@@ -161,6 +235,8 @@ function BrainCard({
   extraInfo: { label: string; value: string }[];
   insights: number;
   loading?: boolean;
+  prediction?: BrainPrediction | null;
+  predictionStats?: BrainPredictionStats;
 }) {
   const [expanded, setExpanded] = useState(false);
   const borderColor = type === "technical" ? "border-blue-500/20" : type === "fundamental" ? "border-violet-500/20" : "border-amber-500/20";
@@ -189,6 +265,9 @@ function BrainCard({
       </CardHeader>
       <CardContent className="space-y-3">
         <ConfBar value={confidence} signal={signal} />
+
+        {/* Prediksi mandiri brain ini — TP/SL 100 pips, terpisah dari ensemble */}
+        <BrainPredictionBox prediction={prediction ?? null} stats={predictionStats} />
 
         {/* Extra info pills */}
         <div className="flex flex-wrap gap-1.5">
@@ -575,6 +654,14 @@ export default function QuantBotPage() {
     retry: false,
   });
 
+  // Prediksi mandiri masing-masing brain (Technical/Fundamental/Macro) — SL/TP 100 pips, adil & sama
+  const { data: brainPredictions } = useQuery<BrainPredictionsResponse>({
+    queryKey: ["quant-brain-predictions"],
+    queryFn: () => apiFetch<BrainPredictionsResponse>("/brain-predictions"),
+    refetchInterval: 15_000,
+    retry: false,
+  });
+
   const lastUpdate = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
 
   if (isError) {
@@ -687,6 +774,8 @@ export default function QuantBotPage() {
               ]}
               insights={status.technical?.insights ?? 0}
               loading={isLoading}
+              prediction={brainPredictions?.technical.latest}
+              predictionStats={brainPredictions?.technical.stats}
             />
             <BrainCard
               type="fundamental"
@@ -702,6 +791,8 @@ export default function QuantBotPage() {
               ]}
               insights={status.fundamental?.insights ?? 0}
               loading={isLoading}
+              prediction={brainPredictions?.fundamental.latest}
+              predictionStats={brainPredictions?.fundamental.stats}
             />
             <BrainCard
               type="macro"
@@ -718,6 +809,8 @@ export default function QuantBotPage() {
               ]}
               insights={status.macro?.insights ?? 0}
               loading={isLoading}
+              prediction={brainPredictions?.macro.latest}
+              predictionStats={brainPredictions?.macro.stats}
             />
           </div>
         )}

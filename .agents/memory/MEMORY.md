@@ -11,3 +11,4 @@
 - [XAUUSD prediction quality fixes](xauusd-prediction-quality-fixes.md) — accuracy stats split main/training, TP/SL verified via interval-scoped high/low (no look-ahead), min RR 1:1 for main predictions, dynamic spread from daily range.
 - [Sideways removed from XAUUSD brain](sideways-removal.md) — direction is now strictly "up"|"down" everywhere; old H1/sideways rows remain in DB as legacy (no impact on new predictions).
 - [Member Registration System](member-registration-system.md) — email+password signup, SMTP OTP, session tokens; backward compat via legacy toggle; rate limits on all auth endpoints.
+- [Per-brain standalone predictions](quant-brain-predictions.md) — Technical/Fundamental/Macro each write their own fixed 100-pip TP/SL prediction row, separate from the ensemble; verify with interval high/low, not just close price.
