@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { startXauusdBrainEngine } from "./lib/xauusd-brain-engine.js";
 import { startBtcBrainEngine } from "./lib/btcusd-brain-engine.js";
 import { startXauusdLivePriceTicker } from "./lib/xauusd-live-price.js";
+import { startBtcusdLivePriceTicker } from "./lib/btcusd-live-price.js";
 import { startMentorIndicatorsTicker } from "./lib/xauusd-mentor-cache.js";
 import { ensureAgentsExist } from "./lib/agent-engine.js";
 import { startTechnicalBrain } from "./lib/quant-technical-brain.js";
@@ -55,8 +56,9 @@ app.listen(port, async (err) => {
     logger.info("BTC Brain Engine dinonaktifkan (setting DB).");
   }
 
-  // Start realtime (1s) live price ticker
+  // Start realtime (1s) live price tickers — XAUUSD & BTCUSD
   startXauusdLivePriceTicker();
+  startBtcusdLivePriceTicker();
 
   // Start 30s indicator cache for Mentor Mode (live TradingView data, no DB)
   startMentorIndicatorsTicker();

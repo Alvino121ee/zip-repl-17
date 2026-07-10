@@ -1,10 +1,10 @@
 /**
- * XAUUSD live price ticker — polls Swissquote public forex feed every second.
- * Swissquote provides real broker bid/ask data with no authentication required.
- * Caches the latest quote in memory so all frontend pollers share one upstream call.
+ * BTCUSD live price ticker — polls TradingView Scanner (fallback: CoinGecko) every second.
+ * Caches the latest quote in memory so all frontend pollers share one upstream call,
+ * mirroring the XAUUSD real-time ticker in xauusd-live-price.ts.
  */
 
-import { fetchXauusdLivePrice, type XauusdLivePrice } from "./xauusd-data.js";
+import { fetchBtcusdLivePrice, type BtcusdLivePrice } from "./btcusd-data.js";
 
 // Real-time collection: poll every 1s so the quant bot page reflects fresh ticks
 const POLL_INTERVAL_MS = 1_000;
@@ -15,7 +15,7 @@ const STALE_THRESHOLD_MS = 2 * 60 * 1000;
 // After repeated failures, back off to avoid hammering the upstream feed
 const MAX_BACKOFF_MS = 30_000;
 
-let latest: XauusdLivePrice | null = null;
+let latest: BtcusdLivePrice | null = null;
 let lastError: string | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
@@ -30,7 +30,7 @@ async function tick(): Promise<void> {
   if (inFlight) return;
   inFlight = true;
   try {
-    latest = await fetchXauusdLivePrice();
+    latest = await fetchBtcusdLivePrice();
     lastError = null;
     consecutiveFailures = 0;
   } catch (err) {
@@ -43,19 +43,19 @@ async function tick(): Promise<void> {
   }
 }
 
-export function startXauusdLivePriceTicker(): void {
+export function startBtcusdLivePriceTicker(): void {
   if (timer) return;
   timer = setTimeout(() => void tick(), 0); // fetch immediately on start
 }
 
-export function stopXauusdLivePriceTicker(): void {
+export function stopBtcusdLivePriceTicker(): void {
   if (timer) {
     clearTimeout(timer);
     timer = null;
   }
 }
 
-export function getLatestLivePrice(): {
+export function getLatestBtcusdLivePrice(): {
   price: number | null;
   bid: number | null;
   ask: number | null;
@@ -76,6 +76,6 @@ export function getLatestLivePrice(): {
     timestamp: latest?.timestamp ?? null,
     stale,
     error:  lastError,
-    source: "Swissquote",
+    source: "TradingView/CoinGecko",
   };
 }

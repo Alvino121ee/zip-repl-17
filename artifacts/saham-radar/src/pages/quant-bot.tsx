@@ -58,6 +58,23 @@ interface QuantStatus {
   capital: { accountBalance: number; riskPercent: number; leverage: number };
 }
 
+interface LiveTicker {
+  price: number | null;
+  bid: number | null;
+  ask: number | null;
+  change: number | null;
+  changePct: number | null;
+  timestamp: number | null;
+  stale: boolean;
+  error: string | null;
+  source: string;
+}
+interface LivePrices {
+  xauusd: LiveTicker;
+  btcusd: LiveTicker;
+  updatedAt: string;
+}
+
 // ─── API helpers ───────────────────────────────────────────────────────────────
 const API = "/api/quant";
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -111,6 +128,26 @@ function ConfBar({ value, signal }: { value: number; signal: string }) {
 }
 
 // ─── Brain Card ────────────────────────────────────────────────────────────────
+function LiveTickerPill({ label, ticker }: { label: string; ticker?: LiveTicker }) {
+  const up = (ticker?.change ?? 0) >= 0;
+  return (
+    <div className="flex flex-col items-end leading-tight">
+      <div className="flex items-center gap-1.5">
+        <span className={`w-1.5 h-1.5 rounded-full ${ticker && !ticker.stale ? "bg-emerald-400 animate-pulse" : "bg-zinc-600"}`} />
+        <span className="text-[10px] text-zinc-500 font-medium">{label}</span>
+        <span className="text-sm font-bold text-white tabular-nums">
+          {ticker?.price != null ? ticker.price.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+        </span>
+      </div>
+      {ticker?.changePct != null && (
+        <span className={`text-[10px] font-medium ${up ? "text-emerald-400" : "text-red-400"}`}>
+          {up ? "▲" : "▼"} {Math.abs(ticker.changePct).toFixed(2)}%
+        </span>
+      )}
+    </div>
+  );
+}
+
 function BrainCard({
   type, icon: Icon, title, subtitle, signal, confidence, reasoning, extraInfo, insights, loading,
 }: {
@@ -530,6 +567,14 @@ export default function QuantBotPage() {
     refetchInterval: 5 * 60_000,
   });
 
+  // Data harga real-time XAUUSD & BTCUSD — dikumpulkan tiap 1 detik
+  const { data: live } = useQuery<LivePrices>({
+    queryKey: ["quant-live-prices"],
+    queryFn: () => apiFetch<LivePrices>("/live-prices"),
+    refetchInterval: 1_000,
+    retry: false,
+  });
+
   const lastUpdate = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
 
   if (isError) {
@@ -571,6 +616,12 @@ export default function QuantBotPage() {
                 ● AKTIF
               </Badge>
             )}
+
+            {/* Ticker harga real-time XAUUSD & BTCUSD — update tiap 1 detik */}
+            <div className="hidden md:flex items-center gap-3 pl-3 ml-1 border-l border-white/10">
+              <LiveTickerPill label="XAU/USD" ticker={live?.xauusd} />
+              <LiveTickerPill label="BTC/USD" ticker={live?.btcusd} />
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -601,6 +652,12 @@ export default function QuantBotPage() {
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
             </Button>
           </div>
+        </div>
+
+        {/* Ticker mobile — full width di layar kecil */}
+        <div className="flex md:hidden items-center justify-around gap-3 px-4 py-2 border-t border-white/5 bg-zinc-950/60">
+          <LiveTickerPill label="XAU/USD" ticker={live?.xauusd} />
+          <LiveTickerPill label="BTC/USD" ticker={live?.btcusd} />
         </div>
       </div>
 

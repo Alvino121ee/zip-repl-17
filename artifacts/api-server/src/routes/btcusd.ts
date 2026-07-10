@@ -18,6 +18,7 @@ import {
   summarizeBtcTimeframeConfluence,
   getBtcCorrelationAnalysis,
 } from "../lib/btcusd-data.js";
+import { getLatestBtcusdLivePrice } from "../lib/btcusd-live-price.js";
 import {
   getBtcEngineStatus, runBtcLearningCycle,
   startBtcExtremeLearningMode, stopBtcExtremeLearningMode,
@@ -51,14 +52,9 @@ async function requireMember(req: Req, res: Res, next: Next) {
 
 export const btcusdRouter = Router();
 
-// ─── Live price ───────────────────────────────────────────────────────────────
-btcusdRouter.get("/live-price", async (_req, res) => {
-  try {
-    const price = await fetchBtcusdLivePrice();
-    res.json(price);
-  } catch (err) {
-    res.status(503).json({ error: "BTC price unavailable", detail: String(err) });
-  }
+// ─── Live price — cached 1s realtime ticker (bukan hit API tiap request) ─────
+btcusdRouter.get("/live-price", (_req, res) => {
+  res.json(getLatestBtcusdLivePrice());
 });
 
 // ─── Latest snapshot (current indicators) ────────────────────────────────────

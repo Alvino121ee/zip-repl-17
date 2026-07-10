@@ -14,6 +14,8 @@ import { quantPsychologyLogTable } from "@workspace/db/schema";
 import { desc } from "drizzle-orm";
 import { xauusdSettingsTable } from "@workspace/db/schema";
 import { eq, sql } from "drizzle-orm";
+import { getLatestLivePrice } from "../lib/xauusd-live-price.js";
+import { getLatestBtcusdLivePrice } from "../lib/btcusd-live-price.js";
 
 // ─── Auth middleware (same pattern as xauusd.ts) ──────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -39,6 +41,18 @@ quantRouter.get("/status", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
   }
+});
+
+// GET /api/quant/live-prices — realtime XAUUSD & BTCUSD ticker (data dikumpulkan tiap 1 detik)
+quantRouter.get("/live-prices", (_req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      xauusd: getLatestLivePrice(),
+      btcusd: getLatestBtcusdLivePrice(),
+      updatedAt: new Date().toISOString(),
+    },
+  });
 });
 
 // GET /api/quant/signal — quick ensemble signal only
