@@ -22,6 +22,7 @@ import {
   type BrainType,
 } from "../lib/quant-brain-predictions.js";
 import { quantBrainPredictionsTable } from "@workspace/db/schema";
+import { getGoldCouncilDebate, getRecentGoldCouncilDebates } from "../lib/quant-committee.js";
 
 // ─── Auth middleware (same pattern as xauusd.ts) ──────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -171,6 +172,17 @@ quantRouter.get("/brain-predictions/:brain/history", async (req, res) => {
       .orderBy(desc(quantBrainPredictionsTable.id))
       .limit(limit);
     res.json({ ok: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
+});
+
+// GET /api/quant/committee — Dewan Emas: 15 analis + 1 Gubernur debat & vote
+quantRouter.get("/committee", async (_req, res) => {
+  try {
+    const debate = getGoldCouncilDebate();
+    const history = await getRecentGoldCouncilDebates(10);
+    res.json({ ok: true, data: { current: debate, history } });
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
   }

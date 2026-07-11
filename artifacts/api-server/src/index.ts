@@ -14,6 +14,8 @@ import { startBtcTechnicalBrain } from "./lib/btc-quant-technical-brain.js";
 import { startBtcFundamentalBrain } from "./lib/btc-quant-fundamental-brain.js";
 import { startBtcMacroBrain } from "./lib/btc-quant-macro-brain.js";
 import { startBtcQuantEngine } from "./lib/btc-quant-engine.js";
+import { startGoldCouncil } from "./lib/quant-committee.js";
+import { startBtcCouncil } from "./lib/btc-quant-committee.js";
 
 const port = Number(process.env["PORT"] ?? "8080");
 
@@ -73,6 +75,8 @@ app.listen(port, async (err) => {
   startMacroBrain();
   // Orchestrator starts after brains (10s delay built-in)
   startQuantBotEngine();
+  // Dewan Emas: 15 analis + 1 Gubernur, rapat setiap 10 menit
+  startGoldCouncil();
 
   // ── Quant Bot BTC: 3 independent AI brains (scalping, TP/SL max $1000) ─────
   // BTC Brain v2 lama tetap jalan — brain baru belajar paralel
@@ -82,5 +86,7 @@ app.listen(port, async (err) => {
     startBtcMacroBrain();
     // Orchestrator starts 15s after brains init
     startBtcQuantEngine();
+    // Dewan BTC: 15 analis + 1 Presiden, rapat setiap 8 menit
+    startBtcCouncil();
   }
 });

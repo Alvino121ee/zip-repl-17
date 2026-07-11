@@ -7,3 +7,4 @@ export * from "./members";
 export * from "./payments";
 export * from "./quant";
 export * from "./btc-quant";
+export * from "./committee";

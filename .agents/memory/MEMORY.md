@@ -13,3 +13,4 @@
 - [Member Registration System](member-registration-system.md) — email+password signup, SMTP OTP, session tokens; backward compat via legacy toggle; rate limits on all auth endpoints.
 - [Per-brain standalone predictions](quant-brain-predictions.md) — Technical/Fundamental/Macro each write their own fixed 100-pip TP/SL prediction row, separate from the ensemble; verify with interval high/low, not just close price.
 - [BTC Quant 3-brain architecture](btc-quant-architecture.md) — BTC has its own Technical/Fundamental/Macro brains + orchestrator; scalping hard-cap: TP/SL max $1000 from entry; weights 40/30/30; per-brain fixed $500 distance; BTC Brain v2 runs in parallel.
+- [Multi-persona council debate design](committee-debate-design.md) — N-persona "team debates + leader decides" features use 1 structured LLM call per cycle with a fixed ordered roster, not N calls.

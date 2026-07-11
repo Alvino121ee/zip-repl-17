@@ -159,6 +159,33 @@ interface BtcBrainStats {
   accuracy: Array<{ brain_type: string; verified: string; correct: string }>;
 }
 
+// ─── Dewan (Council) — tim analis + 1 pemimpin, per aset ───────────────────────
+interface CouncilMember {
+  name: string;
+  role: string;
+  vote: "BUY" | "SELL" | "HOLD";
+  confidence: number;
+  opinion: string;
+}
+interface CouncilDebate {
+  debatedAt: string;
+  cycleNumber: number;
+  price: number | null;
+  members: CouncilMember[];
+  buyVotes: number;
+  sellVotes: number;
+  holdVotes: number;
+  leaderName: string;
+  leaderTitle: string;
+  leaderDecision: "BUY" | "SELL" | "HOLD";
+  leaderConfidence: number;
+  leaderReasoning: string;
+}
+interface CouncilResponse {
+  current: CouncilDebate | null;
+  history: unknown[];
+}
+
 // ─── API helpers ───────────────────────────────────────────────────────────────
 const API = "/api/quant";
 const BTC_API = "/api/btcusd/quant";
@@ -800,6 +827,106 @@ function BtcScalpingPanel({
   );
 }
 
+// ─── Council Panel — Dewan: 15 analis berdebat + 1 pemimpin (Gubernur/Presiden) ─
+function CouncilPanel({ debate, accent }: { debate: CouncilDebate | null; accent: "amber" | "orange" }) {
+  const [expanded, setExpanded] = useState(false);
+  const accentText = accent === "amber" ? "text-amber-400" : "text-orange-400";
+  const accentBorder = accent === "amber" ? "border-amber-500/20" : "border-orange-500/20";
+  const accentBg = accent === "amber" ? "bg-amber-500/10" : "bg-orange-500/10";
+
+  if (!debate) {
+    return (
+      <Card className={`border ${accentBorder} bg-zinc-900/60 flex items-center justify-center min-h-48`}>
+        <div className="text-center text-zinc-600">
+          <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
+          <p className="text-sm">Dewan sedang menggelar rapat pertama...</p>
+        </div>
+      </Card>
+    );
+  }
+
+  const totalVotes = debate.buyVotes + debate.sellVotes + debate.holdVotes;
+  const pct = (n: number) => (totalVotes > 0 ? Math.round((n / totalVotes) * 100) : 0);
+  const visibleMembers = expanded ? debate.members : debate.members.slice(0, 6);
+
+  return (
+    <Card className={`border ${accentBorder} bg-zinc-900/60`}>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Layers className={`w-4 h-4 ${accentText}`} />
+            <CardTitle className="text-sm font-semibold text-white">Dewan Analis</CardTitle>
+            <Badge variant="outline" className="text-[10px] border-white/10 text-zinc-500">
+              {debate.members.length + 1} anggota
+            </Badge>
+          </div>
+          <span className="text-xs text-zinc-600">Rapat #{debate.cycleNumber}</span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Voting bar */}
+        <div>
+          <div className="flex h-2.5 rounded-full overflow-hidden bg-white/5">
+            {debate.buyVotes > 0 && <div className="bg-emerald-500 h-full" style={{ width: `${pct(debate.buyVotes)}%` }} />}
+            {debate.holdVotes > 0 && <div className="bg-yellow-500 h-full" style={{ width: `${pct(debate.holdVotes)}%` }} />}
+            {debate.sellVotes > 0 && <div className="bg-red-500 h-full" style={{ width: `${pct(debate.sellVotes)}%` }} />}
+          </div>
+          <div className="flex justify-between mt-1.5 text-[10px] text-zinc-500">
+            <span className="text-emerald-400">▲ BUY {debate.buyVotes}</span>
+            <span className="text-yellow-400">— HOLD {debate.holdVotes}</span>
+            <span className="text-red-400">▼ SELL {debate.sellVotes}</span>
+          </div>
+        </div>
+
+        {/* Leader decision */}
+        <div className={`${accentBg} border ${accentBorder} rounded-lg p-3`}>
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm">🏛️</span>
+              <span className="text-xs font-semibold text-white">{debate.leaderTitle}</span>
+              <span className="text-xs text-zinc-500">— {debate.leaderName}</span>
+            </div>
+            <Badge className={`text-xs font-bold px-2 py-0.5 border ${signalBadge(debate.leaderDecision)}`}>
+              {debate.leaderDecision}
+            </Badge>
+          </div>
+          <ConfBar value={debate.leaderConfidence} signal={debate.leaderDecision} />
+          <p className="text-xs text-zinc-300 leading-relaxed mt-2 border-l-2 border-white/10 pl-2.5">
+            {debate.leaderReasoning}
+          </p>
+        </div>
+
+        {/* Member opinions */}
+        <div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {visibleMembers.map((m) => (
+              <div key={m.name} className="border border-white/5 rounded-lg p-2.5 bg-white/3">
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <div>
+                    <div className="text-xs font-medium text-zinc-200">{m.name}</div>
+                    <div className="text-[10px] text-zinc-500">{m.role}</div>
+                  </div>
+                  <Badge className={`text-[10px] shrink-0 border ${signalBadge(m.vote)}`}>{m.vote}</Badge>
+                </div>
+                <p className="text-xs text-zinc-400 leading-snug">{m.opinion}</p>
+              </div>
+            ))}
+          </div>
+          {debate.members.length > 6 && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors mt-2 mx-auto"
+            >
+              {expanded ? "Sembunyikan" : `Lihat semua ${debate.members.length} pendapat`}
+              {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main page ─────────────────────────────────────────────────────────────────
 export default function QuantBotPage() {
   const { toast: _toast } = useToast();
@@ -852,6 +979,21 @@ export default function QuantBotPage() {
     queryKey: ["btc-quant-brain-predictions"],
     queryFn: () => btcApiFetch<BtcBrainPrediction[]>("/brain-predictions"),
     refetchInterval: activeAsset === "btc" ? 15_000 : false,
+    retry: false,
+  });
+
+  // ── Dewan (Council) queries — 15 analis + 1 pemimpin, per aset ──────────────
+  const { data: goldCouncil } = useQuery<CouncilResponse>({
+    queryKey: ["quant-committee"],
+    queryFn: () => apiFetch<CouncilResponse>("/committee"),
+    refetchInterval: activeAsset === "xauusd" ? 30_000 : false,
+    retry: false,
+  });
+
+  const { data: btcCouncil } = useQuery<CouncilResponse>({
+    queryKey: ["btc-quant-committee"],
+    queryFn: () => btcApiFetch<CouncilResponse>("/committee"),
+    refetchInterval: activeAsset === "btc" ? 30_000 : false,
     retry: false,
   });
 
@@ -1041,6 +1183,11 @@ export default function QuantBotPage() {
               </div>
             )}
 
+            {/* ── Dewan Emas — 15 analis + 1 Gubernur berdebat & voting ── */}
+            {status && (
+              <CouncilPanel debate={goldCouncil?.current ?? null} accent="amber" />
+            )}
+
             {/* ── Psychology + News ── */}
             {status && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1191,6 +1338,9 @@ export default function QuantBotPage() {
                     />
                   </div>
                 )}
+
+                {/* ── Dewan BTC — 15 analis + 1 Presiden berdebat & voting ── */}
+                <CouncilPanel debate={btcCouncil?.current ?? null} accent="orange" />
 
                 {/* ── Stats footer BTC ── */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

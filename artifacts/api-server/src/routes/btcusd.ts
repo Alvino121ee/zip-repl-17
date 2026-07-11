@@ -40,6 +40,7 @@ import {
   btcQuantMacroBrainTable,
 } from "@workspace/db/schema";
 import { sql as drizzleSql, eq as drizzleEq } from "drizzle-orm";
+import { getBtcCouncilDebate, getRecentBtcCouncilDebates } from "../lib/btc-quant-committee.js";
 
 type Req = import("express").Request;
 type Res = import("express").Response;
@@ -655,5 +656,16 @@ btcusdRouter.get("/quant/brain-predictions", async (_req, res) => {
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+// Dewan BTC — 15 analis + 1 Presiden debat & vote
+btcusdRouter.get("/quant/committee", async (_req, res) => {
+  try {
+    const debate = getBtcCouncilDebate();
+    const history = await getRecentBtcCouncilDebates(10);
+    res.json({ ok: true, data: { current: debate, history } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
   }
 });
