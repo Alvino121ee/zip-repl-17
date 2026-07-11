@@ -254,3 +254,197 @@ export function getGoldCouncilDebate(): CouncilDebate | null {
 export async function getRecentGoldCouncilDebates(limit = 10) {
   return db.select().from(quantCommitteeDebatesTable).orderBy(desc(quantCommitteeDebatesTable.debatedAt)).limit(limit);
 }
+
+// ─── Live Debate Streaming ──────────────────────────────────────────────────────
+// Dipanggil dari SSE endpoint; setiap langkah debat dikirim via callback `send`.
+export async function runLiveCouncilDebate(
+  send: (event: object) => void,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const apiKey = await getDeepseekApiKey();
+  if (!apiKey) {
+    send({ type: "error", message: "API key belum dikonfigurasi. Tambahkan DeepSeek/OpenAI API key di halaman Admin → Settings." });
+    return;
+  }
+
+  send({ type: "stage", stage: "collecting", message: "Mengumpulkan data dari 3 AI Brain…" });
+
+  const [tech, fund, macro, indicators] = await Promise.all([
+    getTechnicalSignal().catch(() => null),
+    getFundamentalSignal().catch(() => null),
+    getMacroSignal().catch(() => null),
+    fetchXauusdIndicators("1h").catch(() => null),
+  ]);
+
+  if (!tech || !fund || !macro || !indicators) {
+    send({ type: "error", message: "Data brain belum tersedia — tunggu beberapa detik lagi lalu coba kembali." });
+    return;
+  }
+
+  const price = indicators.price;
+  send({
+    type: "context",
+    data: {
+      price,
+      tech:  { signal: tech.signal,  confidence: tech.confidence,  keySetup: tech.keySetup },
+      fund:  { signal: fund.signal,  confidence: fund.confidence,  keyDriver: fund.keyDriver },
+      macro: { signal: macro.signal, confidence: macro.confidence, macroRegime: macro.macroRegime, geopoliticalRisk: macro.geopoliticalRisk },
+    },
+  });
+
+  send({ type: "stage", stage: "calling_ai", message: "Menghubungi DeepSeek AI — Dewan sedang berdebat…" });
+
+  // ── Stream dari DeepSeek ────────────────────────────────────────────────────
+  const userPrompt = buildUserPrompt(price, tech, fund, macro);
+  const ctrl = new AbortController();
+  const tOut = setTimeout(() => ctrl.abort(), timeoutMs);
+  let fullText = "";
+
+  try {
+    const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user",   content: userPrompt },
+        ],
+        max_tokens: 2800,
+        temperature: 0.65,
+        stream: true,
+      }),
+      signal: ctrl.signal,
+    });
+
+    if (!res.ok || !res.body) {
+      send({ type: "error", message: `DeepSeek API error: HTTP ${res.status}` });
+      return;
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";          // simpan baris tidak lengkap
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(payload);
+          const token: string = parsed?.choices?.[0]?.delta?.content ?? "";
+          if (token) {
+            fullText += token;
+            send({ type: "token", text: token });
+          }
+        } catch { /* skip */ }
+      }
+    }
+  } catch (err) {
+    send({ type: "error", message: `Streaming terputus: ${(err as Error).message}` });
+    return;
+  } finally {
+    clearTimeout(tOut);
+  }
+
+  // ── Parse hasil JSON ────────────────────────────────────────────────────────
+  send({ type: "stage", stage: "parsing", message: "Menyusun hasil perdebatan…" });
+
+  let parsedResult: {
+    members?: { vote?: string; confidence?: number; opinion?: string }[];
+    leaderDecision?: string;
+    leaderConfidence?: number;
+    leaderReasoning?: string;
+  } = {};
+
+  try {
+    const match = fullText.match(/\{[\s\S]*\}/);
+    if (match) parsedResult = JSON.parse(match[0]);
+  } catch { /* fallback below */ }
+
+  const members: CouncilMemberOpinion[] = GOLD_COUNCIL_MEMBERS.map((m, i) => {
+    const item = parsedResult.members?.[i];
+    const vote = item ? asVote(item.vote) : (tech.signal === fund.signal ? asVote(tech.signal) : "HOLD");
+    return {
+      name: m.name,
+      role: m.role,
+      vote,
+      confidence: clamp01(item?.confidence),
+      opinion: item?.opinion?.trim() || `Belum ada pendapat baru dari ${m.role.toLowerCase()}.`,
+    };
+  });
+
+  // Kirim tiap anggota satu per satu dengan jeda kecil
+  for (let i = 0; i < members.length; i++) {
+    await new Promise<void>((r) => setTimeout(r, 180));
+    send({ type: "member", index: i, data: members[i] });
+  }
+
+  const buyVotes  = members.filter((m) => m.vote === "BUY").length;
+  const sellVotes = members.filter((m) => m.vote === "SELL").length;
+  const holdVotes = members.filter((m) => m.vote === "HOLD").length;
+  const majority  = buyVotes >= sellVotes && buyVotes >= holdVotes ? "BUY" : sellVotes >= holdVotes ? "SELL" : "HOLD";
+  const leaderDecision   = parsedResult.leaderDecision ? asVote(parsedResult.leaderDecision) : majority;
+  const leaderConfidence = clamp01(parsedResult.leaderConfidence, 0.5);
+  const leaderReasoning  = parsedResult.leaderReasoning?.trim() ||
+    `Berdasarkan hasil voting dewan (BUY:${buyVotes} SELL:${sellVotes} HOLD:${holdVotes}), saya memutuskan ${leaderDecision} untuk XAUUSD saat ini.`;
+
+  await new Promise<void>((r) => setTimeout(r, 400));
+  send({
+    type: "leader",
+    data: {
+      name: GOLD_COUNCIL_LEADER.name,
+      title: GOLD_COUNCIL_LEADER.title,
+      decision: leaderDecision,
+      confidence: leaderConfidence,
+      reasoning: leaderReasoning,
+      buyVotes,
+      sellVotes,
+      holdVotes,
+    },
+  });
+
+  send({ type: "done" });
+
+  // ── Simpan ke DB & perbarui lastDebate ────────────────────────────────────
+  const debate: CouncilDebate = {
+    debatedAt: new Date(),
+    cycleNumber: ++cycleCount,
+    price,
+    members,
+    buyVotes,
+    sellVotes,
+    holdVotes,
+    leaderName:       GOLD_COUNCIL_LEADER.name,
+    leaderTitle:      GOLD_COUNCIL_LEADER.title,
+    leaderDecision,
+    leaderConfidence,
+    leaderReasoning,
+  };
+  lastDebate = debate;
+
+  await db.insert(quantCommitteeDebatesTable).values({
+    cycleNumber:        debate.cycleNumber,
+    price,
+    ensembleSignal:     `T:${tech.signal}/F:${fund.signal}/M:${macro.signal}`,
+    ensembleConfidence: (tech.confidence + fund.confidence + macro.confidence) / 3,
+    members:            members as unknown as Record<string, unknown>,
+    buyVotes,
+    sellVotes,
+    holdVotes,
+    leaderName:         debate.leaderName,
+    leaderTitle:        debate.leaderTitle,
+    leaderDecision,
+    leaderConfidence,
+    leaderReasoning,
+    durationMs:         0,
+  }).catch(() => {});
+}

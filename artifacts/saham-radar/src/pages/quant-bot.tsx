@@ -1125,12 +1125,244 @@ function PredictionHistoryPanel({ asset }: { asset: "xauusd" | "btc" }) {
 }
 
 // ─── #11 #12 Council Panel + countdown + filter ────────────────────────────────
+// ─── Live Debate Modal ─────────────────────────────────────────────────────────
+type DebateStage = "idle" | "collecting" | "calling_ai" | "parsing" | "revealing" | "done" | "error";
+interface LiveMember { name: string; role: string; vote: "BUY" | "SELL" | "HOLD"; confidence: number; opinion: string }
+interface LiveLeader { name: string; title: string; decision: "BUY" | "SELL" | "HOLD"; confidence: number; reasoning: string; buyVotes: number; sellVotes: number; holdVotes: number }
+interface DebateContext { price: number; tech: { signal: string; confidence: number; keySetup: string }; fund: { signal: string; confidence: number; keyDriver: string }; macro: { signal: string; confidence: number; macroRegime: string } }
+
+function LiveDebateModal({ open, onClose, onNewDebate }: { open: boolean; onClose: () => void; onNewDebate: () => void }) {
+  const [stage, setStage]         = useState<DebateStage>("idle");
+  const [tokens, setTokens]       = useState("");
+  const [context, setContext]     = useState<DebateContext | null>(null);
+  const [members, setMembers]     = useState<LiveMember[]>([]);
+  const [leader, setLeader]       = useState<LiveLeader | null>(null);
+  const [errorMsg, setErrorMsg]   = useState("");
+  const [stageMsg, setStageMsg]   = useState("");
+  const tokenRef                  = useRef<HTMLDivElement>(null);
+  const abortRef                  = useRef<(() => void) | null>(null);
+
+  // auto-scroll token stream
+  useEffect(() => {
+    if (tokenRef.current) tokenRef.current.scrollTop = tokenRef.current.scrollHeight;
+  }, [tokens]);
+
+  // auto-start saat modal dibuka; cleanup saat ditutup
+  useEffect(() => {
+    if (open) {
+      startDebate();
+    } else {
+      abortRef.current?.();
+      setStage("idle"); setTokens(""); setContext(null);
+      setMembers([]); setLeader(null); setErrorMsg(""); setStageMsg("");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  function startDebate() {
+    setStage("collecting"); setTokens(""); setContext(null);
+    setMembers([]); setLeader(null); setErrorMsg(""); setStageMsg("Mengumpulkan data dari 3 AI Brain…");
+
+    let active = true;
+    abortRef.current = () => { active = false; };
+
+    fetch("/api/quant/committee/live-debate", { method: "POST" }).then(async (res) => {
+      if (!res.body) { if (active) { setErrorMsg("Tidak ada response stream"); setStage("error"); } return; }
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (active) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (!active) break;
+            if (ev.type === "stage")   { setStage(ev.stage as DebateStage); setStageMsg(ev.message ?? ""); }
+            if (ev.type === "context") { setContext(ev.data as DebateContext); }
+            if (ev.type === "token")   { setTokens(t => t + (ev.text as string)); }
+            if (ev.type === "member")  { setStage("revealing"); setMembers(m => [...m, ev.data as LiveMember]); }
+            if (ev.type === "leader")  { setLeader(ev.data as LiveLeader); }
+            if (ev.type === "done")    { setStage("done"); onNewDebate(); }
+            if (ev.type === "error")   { setErrorMsg(ev.message as string); setStage("error"); }
+          } catch { /* skip */ }
+        }
+      }
+    }).catch((err: unknown) => {
+      if (active) { setErrorMsg((err as Error).message); setStage("error"); }
+    });
+  }
+
+  if (!open) return null;
+
+  const totalVotes = (leader?.buyVotes ?? 0) + (leader?.sellVotes ?? 0) + (leader?.holdVotes ?? 0);
+  const pct = (n: number) => totalVotes > 0 ? Math.round((n / totalVotes) * 100) : 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* overlay */}
+      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
+
+      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col mx-4 rounded-2xl border border-amber-500/20 bg-zinc-950 shadow-2xl shadow-amber-900/20">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/5 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="text-xl">🏛️</span>
+            <div>
+              <div className="text-sm font-bold text-white">Rapat Live — Dewan Emas</div>
+              <div className="text-[10px] text-zinc-500">15 Analis + Gubernur · XAUUSD</div>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-zinc-600 hover:text-zinc-300 transition-colors text-lg leading-none">✕</button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+          {/* Context card (shown once collected) */}
+          {context && (
+            <div className="border border-amber-500/15 rounded-xl p-3 bg-amber-500/5">
+              <div className="text-[10px] text-amber-400 font-semibold mb-2 uppercase tracking-wider">Data Rapat</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div><div className="text-zinc-500">Harga</div><div className="text-white font-mono font-bold">${context.price.toFixed(2)}</div></div>
+                <div><div className="text-zinc-500">Technical</div><div className={`font-bold ${signalColor(context.tech.signal)}`}>{context.tech.signal} {Math.round(context.tech.confidence * 100)}%</div></div>
+                <div><div className="text-zinc-500">Fundamental</div><div className={`font-bold ${signalColor(context.fund.signal)}`}>{context.fund.signal} {Math.round(context.fund.confidence * 100)}%</div></div>
+                <div><div className="text-zinc-500">Macro</div><div className={`font-bold ${signalColor(context.macro.signal)}`}>{context.macro.signal} {Math.round(context.macro.confidence * 100)}%</div></div>
+              </div>
+            </div>
+          )}
+
+          {/* Stage indicator */}
+          {stage !== "idle" && stage !== "done" && stage !== "error" && (
+            <div className="flex items-center gap-2 text-xs text-zinc-400">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
+              <span>{stageMsg || "Memproses…"}</span>
+            </div>
+          )}
+
+          {/* Token stream — raw AI output */}
+          {tokens && stage !== "done" && (
+            <div>
+              <div className="text-[10px] text-zinc-600 mb-1.5 uppercase tracking-wider">Output AI (raw)</div>
+              <div ref={tokenRef} className="max-h-40 overflow-y-auto rounded-lg border border-white/5 bg-zinc-900/80 p-3 font-mono text-[10px] text-zinc-400 leading-relaxed whitespace-pre-wrap">
+                {tokens}
+                <span className="inline-block w-1.5 h-3 bg-amber-400 animate-pulse ml-0.5 align-middle" />
+              </div>
+            </div>
+          )}
+
+          {/* Members revealed one by one */}
+          {members.length > 0 && (
+            <div>
+              <div className="text-[10px] text-zinc-500 mb-2 uppercase tracking-wider">Anggota Dewan ({members.length}/15)</div>
+              <div className="space-y-2">
+                {members.map((m, i) => (
+                  <div
+                    key={m.name}
+                    className="border border-white/5 rounded-lg p-2.5 bg-white/2 flex items-start gap-3"
+                    style={{ animation: `fadeSlideIn 0.3s ease ${i * 0.05}s both` }}
+                  >
+                    <div className="shrink-0 w-5 h-5 rounded-full bg-zinc-800 flex items-center justify-center text-[10px] text-zinc-500 font-mono">{i + 1}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-0.5">
+                        <div>
+                          <span className="text-xs font-medium text-zinc-200">{m.name}</span>
+                          <span className="text-[10px] text-zinc-600 ml-1.5">{m.role}</span>
+                        </div>
+                        <Badge className={`text-[10px] shrink-0 border px-1.5 ${signalBadge(m.vote)}`}>{m.vote}</Badge>
+                      </div>
+                      <p className="text-xs text-zinc-400 leading-snug">{m.opinion}</p>
+                      <div className="mt-1.5">
+                        <ConfBar value={m.confidence} signal={m.vote} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Leader verdict */}
+          {leader && (
+            <div className="border border-amber-500/30 rounded-xl bg-amber-500/8 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🔨</span>
+                  <div>
+                    <div className="text-xs font-bold text-white">{leader.title}</div>
+                    <div className="text-[10px] text-zinc-500">{leader.name}</div>
+                  </div>
+                </div>
+                <Badge className={`text-sm font-black border px-3 py-1 ${signalBadge(leader.decision)}`}>{leader.decision}</Badge>
+              </div>
+              <ConfBar value={leader.confidence} signal={leader.decision} />
+              <p className="text-sm text-zinc-200 leading-relaxed border-l-2 border-amber-500/40 pl-3 italic">
+                "{leader.reasoning}"
+              </p>
+              {/* vote tally */}
+              <div className="flex gap-3 text-xs">
+                <span className="text-emerald-400 font-semibold">▲ BUY {leader.buyVotes} ({pct(leader.buyVotes)}%)</span>
+                <span className="text-yellow-400">— HOLD {leader.holdVotes}</span>
+                <span className="text-red-400 font-semibold">▼ SELL {leader.sellVotes} ({pct(leader.sellVotes)}%)</span>
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {stage === "error" && (
+            <div className="border border-red-500/30 rounded-lg bg-red-500/10 p-4 text-sm text-red-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
+              <div>
+                <div className="font-semibold mb-1">Rapat gagal</div>
+                <div className="text-xs text-red-400">{errorMsg}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Done */}
+          {stage === "done" && (
+            <div className="flex flex-col items-center gap-3 pt-2 pb-4">
+              <div className="text-center text-xs text-zinc-500">
+                Hasil rapat telah disimpan ke database & digunakan sebagai sinyal terbaru.
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={startDebate} className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+                  🔄 Gelar Rapat Lagi
+                </Button>
+                <Button variant="outline" size="sm" onClick={onClose} className="border-white/10">
+                  Tutup
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes fadeSlideIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ─── Council Panel ─────────────────────────────────────────────────────────────
 function CouncilPanel({ debate, accent, meetingIntervalMin }: {
   debate: CouncilDebate | null; accent: "amber" | "orange"; meetingIntervalMin: number;
 }) {
+  const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
   const [voteFilter, setVoteFilter] = useState<"ALL" | "BUY" | "SELL" | "HOLD">("ALL");
   const [nextMeetingIn, setNextMeetingIn] = useState<string | null>(null);
+  const [showLive, setShowLive] = useState(false);
 
   // #11 Countdown rapat berikutnya
   useEffect(() => {
@@ -1154,12 +1386,31 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
 
   if (!debate) {
     return (
-      <Card className={`border ${accentBorder} bg-zinc-900/60 flex items-center justify-center min-h-48`}>
-        <div className="text-center text-zinc-600">
-          <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
-          <p className="text-sm">Dewan sedang menggelar rapat pertama...</p>
-        </div>
-      </Card>
+      <>
+        <Card className={`border ${accentBorder} bg-zinc-900/60`}>
+          <CardContent className="flex flex-col items-center justify-center min-h-48 gap-3">
+            <div className="text-center text-zinc-600">
+              <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
+              <p className="text-sm">Dewan belum menggelar rapat pertama...</p>
+            </div>
+            {accent === "amber" && (
+              <button
+                onClick={() => setShowLive(true)}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-amber-500/40 text-amber-400 hover:bg-amber-500/15 transition-all"
+              >
+                🎙️ Lihat Live Sekarang
+              </button>
+            )}
+          </CardContent>
+        </Card>
+        {accent === "amber" && (
+          <LiveDebateModal
+            open={showLive}
+            onClose={() => setShowLive(false)}
+            onNewDebate={() => queryClient.invalidateQueries({ queryKey: ["quant-committee"] })}
+          />
+        )}
+      </>
     );
   }
 
@@ -1173,6 +1424,7 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
   const visibleMembers = expanded ? filteredMembers : filteredMembers.slice(0, 6);
 
   return (
+    <>
     <Card className={`border ${accentBorder} bg-zinc-900/60`}>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
@@ -1183,7 +1435,7 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
               {debate.members.length + 1} anggota
             </Badge>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {nextMeetingIn && (
               <div className="flex items-center gap-1 text-[10px] text-zinc-600">
                 <Timer className="w-3 h-3" />
@@ -1191,6 +1443,16 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
               </div>
             )}
             <span className="text-xs text-zinc-600">Rapat #{debate.cycleNumber}</span>
+            <button
+              onClick={() => setShowLive(true)}
+              className={`flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full border transition-all ${
+                accent === "amber"
+                  ? "border-amber-500/40 text-amber-400 hover:bg-amber-500/15"
+                  : "border-orange-500/40 text-orange-400 hover:bg-orange-500/15"
+              }`}
+            >
+              🎙️ Live
+            </button>
           </div>
         </div>
       </CardHeader>
@@ -1280,6 +1542,18 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
         </div>
       </CardContent>
     </Card>
+
+    {/* Live Debate Modal — hanya untuk Dewan Emas (amber = XAUUSD) */}
+    {accent === "amber" && (
+      <LiveDebateModal
+        open={showLive}
+        onClose={() => setShowLive(false)}
+        onNewDebate={() => {
+          queryClient.invalidateQueries({ queryKey: ["quant-committee"] });
+        }}
+      />
+    )}
+  </>
   );
 }
 

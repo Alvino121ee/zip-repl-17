@@ -22,7 +22,7 @@ import {
   type BrainType,
 } from "../lib/quant-brain-predictions.js";
 import { quantBrainPredictionsTable } from "@workspace/db/schema";
-import { getGoldCouncilDebate, getRecentGoldCouncilDebates } from "../lib/quant-committee.js";
+import { getGoldCouncilDebate, getRecentGoldCouncilDebates, runLiveCouncilDebate } from "../lib/quant-committee.js";
 
 // ─── Auth middleware (same pattern as xauusd.ts) ──────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -186,6 +186,33 @@ quantRouter.get("/committee", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
   }
+});
+
+// POST /api/quant/committee/live-debate — SSE streaming rapat live
+quantRouter.post("/committee/live-debate", async (_req, res) => {
+  res.setHeader("Content-Type",  "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection",    "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const send = (data: object) => {
+    try {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      // flush if compression middleware added it
+      if (typeof (res as unknown as { flush?: () => void }).flush === "function") {
+        (res as unknown as { flush: () => void }).flush();
+      }
+    } catch { /* client disconnected */ }
+  };
+
+  try {
+    await runLiveCouncilDebate(send);
+  } catch (err) {
+    send({ type: "error", message: (err as Error).message });
+  }
+
+  res.end();
 });
 
 // POST /api/quant/capital — update capital settings (admin only)
