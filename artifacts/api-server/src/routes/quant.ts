@@ -23,6 +23,7 @@ import {
 } from "../lib/quant-brain-predictions.js";
 import { quantBrainPredictionsTable } from "@workspace/db/schema";
 import { getGoldCouncilDebate, getRecentGoldCouncilDebates, runLiveCouncilDebate } from "../lib/quant-committee.js";
+import { setEnsembleWeights, getEnsembleWeights } from "../lib/quant-bot-engine.js";
 
 // ─── Auth middleware (same pattern as xauusd.ts) ──────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -186,6 +187,21 @@ quantRouter.get("/committee", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
   }
+});
+
+// GET /api/quant/weights — bobot ensemble saat ini
+quantRouter.get("/weights", (_req, res) => {
+  res.json({ ok: true, data: getEnsembleWeights() });
+});
+
+// POST /api/quant/weights — ubah bobot ensemble (admin only)
+quantRouter.post("/weights", requireAdmin, (req, res) => {
+  const { technical, fundamental, macro } = req.body as { technical?: number; fundamental?: number; macro?: number };
+  if (typeof technical !== "number" || typeof fundamental !== "number" || typeof macro !== "number") {
+    return res.status(400).json({ ok: false, error: "Kirim technical, fundamental, macro sebagai angka." });
+  }
+  setEnsembleWeights({ technical, fundamental, macro });
+  res.json({ ok: true, data: getEnsembleWeights() });
 });
 
 // POST /api/quant/committee/live-debate — SSE streaming rapat live

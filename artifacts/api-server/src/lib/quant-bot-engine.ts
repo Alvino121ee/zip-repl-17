@@ -86,12 +86,22 @@ async function askDeepSeek(system: string, user: string, timeoutMs = 35000): Pro
 }
 
 // ─── Ensemble voting ──────────────────────────────────────────────────────────
+let _weights = { technical: 0.35, fundamental: 0.30, macro: 0.35 };
+
+export function setEnsembleWeights(w: { technical: number; fundamental: number; macro: number }) {
+  const sum = w.technical + w.fundamental + w.macro;
+  if (sum <= 0) return;
+  _weights = { technical: w.technical / sum, fundamental: w.fundamental / sum, macro: w.macro / sum };
+}
+
+export function getEnsembleWeights() { return { ..._weights }; }
+
 function computeEnsemble(
   techSig: string, techConf: number,
   fundSig: string, fundConf: number,
   macroSig: string, macroConf: number
 ): QuantBotStatus["ensemble"] {
-  const WEIGHTS = { technical: 0.35, fundamental: 0.30, macro: 0.35 };
+  const WEIGHTS = _weights;
 
   const scoreSignal = (s: string, c: number) => {
     if (s === "BUY") return c;
