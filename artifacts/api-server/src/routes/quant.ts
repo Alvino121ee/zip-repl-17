@@ -22,7 +22,7 @@ import {
   type BrainType,
 } from "../lib/quant-brain-predictions.js";
 import { quantBrainPredictionsTable } from "@workspace/db/schema";
-import { getGoldCouncilDebate, getRecentGoldCouncilDebates, runLiveCouncilDebate } from "../lib/quant-committee.js";
+import { getGoldCouncilDebate, getRecentGoldCouncilDebates, runLiveCouncilDebate, councilEvents, getIsCouncilRunning } from "../lib/quant-committee.js";
 import { setEnsembleWeights, getEnsembleWeights } from "../lib/quant-bot-engine.js";
 
 // ─── Auth middleware (same pattern as xauusd.ts) ──────────────────────────────
@@ -202,6 +202,33 @@ quantRouter.post("/weights", requireAdmin, (req, res) => {
   }
   setEnsembleWeights({ technical, fundamental, macro });
   res.json({ ok: true, data: getEnsembleWeights() });
+});
+
+// GET /api/quant/committee/stream — tonton rapat live via SSE (broadcast dari runCouncilCycle)
+quantRouter.get("/committee/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const write = (data: object) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // Kirim status awal agar client tahu apakah rapat sedang berlangsung
+  write({ type: "connected", isRunning: getIsCouncilRunning() });
+
+  const handler = (ev: object) => write(ev);
+  councilEvents.on("data", handler);
+
+  // Heartbeat 25 detik agar SSE tidak di-timeout proxy
+  const heartbeat = setInterval(() => write({ type: "ping" }), 25_000);
+
+  req.on("close", () => {
+    councilEvents.off("data", handler);
+    clearInterval(heartbeat);
+  });
 });
 
 // POST /api/quant/committee/live-debate — SSE streaming rapat live

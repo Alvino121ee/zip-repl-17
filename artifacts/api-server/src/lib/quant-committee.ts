@@ -6,6 +6,7 @@
  * lalu Gubernur mensintesis semua pendapat menjadi keputusan final.
  */
 
+import { EventEmitter } from "events";
 import { db } from "@workspace/db";
 import { quantCommitteeDebatesTable } from "@workspace/db/schema";
 import { desc } from "drizzle-orm";
@@ -14,6 +15,11 @@ import { getTechnicalSignal } from "./quant-technical-brain.js";
 import { getFundamentalSignal } from "./quant-fundamental-brain.js";
 import { getMacroSignal } from "./quant-macro-brain.js";
 import { fetchXauusdIndicators } from "./xauusd-data.js";
+
+// ─── Live broadcast — SSE clients subscribe ke ini ─────────────────────────────
+export const councilEvents = new EventEmitter();
+councilEvents.setMaxListeners(200);
+export function getIsCouncilRunning() { return isRunning; }
 
 // ─── Roster — 15 anggota Dewan Emas ────────────────────────────────────────────
 export const GOLD_COUNCIL_MEMBERS = [
@@ -137,6 +143,10 @@ Buat pendapat untuk masing-masing dari 15 anggota di atas SESUAI URUTAN, lalu ke
 }`;
 }
 
+// ─── Broadcast helper ──────────────────────────────────────────────────────────
+function broadcast(ev: object) { councilEvents.emit("data", ev); }
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 // ─── Jalankan satu siklus rapat dewan ──────────────────────────────────────────
 async function runCouncilCycle() {
   if (isRunning) return;
@@ -145,6 +155,9 @@ async function runCouncilCycle() {
   const start = Date.now();
 
   try {
+    broadcast({ type: "stage", stage: "collecting", cycle: cycleCount,
+      message: "Mengumpulkan data dari 3 AI Brain…" });
+
     const [tech, fund, macro, indicators] = await Promise.all([
       getTechnicalSignal().catch(() => null),
       getFundamentalSignal().catch(() => null),
@@ -152,10 +165,30 @@ async function runCouncilCycle() {
       fetchXauusdIndicators("1h").catch(() => null),
     ]);
 
-    if (!tech || !fund || !macro || !indicators) return;
+    if (!tech || !fund || !macro || !indicators) {
+      broadcast({ type: "error", message: "Data brain belum tersedia — rapat ditunda." });
+      return;
+    }
 
     const price = indicators.price;
+
+    broadcast({
+      type: "context",
+      data: {
+        price,
+        tech:  { signal: tech.signal,  confidence: tech.confidence,  keySetup: (tech as { keySetup?: string }).keySetup  ?? "" },
+        fund:  { signal: fund.signal,  confidence: fund.confidence,  keyDriver: (fund as { keyDriver?: string }).keyDriver ?? "" },
+        macro: { signal: macro.signal, confidence: macro.confidence, macroRegime: (macro as { macroRegime?: string }).macroRegime ?? "" },
+      },
+    });
+
+    broadcast({ type: "stage", stage: "calling_ai", cycle: cycleCount,
+      message: "Dewan sedang berdebat — AI memproses pendapat 15 analis…" });
+
     const raw = await askDeepSeek(SYSTEM_PROMPT, buildUserPrompt(price, tech, fund, macro));
+
+    broadcast({ type: "stage", stage: "revealing", cycle: cycleCount,
+      message: "Anggota dewan menyampaikan pendapat satu per satu…" });
 
     let parsed: {
       members?: { vote?: string; confidence?: number; opinion?: string }[];
@@ -166,9 +199,7 @@ async function runCouncilCycle() {
     try {
       const match = raw.match(/\{[\s\S]*\}/);
       if (match) parsed = JSON.parse(match[0]);
-    } catch {
-      /* fall through to fallback below */
-    }
+    } catch { /* fall through */ }
 
     const members: CouncilMemberOpinion[] = GOLD_COUNCIL_MEMBERS.map((m, i) => {
       const item = parsed.members?.[i];
@@ -182,6 +213,12 @@ async function runCouncilCycle() {
       };
     });
 
+    // Kirim tiap anggota satu per satu agar viewer bisa menampilkannya live
+    for (let i = 0; i < members.length; i++) {
+      await delay(220);
+      broadcast({ type: "member", index: i, data: members[i] });
+    }
+
     const buyVotes = members.filter((m) => m.vote === "BUY").length;
     const sellVotes = members.filter((m) => m.vote === "SELL").length;
     const holdVotes = members.filter((m) => m.vote === "HOLD").length;
@@ -192,6 +229,20 @@ async function runCouncilCycle() {
     const leaderReasoning =
       parsed.leaderReasoning?.trim() ||
       `Berdasarkan hasil voting dewan (BUY:${buyVotes} SELL:${sellVotes} HOLD:${holdVotes}), saya memutuskan ${leaderDecision} untuk XAUUSD saat ini.`;
+
+    await delay(500);
+    broadcast({
+      type: "leader",
+      data: {
+        name: GOLD_COUNCIL_LEADER.name,
+        title: GOLD_COUNCIL_LEADER.title,
+        decision: leaderDecision,
+        confidence: leaderConfidence,
+        reasoning: leaderReasoning,
+        buyVotes, sellVotes, holdVotes,
+      },
+    });
+    broadcast({ type: "done", cycle: cycleCount });
 
     const debate: CouncilDebate = {
       debatedAt: new Date(),
@@ -231,6 +282,7 @@ async function runCouncilCycle() {
       `[Dewan Emas] Rapat #${cycleCount}: BUY=${buyVotes} SELL=${sellVotes} HOLD=${holdVotes} → Gubernur: ${leaderDecision} (${Date.now() - start}ms)`
     );
   } catch (err) {
+    broadcast({ type: "error", message: `Rapat error: ${err instanceof Error ? err.message : String(err)}` });
     console.error("[Dewan Emas] Cycle error:", err instanceof Error ? err.message : err);
   } finally {
     isRunning = false;
