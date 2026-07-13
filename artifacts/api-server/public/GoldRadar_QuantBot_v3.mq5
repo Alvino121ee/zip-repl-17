@@ -89,15 +89,16 @@ int OnInit()
 
    // Build endpoint URL
    string baseUrl = ServerURL;
-   if(StringRight(baseUrl, 1) == "/")
-      baseUrl = StringSubstr(baseUrl, 0, StringLen(baseUrl) - 1);
+   int baseLen = StringLen(baseUrl);
+   if(baseLen > 0 && StringSubstr(baseUrl, baseLen - 1, 1) == "/")
+      baseUrl = StringSubstr(baseUrl, 0, baseLen - 1);
    _endpoint = baseUrl + "/api/quant/ea-signal?brain=" + _brainName
                + "&format=plain&key=" + EAApiKey;
 
    // Trade setup
    _trade.SetExpertMagicNumber(MagicNumber);
    _trade.SetDeviationInPoints(Slippage);
-   _trade.SetTypeFilling(ORDER_FILLING_IOC);
+   _trade.SetTypeFilling(GetBestFillingMode());
    _trade.LogLevel(LOG_LEVEL_ERRORS);
 
    _sym.Name(Symbol());
@@ -327,6 +328,17 @@ void CloseAllPositions(const string reason = "")
       else
          Print("[GoldRadar] ⚠️ Gagal tutup #", ticket, " — ", _trade.ResultRetcode());
    }
+}
+
+//════════════════════════════════════════════════════════════════════
+//  HELPER — Auto-detect filling mode yang didukung broker
+//════════════════════════════════════════════════════════════════════
+ENUM_ORDER_TYPE_FILLING GetBestFillingMode()
+{
+   uint filling = (uint)SymbolInfoInteger(Symbol(), SYMBOL_FILLING_FLAGS);
+   if((filling & SYMBOL_FILLING_FOK)    != 0) return ORDER_FILLING_FOK;
+   if((filling & SYMBOL_FILLING_IOC)    != 0) return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
 }
 
 //════════════════════════════════════════════════════════════════════
