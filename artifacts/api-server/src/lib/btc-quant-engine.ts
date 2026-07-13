@@ -14,7 +14,7 @@ import { db } from "@workspace/db";
 import {
   btcQuantBotPredictionsTable,
 } from "@workspace/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getBtcTechnicalSignal } from "./btc-quant-technical-brain.js";
 import { getBtcFundamentalSignal } from "./btc-quant-fundamental-brain.js";
 import { getBtcMacroSignal } from "./btc-quant-macro-brain.js";
@@ -329,18 +329,45 @@ async function verifyOldPredictions(currentPrice: number, currentHigh: number, c
     .from(btcQuantBotPredictionsTable)
     .where(eq(btcQuantBotPredictionsTable.isVerified, false))
     .orderBy(desc(btcQuantBotPredictionsTable.predictedAt))
-    .limit(10);
+    .limit(20);
+
+  const EXPIRE_MS = 4 * 60 * 60 * 1000; // 4 jam — cukup untuk timeframe 5m BTC scalping
 
   for (const pred of pending) {
+    // ── Expiry: prediksi > 4 jam yang tidak tersentuh TP/SL → inconclusive ──────
+    const age = Date.now() - new Date(pred.predictedAt).getTime();
+    if (age > EXPIRE_MS) {
+      await db.update(btcQuantBotPredictionsTable).set({
+        isVerified: true,
+        isCorrect: null,
+        actualPrice: currentPrice,
+        verifiedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(btcQuantBotPredictionsTable.id, pred.id),
+          eq(btcQuantBotPredictionsTable.isVerified, false) // atomic guard
+        )
+      ).catch(() => {});
+      continue;
+    }
+
     const tpHit = pred.direction === "up" ? currentHigh >= pred.tp : currentLow <= pred.tp;
     const slHit = pred.direction === "up" ? currentLow <= pred.sl : currentHigh >= pred.sl;
     if (tpHit || slHit) {
+      // Guard with isVerified = false on UPDATE to prevent double-count in concurrent cycles
       await db.update(btcQuantBotPredictionsTable).set({
         isVerified: true,
-        isCorrect: slHit ? false : tpHit,
+        isCorrect: slHit ? false : tpHit, // SL takes priority if both hit same bar
         actualPrice: currentPrice,
         verifiedAt: new Date(),
-      }).where(eq(btcQuantBotPredictionsTable.id, pred.id)).catch(() => {});
+      })
+      .where(
+        and(
+          eq(btcQuantBotPredictionsTable.id, pred.id),
+          eq(btcQuantBotPredictionsTable.isVerified, false) // atomic guard
+        )
+      ).catch(() => {});
     }
   }
 }

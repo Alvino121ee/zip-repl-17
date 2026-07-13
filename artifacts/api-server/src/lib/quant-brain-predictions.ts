@@ -66,8 +66,32 @@ export async function verifyBrainPredictions(
       )
     );
 
+  const EXPIRE_MS = 48 * 60 * 60 * 1000; // 48 jam — 1h timeframe prediksi gold
+
   let verifiedCount = 0;
   for (const pred of pending) {
+    // ── Expiry: prediksi > 48 jam yang tidak tersentuh TP/SL → inconclusive ────
+    const age = Date.now() - new Date(pred.predictedAt).getTime();
+    if (age > EXPIRE_MS) {
+      const result = await db
+        .update(quantBrainPredictionsTable)
+        .set({
+          isVerified: true,
+          isCorrect: null,
+          actualPrice: currentPrice,
+          verifiedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(quantBrainPredictionsTable.id, pred.id),
+            eq(quantBrainPredictionsTable.isVerified, false)
+          )
+        )
+        .returning({ id: quantBrainPredictionsTable.id });
+      if (result.length) verifiedCount++;
+      continue;
+    }
+
     const hitTp = pred.direction === "up" ? high >= pred.tp : low <= pred.tp;
     const hitSl = pred.direction === "up" ? low <= pred.sl : high >= pred.sl;
 

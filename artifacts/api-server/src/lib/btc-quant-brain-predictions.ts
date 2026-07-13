@@ -63,14 +63,37 @@ export async function verifyBtcBrainPredictions(
     .orderBy(desc(btcQuantBrainPredictionsTable.predictedAt))
     .limit(20);
 
+  const EXPIRE_MS = 4 * 60 * 60 * 1000; // 4 jam — cukup untuk timeframe 5m BTC
+
   let verified = 0;
   for (const pred of pending) {
+    // ── Expiry: prediksi > 4 jam yang tidak tersentuh → inconclusive ─────────
+    const age = Date.now() - new Date(pred.predictedAt).getTime();
+    if (age > EXPIRE_MS) {
+      const result = await db
+        .update(btcQuantBrainPredictionsTable)
+        .set({
+          isVerified: true,
+          isCorrect: null,
+          actualPrice: currentPrice,
+          verifiedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(btcQuantBrainPredictionsTable.id, pred.id),
+            eq(btcQuantBrainPredictionsTable.isVerified, false) // atomic guard
+          )
+        );
+      if (result.rowCount) verified++;
+      continue;
+    }
+
     const tpHit = pred.direction === "up" ? high >= pred.tp : low <= pred.tp;
     const slHit = pred.direction === "up" ? low <= pred.sl : high >= pred.sl;
 
     if (tpHit || slHit) {
       const isCorrect = slHit ? false : tpHit; // SL takes priority
-      await db
+      const result = await db
         .update(btcQuantBrainPredictionsTable)
         .set({
           isVerified: true,
@@ -78,8 +101,13 @@ export async function verifyBtcBrainPredictions(
           actualPrice: currentPrice,
           verifiedAt: new Date(),
         })
-        .where(eq(btcQuantBrainPredictionsTable.id, pred.id));
-      verified++;
+        .where(
+          and(
+            eq(btcQuantBrainPredictionsTable.id, pred.id),
+            eq(btcQuantBrainPredictionsTable.isVerified, false) // atomic guard
+          )
+        );
+      if (result.rowCount) verified++;
     }
   }
   return verified;
@@ -137,16 +165,36 @@ export async function generateBtcBrainPrediction(params: {
 }
 
 /**
- * Ambil statistik akurasi per-brain dari prediksi yang sudah diverifikasi.
+ * Ambil statistik akurasi per-brain: total, correct, wrong, open.
+ * Expired predictions (isVerified=true, isCorrect=null) dihitung sebagai wrong
+ * (konservatif — TP tidak tercapai dalam window waktu yang wajar).
  */
-export async function getBtcBrainAccuracyStats() {
+export async function getBtcBrainAccuracyStats(): Promise<
+  Record<BtcBrainType, { total: number; correct: number; wrong: number; open: number }>
+> {
   const rows = await db
     .select({
       brainType: btcQuantBrainPredictionsTable.brainType,
-      total: db.$count(btcQuantBrainPredictionsTable.id),
+      isVerified: btcQuantBrainPredictionsTable.isVerified,
+      isCorrect: btcQuantBrainPredictionsTable.isCorrect,
     })
-    .from(btcQuantBrainPredictionsTable)
-    .where(eq(btcQuantBrainPredictionsTable.isVerified, true));
+    .from(btcQuantBrainPredictionsTable);
 
-  return rows;
+  const stats: Record<string, { total: number; correct: number; wrong: number; open: number }> = {};
+
+  for (const r of rows) {
+    const key = r.brainType as BtcBrainType;
+    if (!stats[key]) stats[key] = { total: 0, correct: 0, wrong: 0, open: 0 };
+    stats[key].total++;
+    if (!r.isVerified) {
+      stats[key].open++;
+    } else if (r.isCorrect === true) {
+      stats[key].correct++;
+    } else {
+      // isCorrect === false OR null (expired/inconclusive) → wrong
+      stats[key].wrong++;
+    }
+  }
+
+  return stats as Record<BtcBrainType, { total: number; correct: number; wrong: number; open: number }>;
 }

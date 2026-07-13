@@ -11,12 +11,84 @@ import {
   xauusdSnapshotsTable,
   xauusdMacroSnapshotsTable,
 } from "@workspace/db/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getTechnicalSignal } from "./quant-technical-brain.js";
 import { getFundamentalSignal } from "./quant-fundamental-brain.js";
 import { getMacroSignal } from "./quant-macro-brain.js";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 import { fetchQuantNews } from "./quant-news-fetcher.js";
+import { fetchXauusdIndicators } from "./xauusd-data.js";
+
+// ─── Verification: check if old XAUUSD ensemble predictions hit TP or SL ────────
+// Called at the start of every orchestration cycle with current bar high/low.
+// Marks isVerified=true, isCorrect based on which level was reached first.
+// Guard on UPDATE prevents double-counting in concurrent cycles.
+// Also expires predictions older than 48h (1h timeframe) as inconclusive.
+async function verifyQuantBotPredictions(
+  currentPrice: number,
+  currentHigh: number,
+  currentLow: number
+): Promise<void> {
+  const pending = await db
+    .select()
+    .from(quantBotPredictionsTable)
+    .where(eq(quantBotPredictionsTable.isVerified, false))
+    .orderBy(desc(quantBotPredictionsTable.predictedAt))
+    .limit(20);
+
+  const EXPIRE_MS = 48 * 60 * 60 * 1000; // 48 h — 1h timeframe predictions
+
+  for (const pred of pending) {
+    // ── Expiry: mark stale predictions inconclusive (isCorrect = null) ─────────
+    const age = Date.now() - new Date(pred.predictedAt).getTime();
+    if (age > EXPIRE_MS) {
+      await db
+        .update(quantBotPredictionsTable)
+        .set({
+          isVerified: true,
+          isCorrect: null,
+          actualPrice: currentPrice,
+          verifiedAt: new Date(),
+          revisionNote: "expired — TP/SL not reached within 48h",
+        })
+        .where(
+          and(
+            eq(quantBotPredictionsTable.id, pred.id),
+            eq(quantBotPredictionsTable.isVerified, false) // atomic guard
+          )
+        );
+      continue;
+    }
+
+    // ── TP/SL check using bar high/low ─────────────────────────────────────────
+    // tp1 is the primary target; sl is the stop. XAUUSD ensemble uses tp1.
+    const tp = pred.tp1;
+    const sl = pred.sl;
+    if (tp == null || sl == null) continue;
+
+    const tpHit = pred.direction === "up" ? currentHigh >= tp : currentLow <= tp;
+    const slHit = pred.direction === "up" ? currentLow <= sl : currentHigh >= sl;
+
+    if (!tpHit && !slHit) continue;
+    // Both in same bar → SL takes priority (conservative, no intrabar ordering info).
+    const isCorrect = tpHit && !slHit;
+
+    await db
+      .update(quantBotPredictionsTable)
+      .set({
+        isVerified: true,
+        isCorrect,
+        actualPrice: currentPrice,
+        verifiedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(quantBotPredictionsTable.id, pred.id),
+          eq(quantBotPredictionsTable.isVerified, false) // atomic guard vs. concurrent cycles
+        )
+      );
+  }
+}
 
 // ─── Capital management state (persisted in DB via settings key) ───────────────
 let capitalState = {
@@ -244,6 +316,12 @@ async function runOrchestrationCycle() {
   const cycleNum = status.cycleCount;
 
   try {
+    // 0. Verify old ensemble predictions before generating new ones
+    const indicators = await fetchXauusdIndicators("1h").catch(() => null);
+    if (indicators) {
+      await verifyQuantBotPredictions(indicators.price, indicators.high, indicators.low).catch(() => {});
+    }
+
     // 1. Get signals from all 3 brains + market data in parallel
     const [techSignal, fundSignal, macroSignal, snapRows, macroRows, newsItems] = await Promise.all([
       getTechnicalSignal().catch((e) => { console.error("[QuantBot] Tech signal error:", e.message); return null; }),
