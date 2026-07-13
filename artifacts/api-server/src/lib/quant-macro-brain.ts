@@ -15,7 +15,7 @@ import {
 import { desc, eq, sql } from "drizzle-orm";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 import { fetchXauusdIndicators } from "./xauusd-data.js";
-import { generateBrainPrediction, verifyBrainPredictions } from "./quant-brain-predictions.js";
+import { generateBrainPrediction, verifyBrainPredictions, reinforceQuantBrain, isNewHourlyCandle } from "./quant-brain-predictions.js";
 
 export interface MacroBrainSignal {
   signal: "BUY" | "SELL" | "HOLD";
@@ -212,26 +212,34 @@ async function runLearningCycle() {
     if (cycleCount % 8 === 0) await applyForgetCurve();
     const signal = await getMacroSignal();
 
-    // Setiap cycle: verifikasi prediksi lama, lalu buat prediksi baru sendiri
-    // (SL/TP tetap 100 pips — adil & sama dengan brain lain)
-    await verifyBrainPredictions("macro", price, snap?.high, snap?.low).catch(() => 0);
-    await generateBrainPrediction({
-      brainType: "macro",
-      signal: signal.signal,
-      confidence: signal.confidence,
-      entryPrice: price,
-      reasoning: signal.macroRegime,
-    }).catch(() => null);
+    // Fix #2/#3/#4: verifikasi multi-bar, reinforcement, candle-aligned prediction
+    const verifyResult = await verifyBrainPredictions(
+      "macro", price, snap?.high, snap?.low,
+      snap?.prevHigh, snap?.prevLow  // Fix #4: multi-bar
+    ).catch(() => ({ verified: 0, correct: 0, wrong: 0 }));
+    if (verifyResult.correct > 0) await reinforceQuantBrain("macro", true).catch(() => {});
+    if (verifyResult.wrong > 0)   await reinforceQuantBrain("macro", false).catch(() => {});
+    if (isNewHourlyCandle()) {
+      await generateBrainPrediction({
+        brainType: "macro",
+        signal: signal.signal,
+        confidence: signal.confidence,
+        entryPrice: price,
+        reasoning: signal.macroRegime,
+      }).catch(() => null);
+    }
 
     await db.insert(quantLearningLogTable).values({
       brainType: "macro",
       cycleNumber: cycleCount,
       questionsAsked: questions.length,
       insightsSaved,
+      predictionsChecked: verifyResult.verified,
+      wrongPredictions: verifyResult.wrong,
       currentPrice: price,
       durationMs: Date.now() - start,
     });
-    console.log(`[Quant Macro Brain] Cycle #${cycleCount}: insights=${insightsSaved} (${Date.now() - start}ms)`);
+    console.log(`[Quant Macro Brain] Cycle #${cycleCount}: insights=${insightsSaved} verified=${verifyResult.verified}(✓${verifyResult.correct}/✗${verifyResult.wrong}) (${Date.now() - start}ms)`);
   } catch (err) {
     console.error("[Quant Macro Brain] Cycle error:", err instanceof Error ? err.message : err);
   } finally {

@@ -18,6 +18,8 @@ import { getMacroSignal } from "./quant-macro-brain.js";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 import { fetchQuantNews } from "./quant-news-fetcher.js";
 import { fetchXauusdIndicators } from "./xauusd-data.js";
+import { getCalendarAnalysis } from "./xauusd-calendar.js";  // Fix #8
+import { getGoldCouncilDebate } from "./quant-committee.js"; // Fix #10
 
 // ─── Verification: check if old XAUUSD ensemble predictions hit TP or SL ────────
 // Called at the start of every orchestration cycle with current bar high/low.
@@ -61,17 +63,21 @@ async function verifyQuantBotPredictions(
     }
 
     // ── TP/SL check using bar high/low ─────────────────────────────────────────
-    // tp1 is the primary target; sl is the stop. XAUUSD ensemble uses tp1.
-    const tp = pred.tp1;
+    // Fix #5: check BOTH tp1 AND tp2; record which target was hit in revisionNote.
+    // tp2 is the extended target — hitting tp2 is also a correct prediction.
+    const tp1 = pred.tp1;
+    const tp2 = pred.tp2;
     const sl = pred.sl;
-    if (tp == null || sl == null) continue;
+    if (tp1 == null || sl == null) continue;
 
-    const tpHit = pred.direction === "up" ? currentHigh >= tp : currentLow <= tp;
-    const slHit = pred.direction === "up" ? currentLow <= sl : currentHigh >= sl;
+    const tp1Hit = pred.direction === "up" ? currentHigh >= tp1 : currentLow <= tp1;
+    const tp2Hit = tp2 != null && (pred.direction === "up" ? currentHigh >= tp2 : currentLow <= tp2);
+    const slHit  = pred.direction === "up" ? currentLow <= sl : currentHigh >= sl;
 
-    if (!tpHit && !slHit) continue;
-    // Both in same bar → SL takes priority (conservative, no intrabar ordering info).
-    const isCorrect = tpHit && !slHit;
+    if (!tp1Hit && !tp2Hit && !slHit) continue;
+    // SL takes priority if it hits in the same bar (conservative — no intrabar ordering).
+    const isCorrect = (tp1Hit || tp2Hit) && !slHit;
+    const hitNote   = slHit ? "SL hit" : tp2Hit ? "TP2 hit" : "TP1 hit";
 
     await db
       .update(quantBotPredictionsTable)
@@ -80,6 +86,7 @@ async function verifyQuantBotPredictions(
         isCorrect,
         actualPrice: currentPrice,
         verifiedAt: new Date(),
+        revisionNote: hitNote,
       })
       .where(
         and(
@@ -323,13 +330,15 @@ async function runOrchestrationCycle() {
     }
 
     // 1. Get signals from all 3 brains + market data in parallel
-    const [techSignal, fundSignal, macroSignal, snapRows, macroRows, newsItems] = await Promise.all([
+    const [techSignal, fundSignal, macroSignal, snapRows, macroRows, newsItems, calendarData, councilDebate] = await Promise.all([
       getTechnicalSignal().catch((e) => { console.error("[QuantBot] Tech signal error:", e.message); return null; }),
       getFundamentalSignal().catch((e) => { console.error("[QuantBot] Fund signal error:", e.message); return null; }),
       getMacroSignal().catch((e) => { console.error("[QuantBot] Macro signal error:", e.message); return null; }),
       db.select().from(xauusdSnapshotsTable).orderBy(desc(xauusdSnapshotsTable.snapshotAt)).limit(1),
       db.select().from(xauusdMacroSnapshotsTable).orderBy(desc(xauusdMacroSnapshotsTable.snapshotAt)).limit(1),
       fetchQuantNews().catch(() => []),
+      getCalendarAnalysis().catch(() => null),   // Fix #8
+      getGoldCouncilDebate().catch(() => null),  // Fix #10
     ]);
 
     if (!techSignal || !fundSignal || !macroSignal) return;
@@ -338,6 +347,14 @@ async function runOrchestrationCycle() {
     const atr = snapRows[0]?.atr14 ?? 10;
     const rsi = snapRows[0]?.rsi14 ?? 50;
     const dxy = macroRows[0]?.dxy ?? null;
+    const session = detectSession();
+
+    // Fix #8: Block prediction entirely if a high-impact event is < 1 hour away
+    const nextEventHours = calendarData?.nextEventHours ?? null;
+    if (nextEventHours != null && nextEventHours < 1) {
+      console.log(`[QuantBot] Fix #8: High-impact event in ${nextEventHours.toFixed(1)}h — skipping prediction cycle to avoid event risk.`);
+      return;
+    }
 
     // 2. Compute ensemble
     const ensemble = computeEnsemble(
@@ -345,6 +362,50 @@ async function runOrchestrationCycle() {
       fundSignal.signal, fundSignal.confidence,
       macroSignal.signal, macroSignal.confidence,
     );
+
+    // Fix #7: Session-based confidence penalty (-15%) for low-liquidity sessions
+    // Off-hours and Asia sessions produce noisier signals for XAUUSD (USD-denominated).
+    let adjustedConfidence = ensemble.confidence;
+    const isLowLiquiditySession = session === "off_hours" || session === "asia";
+    if (isLowLiquiditySession) {
+      adjustedConfidence = Math.max(0.10, adjustedConfidence * 0.85);
+      console.log(`[QuantBot] Fix #7: Low-liquidity session (${session}) — confidence reduced ${(ensemble.confidence * 100).toFixed(0)}% → ${(adjustedConfidence * 100).toFixed(0)}%`);
+    }
+
+    // Fix #8: Apply calendar confidence adjustment (not blocking) for events 1-4h away
+    if (calendarData?.confidenceAdjustment && Math.abs(calendarData.confidenceAdjustment) > 0) {
+      const prevConf = adjustedConfidence;
+      adjustedConfidence = Math.max(0.10, Math.min(0.95, adjustedConfidence + calendarData.confidenceAdjustment));
+      console.log(`[QuantBot] Fix #8: Calendar adj ${calendarData.confidenceAdjustment > 0 ? "+" : ""}${(calendarData.confidenceAdjustment * 100).toFixed(0)}% → conf ${(prevConf * 100).toFixed(0)}% → ${(adjustedConfidence * 100).toFixed(0)}%`);
+    }
+
+    // Fix #10: Dewan Emas alignment bonus/penalty
+    if (councilDebate?.leaderDecision) {
+      const councilDir = councilDebate.leaderDecision.toLowerCase();
+      const ensembleDir = ensemble.signal.toLowerCase();
+      const agrees = (councilDir.includes("buy") && ensembleDir === "buy") ||
+                     (councilDir.includes("sell") && ensembleDir === "sell");
+      if (agrees) {
+        adjustedConfidence = Math.min(0.95, adjustedConfidence + 0.05);
+        console.log(`[QuantBot] Fix #10: Dewan Emas AGREES with ensemble (${ensemble.signal}) → conf +5%`);
+      } else if (councilDir.includes("buy") || councilDir.includes("sell")) {
+        // Dewan has a clear opposite opinion
+        adjustedConfidence = Math.max(0.10, adjustedConfidence - 0.03);
+        console.log(`[QuantBot] Fix #10: Dewan Emas DISAGREES with ensemble → conf -3%`);
+      }
+    }
+
+    // Fix #9: Per-consensus confidence gate — block weak consensus / require higher bar for low-quality signals
+    // strong consensus: min 0.45 | moderate: min 0.55 | split: min 0.65 | weak: always block
+    const CONSENSUS_MIN: Record<string, number> = { strong: 0.45, moderate: 0.55, split: 0.65, weak: Infinity };
+    const minConf = CONSENSUS_MIN[ensemble.consensus] ?? 0.55;
+    if (adjustedConfidence < minConf) {
+      console.log(`[QuantBot] Fix #9: Consensus "${ensemble.consensus}" requires conf ≥ ${(minConf * 100).toFixed(0)}% but got ${(adjustedConfidence * 100).toFixed(0)}% — prediction blocked.`);
+      return;
+    }
+
+    // Apply adjusted confidence back to ensemble object (so prediction stores accurate value)
+    ensemble.confidence = adjustedConfidence;
 
     // 3. Compute TP/SL from ATR
     const atrMult = ensemble.consensus === "strong" ? 2.0 : 1.5;
@@ -377,8 +438,13 @@ async function runOrchestrationCycle() {
         marketPsychology: psychology?.narrative ?? null,
         psychologyScore: psychology?.score ?? null,
         regime: macroSignal.macroRegime,
-        session: detectSession(),
+        session,
         capitalSnapshot: capitalState as unknown as Record<string, unknown>,
+        revisionNote: [
+          isLowLiquiditySession ? `session_penalty(${session})` : null,
+          calendarData?.confidenceAdjustment ? `calendar_adj(${calendarData.confidenceAdjustment > 0 ? "+" : ""}${(calendarData.confidenceAdjustment * 100).toFixed(0)}%)` : null,
+          councilDebate?.leaderDecision ? `dewan(${councilDebate.leaderDecision.substring(0, 20)})` : null,
+        ].filter(Boolean).join(" | ") || null,
       }).catch(() => {});
     }
 
@@ -416,7 +482,8 @@ async function runOrchestrationCycle() {
       capital: capitalState,
     };
 
-    console.log(`[QuantBot Orchestrator] Cycle #${cycleNum}: ensemble=${ensemble.signal} (${ensemble.consensus}, conf=${(ensemble.confidence*100).toFixed(0)}%)`);
+    const sessionNote = isLowLiquiditySession ? ` [${session} -15%]` : "";
+    console.log(`[QuantBot Orchestrator] Cycle #${cycleNum}: ensemble=${ensemble.signal} (${ensemble.consensus}, conf=${(ensemble.confidence*100).toFixed(0)}%${sessionNote})`);
   } catch (err) {
     console.error("[QuantBot Orchestrator] Error:", err instanceof Error ? err.message : err);
   }

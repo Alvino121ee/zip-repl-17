@@ -49,6 +49,9 @@ export interface XauusdIndicators {
   bearishOrderBlock?: { high: number; low: number } | null;
   bullishFvg?: { high: number; low: number } | null;  // bullish Fair Value Gap
   bearishFvg?: { high: number; low: number } | null;  // bearish Fair Value Gap
+  // Previous bar OHLC — for multi-bar verification (Fix #4)
+  prevHigh: number | null;
+  prevLow: number | null;
 }
 
 // ─── Common headers ────────────────────────────────────────────────────────────
@@ -361,9 +364,6 @@ function buildIndicatorsFromScanner(d: (number | null)[]): XauusdIndicators | nu
     }
   }
 
-  // ── Suppress unused-var warnings for prevHigh/prevLow (used indirectly) ───
-  void prevHigh; void prevLow;
-
   // Derived signals
   const rsiSignal: XauusdIndicators["rsiSignal"] =
     rsi14 == null ? "neutral" : rsi14 >= 70 ? "overbought" : rsi14 <= 30 ? "oversold" : "neutral";
@@ -398,6 +398,8 @@ function buildIndicatorsFromScanner(d: (number | null)[]): XauusdIndicators | nu
     retailSentimentScore, retailSentiment,
     bullishOrderBlock, bearishOrderBlock,
     bullishFvg, bearishFvg,
+    prevHigh: prevHigh != null ? parseFloat(prevHigh.toFixed(2)) : null,
+    prevLow:  prevLow  != null ? parseFloat(prevLow.toFixed(2))  : null,
   };
 }
 
@@ -565,6 +567,37 @@ export async function getCorrelationAnalysis(): Promise<CorrelationAnalysis> {
     silver,
     computedAt: new Date().toISOString(),
   };
+}
+
+// ─── TIPS 5Y Breakeven Inflation Rate (Fix #1 — dynamic real yield) ───────────
+// Source: FRED T5YIE — 5-Year Breakeven Inflation Rate (public, no auth needed)
+// Cache 4 hours (data updates daily on FRED)
+let _tipsCache: { value: number; fetchedAt: number } | null = null;
+const TIPS_CACHE_TTL = 4 * 60 * 60 * 1_000;
+
+export async function fetchTipsBreakeven5Y(): Promise<number | null> {
+  const now = Date.now();
+  if (_tipsCache && now - _tipsCache.fetchedAt < TIPS_CACHE_TTL) return _tipsCache.value;
+
+  try {
+    // FRED public CSV endpoint — no API key required
+    const res = await fetch(
+      "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T5YIE",
+      { headers: { "User-Agent": "Mozilla/5.0 GoldRadar/1.0" }, signal: AbortSignal.timeout(10_000) }
+    );
+    if (!res.ok) return _tipsCache?.value ?? null;
+    const csv = await res.text();
+    // CSV format: DATE,T5YIE — last non-empty line has latest value
+    const lines = csv.trim().split("\n").filter((l) => !l.startsWith("DATE") && l.includes(","));
+    const lastLine = lines[lines.length - 1];
+    if (!lastLine) return _tipsCache?.value ?? null;
+    const value = parseFloat(lastLine.split(",")[1] ?? "");
+    if (isNaN(value)) return _tipsCache?.value ?? null;
+    _tipsCache = { value, fetchedAt: now };
+    return value;
+  } catch {
+    return _tipsCache?.value ?? null;
+  }
 }
 
 // ─── News (Kitco + Investing.com RSS) ─────────────────────────────────────────

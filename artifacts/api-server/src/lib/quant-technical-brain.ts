@@ -13,7 +13,7 @@ import {
 import { desc, eq, sql } from "drizzle-orm";
 import { getDeepseekApiKey } from "./xauusd-settings.js";
 import { fetchXauusdIndicators } from "./xauusd-data.js";
-import { generateBrainPrediction, verifyBrainPredictions } from "./quant-brain-predictions.js";
+import { generateBrainPrediction, verifyBrainPredictions, reinforceQuantBrain, isNewHourlyCandle } from "./quant-brain-predictions.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface TechnicalBrainSignal {
@@ -284,27 +284,37 @@ async function runLearningCycle() {
     // Refresh signal
     const signal = await getTechnicalSignal();
 
-    // Setiap cycle: verifikasi prediksi lama, lalu buat prediksi baru sendiri
-    // (SL/TP tetap 100 pips — adil & sama dengan brain lain)
-    await verifyBrainPredictions("technical", snap.price, indicators.high, indicators.low).catch(() => 0);
-    await generateBrainPrediction({
-      brainType: "technical",
-      signal: signal.signal,
-      confidence: signal.confidence,
-      entryPrice: snap.price,
-      reasoning: signal.keySetup,
-    }).catch(() => null);
+    // Fix #2/#3/#4: verifikasi dengan prev bar, reinforcement, candle-aligned prediction
+    const verifyResult = await verifyBrainPredictions(
+      "technical", snap.price, indicators.high, indicators.low,
+      indicators.prevHigh, indicators.prevLow  // Fix #4: multi-bar
+    ).catch(() => ({ verified: 0, correct: 0, wrong: 0 }));
+    // Fix #2: reinforce brain entries berdasarkan hasil verifikasi
+    if (verifyResult.correct > 0) await reinforceQuantBrain("technical", true).catch(() => {});
+    if (verifyResult.wrong > 0)   await reinforceQuantBrain("technical", false).catch(() => {});
+    // Fix #3: prediksi baru hanya di awal candle 1H
+    if (isNewHourlyCandle()) {
+      await generateBrainPrediction({
+        brainType: "technical",
+        signal: signal.signal,
+        confidence: signal.confidence,
+        entryPrice: snap.price,
+        reasoning: signal.keySetup,
+      }).catch(() => null);
+    }
 
     await db.insert(quantLearningLogTable).values({
       brainType: "technical",
       cycleNumber: cycleCount,
       questionsAsked: questions.length,
       insightsSaved,
+      predictionsChecked: verifyResult.verified,
+      wrongPredictions: verifyResult.wrong,
       currentPrice: snap.price,
       durationMs: Date.now() - start,
     });
 
-    console.log(`[Quant Technical Brain] Cycle #${cycleCount}: insights=${insightsSaved} (${Date.now() - start}ms)`);
+    console.log(`[Quant Technical Brain] Cycle #${cycleCount}: insights=${insightsSaved} verified=${verifyResult.verified}(✓${verifyResult.correct}/✗${verifyResult.wrong}) (${Date.now() - start}ms)`);
   } catch (err) {
     console.error("[Quant Technical Brain] Cycle error:", err instanceof Error ? err.message : err);
   } finally {
