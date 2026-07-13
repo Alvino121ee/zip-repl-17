@@ -397,7 +397,7 @@ async function runOrchestrationCycle() {
 
     // Fix #9: Per-consensus confidence gate — block weak consensus / require higher bar for low-quality signals
     // strong consensus: min 0.45 | moderate: min 0.55 | split: min 0.65 | weak: always block
-    const CONSENSUS_MIN: Record<string, number> = { strong: 0.45, moderate: 0.55, split: 0.65, weak: Infinity };
+    const CONSENSUS_MIN: Record<string, number> = { strong: 0.40, moderate: 0.50, split: 0.60, weak: 0.65 };
     const minConf = CONSENSUS_MIN[ensemble.consensus] ?? 0.55;
     if (adjustedConfidence < minConf) {
       console.log(`[QuantBot] Fix #9: Consensus "${ensemble.consensus}" requires conf ≥ ${(minConf * 100).toFixed(0)}% but got ${(adjustedConfidence * 100).toFixed(0)}% — prediction blocked.`);
