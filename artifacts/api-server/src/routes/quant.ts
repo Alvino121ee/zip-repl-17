@@ -21,9 +21,10 @@ import {
   getBrainPredictionStats,
   type BrainType,
 } from "../lib/quant-brain-predictions.js";
-import { quantBrainPredictionsTable } from "@workspace/db/schema";
+import { quantBrainPredictionsTable, quantBotPredictionsTable } from "@workspace/db/schema";
 import { getGoldCouncilDebate, getRecentGoldCouncilDebates, runLiveCouncilDebate, councilEvents, getIsCouncilRunning } from "../lib/quant-committee.js";
 import { setEnsembleWeights, getEnsembleWeights } from "../lib/quant-bot-engine.js";
+import { validateEaApiKey } from "../lib/xauusd-settings.js";
 
 // ─── Auth middleware (same pattern as xauusd.ts) ──────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -274,6 +275,138 @@ quantRouter.post("/capital", requireAdmin, async (req, res) => {
     res.json({ ok: true, data: { accountBalance, riskPercent, leverage } });
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
+  }
+});
+
+// ─── GET /api/quant/ea-signal — Endpoint untuk MetaTrader 5 EA (Quant Bot mode) ─
+// Auth: ?key=<ea_api_key> atau header Authorization: Bearer <key>
+// Query params:
+//   ?brain=technical|fundamental|macro|ensemble  (default: ensemble)
+//   ?format=plain  → "COMMAND|ENTRY|TP|SL|CONFIDENCE|SIGNAL_ID"
+//   ?format=json   → JSON lengkap (default)
+//
+// SIGNAL_ID = integer ID dari DB — EA menyimpan ini; jika berubah = sinyal baru.
+// Berbeda dari /xauusd/ea-signal (Mentor Mode) — ini murni dari Quant Bot 3-brain.
+quantRouter.get("/ea-signal", async (req, res) => {
+  try {
+    // ── Validasi EA key ─────────────────────────────────────────────────────
+    const authHeader = (req.headers.authorization as string | undefined) ?? "";
+    const providedKey =
+      (req.query["key"] as string | undefined) ??
+      authHeader.replace(/^Bearer\s+/i, "");
+
+    if (!providedKey) {
+      return res.status(401).json({ error: "EA API key diperlukan (?key=... atau Authorization: Bearer ...)" });
+    }
+    const keyValid = await validateEaApiKey(providedKey);
+    if (!keyValid) {
+      return res.status(403).json({ error: "EA API key tidak valid — generate key baru di Admin → EA Key" });
+    }
+
+    const brainParam = (req.query["brain"] as string | undefined) ?? "ensemble";
+    const validBrains = ["technical", "fundamental", "macro", "ensemble"];
+    if (!validBrains.includes(brainParam)) {
+      return res.status(400).json({ error: "brain harus: technical|fundamental|macro|ensemble" });
+    }
+
+    const livePrice = getLatestLivePrice();
+    const currentPrice = livePrice?.price ?? null;
+
+    // ── Ambil sinyal sesuai pilihan brain ───────────────────────────────────
+    if (brainParam === "ensemble") {
+      // Gunakan prediksi ensemble terbaru dari DB (sudah difilter Fix #9)
+      const rows = await db
+        .select()
+        .from(quantBotPredictionsTable)
+        .orderBy(desc(quantBotPredictionsTable.predictedAt))
+        .limit(1);
+
+      const row = rows[0];
+      const status = getQuantBotStatus();
+
+      if (!row || !status.ensemble) {
+        const holdResp = {
+          command: "HOLD", brain: "ensemble", signalId: 0,
+          price: currentPrice, tp: null, sl: null, tp2: null,
+          confidence: 0, consensus: null,
+          reason: "Menunggu siklus pertama Quant Bot Orchestrator (±5 menit)",
+          updatedAt: new Date().toISOString(),
+        };
+        if (req.query["format"] === "plain") return res.type("text/plain").send(`HOLD|${currentPrice ?? 0}|0|0|0|0`);
+        return res.json({ ok: true, data: holdResp });
+      }
+
+      const command = row.signal as "BUY" | "SELL" | "HOLD";
+      const tp   = command !== "HOLD" ? row.tp1  : null;
+      const sl   = command !== "HOLD" ? row.sl   : null;
+      const tp2  = command !== "HOLD" ? row.tp2  : null;
+      const conf = row.confidence ?? 0;
+      const sid  = row.id;
+
+      if (req.query["format"] === "plain") {
+        return res.type("text/plain").send(`${command}|${row.entryPrice}|${tp ?? 0}|${sl ?? 0}|${conf.toFixed(3)}|${sid}`);
+      }
+      return res.json({
+        ok: true,
+        data: {
+          command, brain: "ensemble",
+          signalId: sid,
+          price: currentPrice ?? row.entryPrice,
+          entryPrice: row.entryPrice,
+          tp, sl, tp2,
+          confidence: conf,
+          consensus: status.ensemble?.consensus ?? null,
+          session: row.session,
+          technicalVote: row.technicalSignal,
+          fundamentalVote: row.fundamentalSignal,
+          macroVote: row.macroSignal,
+          regime: row.regime,
+          updatedAt: row.predictedAt,
+        },
+      });
+    }
+
+    // ── Brain individual (technical / fundamental / macro) ──────────────────
+    const brain = brainParam as BrainType;
+    const pred = await getLatestBrainPrediction(brain);
+
+    if (!pred || pred.signal === "HOLD") {
+      const holdResp = {
+        command: "HOLD", brain, signalId: pred?.id ?? 0,
+        price: currentPrice, tp: null, sl: null,
+        confidence: pred?.confidence ?? 0,
+        reason: !pred ? `Menunggu siklus pertama ${brain} brain` : "Sinyal HOLD — brain tidak yakin arah",
+        updatedAt: new Date().toISOString(),
+      };
+      if (req.query["format"] === "plain") return res.type("text/plain").send(`HOLD|${currentPrice ?? 0}|0|0|${pred?.confidence?.toFixed(3) ?? 0}|${pred?.id ?? 0}`);
+      return res.json({ ok: true, data: holdResp });
+    }
+
+    const command = pred.signal as "BUY" | "SELL";
+    const sid = pred.id;
+
+    if (req.query["format"] === "plain") {
+      return res.type("text/plain").send(`${command}|${pred.entryPrice}|${pred.tp}|${pred.sl}|${pred.confidence.toFixed(3)}|${sid}`);
+    }
+    return res.json({
+      ok: true,
+      data: {
+        command, brain,
+        signalId: sid,
+        price: currentPrice ?? pred.entryPrice,
+        entryPrice: pred.entryPrice,
+        tp: pred.tp,
+        sl: pred.sl,
+        tp2: null,
+        confidence: pred.confidence,
+        pips: pred.pips,
+        reasoning: pred.reasoning,
+        updatedAt: pred.predictedAt,
+      },
+    });
+  } catch (err) {
+    console.error("[Quant] /ea-signal error:", err);
+    return res.status(500).json({ ok: false, error: (err as Error).message });
   }
 });
 

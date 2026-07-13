@@ -337,8 +337,8 @@ async function runOrchestrationCycle() {
       db.select().from(xauusdSnapshotsTable).orderBy(desc(xauusdSnapshotsTable.snapshotAt)).limit(1),
       db.select().from(xauusdMacroSnapshotsTable).orderBy(desc(xauusdMacroSnapshotsTable.snapshotAt)).limit(1),
       fetchQuantNews().catch(() => []),
-      getCalendarAnalysis().catch(() => null),   // Fix #8
-      getGoldCouncilDebate().catch(() => null),  // Fix #10
+      getCalendarAnalysis().catch(() => null),                    // Fix #8
+      Promise.resolve(getGoldCouncilDebate()).catch(() => null),  // Fix #10 — sync fn, wrap untuk safety
     ]);
 
     if (!techSignal || !fundSignal || !macroSignal) return;
