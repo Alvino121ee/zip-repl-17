@@ -59,36 +59,6 @@ string   _brainName    = "ensemble";
 string   _endpoint     = "";
 
 //--------------------------------------------------------------------
-//  HELPER - Trim whitespace dari string
-//--------------------------------------------------------------------
-string StringTrim(const string s)
-  {
-   string result = s;
-   // Trim kiri
-   while(StringLen(result) > 0 && StringGetCharacter(result, 0) <= 32)
-      result = StringSubstr(result, 1);
-   // Trim kanan
-   int len = StringLen(result);
-   while(len > 0 && StringGetCharacter(result, len - 1) <= 32)
-     {
-      result = StringSubstr(result, 0, len - 1);
-      len--;
-     }
-   return result;
-  }
-
-//--------------------------------------------------------------------
-//  HELPER - Auto-detect filling mode yang didukung broker
-//--------------------------------------------------------------------
-ENUM_ORDER_TYPE_FILLING GetBestFillingMode()
-  {
-   uint filling = (uint)SymbolInfoInteger(Symbol(), SYMBOL_FILLING_FLAGS);
-   if((filling & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
-   if((filling & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
-   return ORDER_FILLING_RETURN;
-  }
-
-//--------------------------------------------------------------------
 //  INIT
 //--------------------------------------------------------------------
 int OnInit()
@@ -135,7 +105,7 @@ int OnInit()
    // Trade setup
    _trade.SetExpertMagicNumber(MagicNumber);
    _trade.SetDeviationInPoints(Slippage);
-   _trade.SetTypeFilling(GetBestFillingMode());
+   _trade.SetTypeFilling(ORDER_FILLING_RETURN);
 
    _sym.Name(Symbol());
    _sym.RefreshRates();
@@ -144,12 +114,10 @@ int OnInit()
 
    Print("--------------------------------------------");
    Print("  GoldRadar.ai - QuantBot v3.00");
-   Print("--------------------------------------------");
    Print("  Brain    : ", _brainName);
    Print("  Lot      : ", DoubleToString(LotSize, 2));
    Print("  Min Conf : ", DoubleToString(MinConfidence * 100.0, 0), "%");
-   Print("  Poll     : ", _pollInterval, "s");
-   Print("  Endpoint : ", _endpoint);
+   Print("  Poll     : ", IntegerToString(_pollInterval), "s");
    Print("--------------------------------------------");
 
    EventSetTimer(_pollInterval);
@@ -163,7 +131,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
-   Print("[GoldRadar] EA dinonaktifkan. reason=", reason);
+   Print("[GoldRadar] EA dinonaktifkan. reason=", IntegerToString(reason));
   }
 
 //--------------------------------------------------------------------
@@ -184,7 +152,7 @@ void OnTimer()
    int code = MakeHttpGet(_endpoint, response);
    if(code != 200)
      {
-      Print("[GoldRadar] HTTP ", code, " - retry dalam ", _pollInterval, "s");
+      Print("[GoldRadar] HTTP ", IntegerToString(code), " - retry dalam ", IntegerToString(_pollInterval), "s");
       return;
      }
 
@@ -204,24 +172,27 @@ void OnTick()
 //  PROSES SINYAL - format plain: "COMMAND|ENTRY|TP|SL|CONFIDENCE|ID"
 //  Contoh: "BUY|3245.50|3265.50|3225.50|0.720|42"
 //--------------------------------------------------------------------
-void ProcessSignal(const string &raw)
+void ProcessSignal(string response)
   {
-   string response = StringTrim(raw);
+   // Bersihkan karakter newline/carriage return
+   StringReplace(response, "\r", "");
+   StringReplace(response, "\n", "");
 
    string parts[];
-   int count = StringSplit(response, StringGetCharacter("|", 0), parts);
+   ushort sep = '|';
+   int count = StringSplit(response, sep, parts);
    if(count < 6)
      {
       Print("[GoldRadar] Response tidak valid: '", response, "'");
       return;
      }
 
-   string command    = StringTrim(parts[0]);
+   string command    = parts[0];
    double entry      = StringToDouble(parts[1]);
    double tp         = StringToDouble(parts[2]);
    double sl         = StringToDouble(parts[3]);
    double confidence = StringToDouble(parts[4]);
-   long   signalId   = StringToInteger(parts[5]);
+   long   signalId   = (long)StringToDouble(parts[5]);
 
    if(VerboseLog)
       Print("[GoldRadar] Sinyal=", command,
@@ -229,7 +200,7 @@ void ProcessSignal(const string &raw)
             " TP=", DoubleToString(tp, _sym.Digits()),
             " SL=", DoubleToString(sl, _sym.Digits()),
             " Conf=", DoubleToString(confidence * 100.0, 1), "%",
-            " ID=", signalId);
+            " ID=", IntegerToString(signalId));
 
    // Sinyal tidak berubah -> skip
    if(signalId == _lastSignalId && command == _lastCommand) return;
@@ -268,15 +239,10 @@ void ProcessSignal(const string &raw)
    // Tutup posisi berlawanan
    if(CloseOnReverse && HasOpenPosition())
      {
-      ENUM_POSITION_TYPE existing = GetOpenPositionType();
-      bool isReverse = (command == "BUY"  && existing == POSITION_TYPE_SELL) ||
-                       (command == "SELL" && existing == POSITION_TYPE_BUY);
-      if(isReverse)
-        {
-         Print("[GoldRadar] Reverse -> tutup ",
-               (existing == POSITION_TYPE_BUY ? "BUY" : "SELL"));
-         CloseAllPositions("Reverse ke " + command);
-        }
+      bool isBuyOpen  = IsPositionTypeOpen(POSITION_TYPE_BUY);
+      bool isSellOpen = IsPositionTypeOpen(POSITION_TYPE_SELL);
+      if(command == "BUY"  && isSellOpen) CloseAllPositions("Reverse ke BUY");
+      if(command == "SELL" && isBuyOpen)  CloseAllPositions("Reverse ke SELL");
      }
 
    // OneTradeOnly
@@ -300,7 +266,7 @@ void ProcessSignal(const string &raw)
 //  EKSEKUSI ORDER MARKET
 //--------------------------------------------------------------------
 void ExecuteOrder(const string command,
-                  const double tp, const double sl,
+                  const double tp,     const double sl,
                   const long signalId, const double confidence)
   {
    _sym.RefreshRates();
@@ -317,15 +283,16 @@ void ExecuteOrder(const string command,
 
    if(!ok)
      {
-      Print("[GoldRadar] Order gagal - Retcode: ", _trade.ResultRetcode(),
-            " (", _trade.ResultRetcodeDescription(), ")");
+      Print("[GoldRadar] Order gagal - Retcode: ",
+            IntegerToString(_trade.ResultRetcode()), " - ",
+            _trade.ResultRetcodeDescription());
       return;
      }
 
    Print("------------------------------------------");
    Print("  GoldRadar QuantBot v3 - ORDER MASUK");
    Print("  Brain  : ", _brainName);
-   Print("  Signal : ", command, " | ID: ", signalId);
+   Print("  Signal : ", command, " ID=", IntegerToString((int)signalId));
    Print("  Lot    : ", DoubleToString(LotSize, 2));
    Print("  Masuk  : ", DoubleToString(_trade.ResultPrice(), digits));
    Print("  TP     : ", DoubleToString(normTp, digits));
@@ -335,7 +302,7 @@ void ExecuteOrder(const string command,
   }
 
 //--------------------------------------------------------------------
-//  HELPER - Cek apakah ada posisi EA terbuka
+//  HELPER - Cek apakah ada posisi EA terbuka (any type)
 //--------------------------------------------------------------------
 bool HasOpenPosition()
   {
@@ -344,26 +311,26 @@ bool HasOpenPosition()
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
-      if(PositionGetInteger(POSITION_MAGIC)  != MagicNumber) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)MagicNumber) continue;
       return true;
      }
    return false;
   }
 
 //--------------------------------------------------------------------
-//  HELPER - Ambil tipe posisi EA yang sedang terbuka
+//  HELPER - Cek apakah posisi tipe tertentu sedang terbuka
 //--------------------------------------------------------------------
-ENUM_POSITION_TYPE GetOpenPositionType()
+bool IsPositionTypeOpen(const ENUM_POSITION_TYPE posType)
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
-      if(PositionGetInteger(POSITION_MAGIC)  != MagicNumber) continue;
-      return (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(PositionGetInteger(POSITION_MAGIC) != (long)MagicNumber) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == posType) return true;
      }
-   return (ENUM_POSITION_TYPE) - 1;
+   return false;
   }
 
 //--------------------------------------------------------------------
@@ -376,16 +343,15 @@ void CloseAllPositions(const string reason = "")
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
-      if(PositionGetInteger(POSITION_MAGIC)  != MagicNumber) continue;
-      double pnl    = PositionGetDouble(POSITION_PROFIT);
-      bool   closed = _trade.PositionClose(ticket, Slippage);
-      if(closed)
-         Print("[GoldRadar] Tutup #", ticket,
+      if(PositionGetInteger(POSITION_MAGIC) != (long)MagicNumber) continue;
+      double pnl = PositionGetDouble(POSITION_PROFIT);
+      if(_trade.PositionClose(ticket, Slippage))
+         Print("[GoldRadar] Tutup #", IntegerToString((int)ticket),
                (reason != "" ? " - " + reason : ""),
-               " | PnL: ", DoubleToString(pnl, 2), " USD");
+               " PnL=", DoubleToString(pnl, 2), " USD");
       else
-         Print("[GoldRadar] Gagal tutup #", ticket,
-               " - retcode: ", _trade.ResultRetcode());
+         Print("[GoldRadar] Gagal tutup #", IntegerToString((int)ticket),
+               " retcode=", IntegerToString(_trade.ResultRetcode()));
      }
   }
 
@@ -403,8 +369,8 @@ int MakeHttpGet(const string url, string &response)
                          data, result, resHeaders);
    if(code == -1)
      {
-      Print("[GoldRadar] WebRequest error: ", GetLastError(),
-            " - Pastikan URL di-whitelist: Tools -> Options -> Expert Advisors -> Allow WebRequest");
+      Print("[GoldRadar] WebRequest error=", IntegerToString(GetLastError()),
+            " - Whitelist URL di: Tools -> Options -> Expert Advisors -> Allow WebRequest");
       return -1;
      }
    response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
