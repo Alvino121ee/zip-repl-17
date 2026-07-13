@@ -40,7 +40,7 @@ import {
   btcQuantMacroBrainTable,
 } from "@workspace/db/schema";
 import { sql as drizzleSql, eq as drizzleEq } from "drizzle-orm";
-import { getBtcCouncilDebate, getRecentBtcCouncilDebates } from "../lib/btc-quant-committee.js";
+import { getBtcCouncilDebate, getRecentBtcCouncilDebates, btcCouncilEvents, getIsBtcCouncilRunning } from "../lib/btc-quant-committee.js";
 
 type Req = import("express").Request;
 type Res = import("express").Response;
@@ -668,4 +668,28 @@ btcusdRouter.get("/quant/committee", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
   }
+});
+
+// GET /api/btcusd/quant/committee/stream — tonton rapat BTC live via SSE
+btcusdRouter.get("/quant/committee/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const write = (data: object) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  write({ type: "connected", isRunning: getIsBtcCouncilRunning() });
+
+  const handler = (ev: object) => write(ev);
+  btcCouncilEvents.on("data", handler);
+  const heartbeat = setInterval(() => write({ type: "ping" }), 25_000);
+
+  req.on("close", () => {
+    btcCouncilEvents.off("data", handler);
+    clearInterval(heartbeat);
+  });
 });

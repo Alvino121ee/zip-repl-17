@@ -6,6 +6,7 @@
  * lalu Presiden mensintesis semua pendapat menjadi keputusan final.
  */
 
+import { EventEmitter } from "events";
 import { db } from "@workspace/db";
 import { btcQuantCommitteeDebatesTable } from "@workspace/db/schema";
 import { desc } from "drizzle-orm";
@@ -14,6 +15,10 @@ import { getBtcTechnicalSignal } from "./btc-quant-technical-brain.js";
 import { getBtcFundamentalSignal } from "./btc-quant-fundamental-brain.js";
 import { getBtcMacroSignal } from "./btc-quant-macro-brain.js";
 import { fetchBtcusdIndicators } from "./btcusd-data.js";
+
+export const btcCouncilEvents = new EventEmitter();
+btcCouncilEvents.setMaxListeners(200);
+export function getIsBtcCouncilRunning() { return isRunning; }
 
 // ─── Roster — 15 anggota Dewan BTC ─────────────────────────────────────────────
 export const BTC_COUNCIL_MEMBERS = [
@@ -137,6 +142,9 @@ Buat pendapat untuk masing-masing dari 15 anggota di atas SESUAI URUTAN, lalu ke
 }`;
 }
 
+const bcast = (ev: object) => btcCouncilEvents.emit("data", ev);
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 // ─── Jalankan satu siklus rapat dewan ──────────────────────────────────────────
 async function runCouncilCycle() {
   if (isRunning) return;
@@ -145,6 +153,8 @@ async function runCouncilCycle() {
   const start = Date.now();
 
   try {
+    bcast({ type: "stage", stage: "collecting", cycle: cycleCount, message: "Mengumpulkan data dari 3 AI Brain BTC…" });
+
     const [tech, fund, macro, indicators] = await Promise.all([
       getBtcTechnicalSignal().catch(() => null),
       getBtcFundamentalSignal().catch(() => null),
@@ -152,10 +162,26 @@ async function runCouncilCycle() {
       fetchBtcusdIndicators("5").catch(() => null),
     ]);
 
-    if (!tech || !fund || !macro || !indicators) return;
+    if (!tech || !fund || !macro || !indicators) {
+      bcast({ type: "error", message: "Data brain belum tersedia — rapat ditunda." });
+      return;
+    }
 
     const price = indicators.price;
+    bcast({
+      type: "context",
+      data: {
+        price,
+        tech:  { signal: tech.signal,  confidence: tech.confidence  },
+        fund:  { signal: fund.signal,  confidence: fund.confidence  },
+        macro: { signal: macro.signal, confidence: macro.confidence },
+      },
+    });
+    bcast({ type: "stage", stage: "calling_ai", cycle: cycleCount, message: "Dewan BTC sedang berdebat — AI memproses pendapat 15 analis…" });
+
     const raw = await askDeepSeek(SYSTEM_PROMPT, buildUserPrompt(price, tech, fund, macro));
+
+    bcast({ type: "stage", stage: "revealing", cycle: cycleCount, message: "Anggota dewan menyampaikan pendapat satu per satu…" });
 
     let parsed: {
       members?: { vote?: string; confidence?: number; opinion?: string }[];
@@ -166,9 +192,7 @@ async function runCouncilCycle() {
     try {
       const match = raw.match(/\{[\s\S]*\}/);
       if (match) parsed = JSON.parse(match[0]);
-    } catch {
-      /* fall through to fallback below */
-    }
+    } catch { /* fall through */ }
 
     const members: CouncilMemberOpinion[] = BTC_COUNCIL_MEMBERS.map((m, i) => {
       const item = parsed.members?.[i];
@@ -182,6 +206,11 @@ async function runCouncilCycle() {
       };
     });
 
+    for (let i = 0; i < members.length; i++) {
+      await delay(220);
+      bcast({ type: "member", index: i, data: members[i] });
+    }
+
     const buyVotes = members.filter((m) => m.vote === "BUY").length;
     const sellVotes = members.filter((m) => m.vote === "SELL").length;
     const holdVotes = members.filter((m) => m.vote === "HOLD").length;
@@ -192,6 +221,20 @@ async function runCouncilCycle() {
     const leaderReasoning =
       parsed.leaderReasoning?.trim() ||
       `Berdasarkan hasil voting dewan (BUY:${buyVotes} SELL:${sellVotes} HOLD:${holdVotes}), saya memutuskan ${leaderDecision} untuk BTC/USD saat ini (TP/SL dibatasi $1000).`;
+
+    await delay(500);
+    bcast({
+      type: "leader",
+      data: {
+        name: BTC_COUNCIL_LEADER.name,
+        title: BTC_COUNCIL_LEADER.title,
+        decision: leaderDecision,
+        confidence: leaderConfidence,
+        reasoning: leaderReasoning,
+        buyVotes, sellVotes, holdVotes,
+      },
+    });
+    bcast({ type: "done", cycle: cycleCount });
 
     const debate: CouncilDebate = {
       debatedAt: new Date(),
@@ -231,6 +274,7 @@ async function runCouncilCycle() {
       `[Dewan BTC] Rapat #${cycleCount}: BUY=${buyVotes} SELL=${sellVotes} HOLD=${holdVotes} → Presiden: ${leaderDecision} (${Date.now() - start}ms)`
     );
   } catch (err) {
+    bcast({ type: "error", message: `Rapat error: ${err instanceof Error ? err.message : String(err)}` });
     console.error("[Dewan BTC] Cycle error:", err instanceof Error ? err.message : err);
   } finally {
     isRunning = false;

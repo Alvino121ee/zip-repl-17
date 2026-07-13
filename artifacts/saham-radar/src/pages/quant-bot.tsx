@@ -1146,7 +1146,16 @@ interface WatchMember  { name: string; role: string; vote: "BUY"|"SELL"|"HOLD"; 
 interface WatchContext { price: number; tech: { signal: string; confidence: number }; fund: { signal: string; confidence: number }; macro: { signal: string; confidence: number } }
 interface WatchLeader  { name: string; title: string; decision: "BUY"|"SELL"|"HOLD"; confidence: number; reasoning: string; buyVotes: number; sellVotes: number; holdVotes: number }
 
-function DebateWatcher({ onClose }: { onClose: () => void }) {
+function DebateWatcher({ onClose, council }: { onClose: () => void; council: "gold" | "btc" }) {
+  const streamUrl = council === "btc" ? "/api/btcusd/quant/committee/stream" : "/api/quant/committee/stream";
+  const title     = council === "btc" ? "Dewan BTC" : "Dewan Emas";
+  const accent    = council === "btc" ? "orange" : "amber";
+  const borderCls = accent === "amber" ? "border-amber-500/20" : "border-orange-500/20";
+  const stageBgCls = accent === "amber" ? "bg-amber-500/10 border-amber-500/20" : "bg-orange-500/10 border-orange-500/20";
+  const stageTextCls = accent === "amber" ? "text-amber-300" : "text-orange-300";
+  const leaderBorderCls = accent === "amber" ? "border-amber-500/30 bg-amber-500/8" : "border-orange-500/30 bg-orange-500/8";
+  const leaderLineCls = accent === "amber" ? "border-amber-500/40" : "border-orange-500/40";
+
   const [stage, setStage]       = useState<WatchStage>("idle");
   const [cycle, setCycle]       = useState<number|null>(null);
   const [stageMsg, setStageMsg] = useState("Menunggu rapat berikutnya dimulai…");
@@ -1161,7 +1170,7 @@ function DebateWatcher({ onClose }: { onClose: () => void }) {
   }, [members.length]);
 
   useEffect(() => {
-    const es = new EventSource("/api/quant/committee/stream");
+    const es = new EventSource(streamUrl);
     es.onopen  = () => setConnected(true);
     es.onerror = () => setConnected(false);
     es.onmessage = (e) => {
@@ -1186,7 +1195,7 @@ function DebateWatcher({ onClose }: { onClose: () => void }) {
       } catch { /* skip */ }
     };
     return () => es.close();
-  }, []);
+  }, [streamUrl]);
 
   const buyC  = members.filter(m => m.vote === "BUY").length;
   const sellC = members.filter(m => m.vote === "SELL").length;
@@ -1198,7 +1207,7 @@ function DebateWatcher({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-y-0 right-0 z-50 flex">
       <div className="absolute inset-0 -left-[100vw] bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-sm sm:max-w-md h-full bg-zinc-950 border-l border-amber-500/20 shadow-2xl flex flex-col">
+      <div className={`relative w-full max-w-sm sm:max-w-md h-full bg-zinc-950 border-l ${borderCls} shadow-2xl flex flex-col`}>
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 shrink-0">
@@ -1206,7 +1215,7 @@ function DebateWatcher({ onClose }: { onClose: () => void }) {
             <span className="text-lg">🏛️</span>
             <div>
               <div className="text-sm font-bold text-white flex items-center gap-2">
-                Rapat Live — Dewan Emas
+                Rapat Live — {title}
                 {cycle && <span className="text-[10px] font-normal text-zinc-500">#{cycle}</span>}
               </div>
               <div className="flex items-center gap-1.5 mt-0.5">
@@ -1240,9 +1249,9 @@ function DebateWatcher({ onClose }: { onClose: () => void }) {
 
           {/* Stage bar */}
           {active && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
-              <span className="text-xs text-amber-300">{stageMsg}</span>
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${stageBgCls}`}>
+              <Loader2 className={`w-3.5 h-3.5 animate-spin shrink-0 ${stageTextCls}`} />
+              <span className={`text-xs ${stageTextCls}`}>{stageMsg}</span>
             </div>
           )}
 
@@ -1313,7 +1322,7 @@ function DebateWatcher({ onClose }: { onClose: () => void }) {
 
           {/* Leader */}
           {leader && (
-            <div className="border border-amber-500/30 rounded-xl bg-amber-500/8 p-4 space-y-2.5">
+            <div className={`border rounded-xl p-4 space-y-2.5 ${leaderBorderCls}`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="text-xl">🔨</span>
@@ -1325,7 +1334,7 @@ function DebateWatcher({ onClose }: { onClose: () => void }) {
                 <Badge className={`text-sm font-black border px-3 py-1 ${signalBadge(leader.decision)}`}>{leader.decision}</Badge>
               </div>
               <ConfBar value={leader.confidence} signal={leader.decision} />
-              <p className="text-xs text-zinc-200 leading-relaxed border-l-2 border-amber-500/40 pl-3 italic">"{leader.reasoning}"</p>
+              <p className={`text-xs text-zinc-200 leading-relaxed border-l-2 pl-3 italic ${leaderLineCls}`}>"{leader.reasoning}"</p>
               <div className="flex gap-3 text-xs">
                 <span className="text-emerald-400 font-semibold">▲ BUY {leader.buyVotes}</span>
                 <span className="text-yellow-400">— HOLD {leader.holdVotes}</span>
@@ -1400,17 +1409,15 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
               <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
               <p className="text-sm">Dewan sedang menggelar rapat pertama...</p>
             </div>
-            {accent === "amber" && (
-              <button
-                onClick={() => setShowWatcher(true)}
-                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-amber-500/40 text-amber-400 hover:bg-amber-500/15 transition-all"
-              >
-                <Eye className="w-3.5 h-3.5" /> Tonton Rapat
-              </button>
-            )}
+            <button
+              onClick={() => setShowWatcher(true)}
+              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${accent === "amber" ? "border-amber-500/40 text-amber-400 hover:bg-amber-500/15" : "border-orange-500/40 text-orange-400 hover:bg-orange-500/15"}`}
+            >
+              <Eye className="w-3.5 h-3.5" /> Tonton Rapat
+            </button>
           </CardContent>
         </Card>
-        {showWatcher && <DebateWatcher onClose={() => setShowWatcher(false)} />}
+        {showWatcher && <DebateWatcher onClose={() => setShowWatcher(false)} council={accent === "amber" ? "gold" : "btc"} />}
       </>
     );
   }
@@ -1444,14 +1451,12 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
               </div>
             )}
             <span className="text-xs text-zinc-600">Rapat #{debate.cycleNumber}</span>
-            {accent === "amber" && (
-              <button
-                onClick={() => setShowWatcher(true)}
-                className="flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded-full border border-amber-500/40 text-amber-400 hover:bg-amber-500/15 transition-all"
-              >
-                <Eye className="w-3 h-3" /> Tonton
-              </button>
-            )}
+            <button
+              onClick={() => setShowWatcher(true)}
+              className={`flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded-full border transition-all ${accent === "amber" ? "border-amber-500/40 text-amber-400 hover:bg-amber-500/15" : "border-orange-500/40 text-orange-400 hover:bg-orange-500/15"}`}
+            >
+              <Eye className="w-3 h-3" /> Tonton
+            </button>
           </div>
         </div>
       </CardHeader>
@@ -1541,8 +1546,8 @@ function CouncilPanel({ debate, accent, meetingIntervalMin }: {
         </div>
       </CardContent>
     </Card>
-    {showWatcher && accent === "amber" && (
-      <DebateWatcher onClose={() => setShowWatcher(false)} />
+    {showWatcher && (
+      <DebateWatcher onClose={() => setShowWatcher(false)} council={accent === "amber" ? "gold" : "btc"} />
     )}
     </>
   );
