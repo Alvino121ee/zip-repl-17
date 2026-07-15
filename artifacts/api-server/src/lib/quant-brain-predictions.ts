@@ -60,6 +60,15 @@ export interface BrainPredictionRecord {
   verifiedAt: Date | null;
 }
 
+// ─── Running high/low tracker per prediksi ────────────────────────────────────
+// Kunci: predId → nilai tertinggi/terendah harga yang PERNAH tercatat SEJAK
+// prediksi dibuat (akumulasi lintas siklus 3-menit).
+// Reset on restart — aman karena prediksi lama akan mulai dari currentPrice.
+// Ini menggantikan penggunaan bar high/low dari scanner yang mencakup harga
+// SEBELUM prediksi dibuat, yang menyebabkan false SL/TP hit.
+const _runHigh: Map<number, number> = new Map();
+const _runLow:  Map<number, number> = new Map();
+
 // ─── Per-brain prediction cooldown ────────────────────────────────────────────
 // Prediksi baru boleh dibuat max 1x per 30 menit per brain (bukan lagi hanya
 // di menit 0–4 UTC, karena window itu terlalu sempit — 8% hit rate saja).
@@ -145,17 +154,14 @@ export async function reinforceQuantBrain(
 export async function verifyBrainPredictions(
   brainType: BrainType,
   currentPrice: number,
-  currentHigh?: number,
-  currentLow?: number,
-  prevHigh?: number | null,   // Fix #4: previous bar high dari scanner
-  prevLow?: number | null     // Fix #4: previous bar low dari scanner
+  // Parameter candle high/low tidak lagi digunakan untuk TP/SL check karena
+  // candle 1H mencakup harga SEBELUM prediksi dibuat → false SL/TP hit.
+  // Dibiarkan di signature agar tidak break caller, tapi diabaikan di dalam.
+  _currentHigh?: number,
+  _currentLow?: number,
+  _prevHigh?: number | null,
+  _prevLow?: number | null
 ): Promise<{ verified: number; correct: number; wrong: number }> {
-  const high = currentHigh ?? currentPrice;
-  const low  = currentLow  ?? currentPrice;
-
-  // Fix #4: gabungkan current + previous bar untuk effective range
-  const effectiveHigh = Math.max(high, prevHigh ?? high);
-  const effectiveLow  = Math.min(low,  prevLow  ?? low);
 
   const pending = await db
     .select()
@@ -167,43 +173,41 @@ export async function verifyBrainPredictions(
       )
     );
 
-  const EXPIRE_MS  = 48 * 60 * 60 * 1000; // 48 jam — 1h timeframe prediksi gold
-  const MIN_AGE_MS =  5 * 60 * 1000;      // 5 menit — jangan verifikasi prediksi yang baru dibuat
-  const ONE_HOUR_MS = 60 * 60 * 1000;     // 1 jam — threshold untuk pakai prevBar range
+  const EXPIRE_MS  = 48 * 60 * 60 * 1000; // 48 jam
+  const MIN_AGE_MS =  5 * 60 * 1000;      // 5 menit minimum sebelum mulai verifikasi
 
   let verified = 0, correct = 0, wrong = 0;
 
   for (const pred of pending) {
-    // ── Expiry ────────────────────────────────────────────────────────────────
     const age = Date.now() - new Date(pred.predictedAt).getTime();
+
+    // ── Expiry ────────────────────────────────────────────────────────────────
     if (age > EXPIRE_MS) {
       const result = await db
         .update(quantBrainPredictionsTable)
         .set({ isVerified: true, isCorrect: null, actualPrice: currentPrice, verifiedAt: new Date() })
         .where(and(eq(quantBrainPredictionsTable.id, pred.id), eq(quantBrainPredictionsTable.isVerified, false)))
         .returning({ id: quantBrainPredictionsTable.id });
-      if (result.length) { verified++; wrong++; } // expired = not a win
+      if (result.length) { verified++; wrong++; }
       continue;
     }
 
     // ── Terlalu baru — skip, tunggu minimal 5 menit ───────────────────────────
-    // Mencegah prediksi yang baru dibuat langsung diverifikasi oleh data bar
-    // sebelumnya (prevHigh/prevLow bisa saja berasal dari sebelum prediksi dibuat).
     if (age < MIN_AGE_MS) continue;
 
-    // ── Tentukan range yang valid untuk prediksi ini ──────────────────────────
-    // Jika prediksi < 1 jam → hanya gunakan bar saat ini (bukan prevBar).
-    // prevBar dari scanner adalah candle 1H SEBELUMNYA, yang bisa saja terjadi
-    // SEBELUM prediksi dibuat → menyebabkan false SL/TP hit.
-    // Jika prediksi > 1 jam → aman menggunakan prevBar karena sudah ada 1+ candle
-    // lengkap sejak prediksi dibuat.
-    const useMultiBar = age >= ONE_HOUR_MS;
-    const checkHigh = useMultiBar ? effectiveHigh : high;
-    const checkLow  = useMultiBar ? effectiveLow  : low;
+    // ── Update running high/low hanya dari harga SETELAH prediksi dibuat ──────
+    // Akumulasi lintas siklus — setiap 3 menit satu data point masuk.
+    // Ini menggantikan bar high/low dari scanner yang mencakup pre-prediction data.
+    const prevRunHigh = _runHigh.get(pred.id);
+    const prevRunLow  = _runLow.get(pred.id);
+    const newRunHigh  = prevRunHigh == null ? currentPrice : Math.max(prevRunHigh, currentPrice);
+    const newRunLow   = prevRunLow  == null ? currentPrice : Math.min(prevRunLow,  currentPrice);
+    _runHigh.set(pred.id, newRunHigh);
+    _runLow.set(pred.id,  newRunLow);
 
-    // ── TP/SL check ───────────────────────────────────────────────────────────
-    const hitTp = pred.direction === "up" ? checkHigh >= pred.tp : checkLow <= pred.tp;
-    const hitSl = pred.direction === "up" ? checkLow  <= pred.sl : checkHigh >= pred.sl;
+    // ── TP/SL check menggunakan running range post-prediction ─────────────────
+    const hitTp = pred.direction === "up" ? newRunHigh >= pred.tp : newRunLow  <= pred.tp;
+    const hitSl = pred.direction === "up" ? newRunLow  <= pred.sl : newRunHigh >= pred.sl;
 
     if (!hitTp && !hitSl) continue;
     const isCorrect = hitTp && !hitSl; // SL takes priority if both hit
@@ -215,6 +219,9 @@ export async function verifyBrainPredictions(
       .returning({ id: quantBrainPredictionsTable.id });
 
     if (result.length) {
+      // Bersihkan map setelah prediksi selesai diverifikasi
+      _runHigh.delete(pred.id);
+      _runLow.delete(pred.id);
       verified++;
       if (isCorrect) correct++; else wrong++;
     }
