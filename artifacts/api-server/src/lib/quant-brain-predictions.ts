@@ -152,7 +152,9 @@ export async function verifyBrainPredictions(
       )
     );
 
-  const EXPIRE_MS = 48 * 60 * 60 * 1000; // 48 jam — 1h timeframe prediksi gold
+  const EXPIRE_MS  = 48 * 60 * 60 * 1000; // 48 jam — 1h timeframe prediksi gold
+  const MIN_AGE_MS =  5 * 60 * 1000;      // 5 menit — jangan verifikasi prediksi yang baru dibuat
+  const ONE_HOUR_MS = 60 * 60 * 1000;     // 1 jam — threshold untuk pakai prevBar range
 
   let verified = 0, correct = 0, wrong = 0;
 
@@ -169,9 +171,24 @@ export async function verifyBrainPredictions(
       continue;
     }
 
-    // ── TP/SL check (Fix #4: effectiveHigh/Low spans current + prev bar) ──────
-    const hitTp = pred.direction === "up" ? effectiveHigh >= pred.tp : effectiveLow <= pred.tp;
-    const hitSl = pred.direction === "up" ? effectiveLow <= pred.sl : effectiveHigh >= pred.sl;
+    // ── Terlalu baru — skip, tunggu minimal 5 menit ───────────────────────────
+    // Mencegah prediksi yang baru dibuat langsung diverifikasi oleh data bar
+    // sebelumnya (prevHigh/prevLow bisa saja berasal dari sebelum prediksi dibuat).
+    if (age < MIN_AGE_MS) continue;
+
+    // ── Tentukan range yang valid untuk prediksi ini ──────────────────────────
+    // Jika prediksi < 1 jam → hanya gunakan bar saat ini (bukan prevBar).
+    // prevBar dari scanner adalah candle 1H SEBELUMNYA, yang bisa saja terjadi
+    // SEBELUM prediksi dibuat → menyebabkan false SL/TP hit.
+    // Jika prediksi > 1 jam → aman menggunakan prevBar karena sudah ada 1+ candle
+    // lengkap sejak prediksi dibuat.
+    const useMultiBar = age >= ONE_HOUR_MS;
+    const checkHigh = useMultiBar ? effectiveHigh : high;
+    const checkLow  = useMultiBar ? effectiveLow  : low;
+
+    // ── TP/SL check ───────────────────────────────────────────────────────────
+    const hitTp = pred.direction === "up" ? checkHigh >= pred.tp : checkLow <= pred.tp;
+    const hitSl = pred.direction === "up" ? checkLow  <= pred.sl : checkHigh >= pred.sl;
 
     if (!hitTp && !hitSl) continue;
     const isCorrect = hitTp && !hitSl; // SL takes priority if both hit
