@@ -298,6 +298,7 @@ async function runLearningCycle() {
       signal: signal.signal,
       confidence: signal.confidence,
       entryPrice: snap.price,
+      atr: snap.atr14,
       reasoning: signal.keySetup,
     }).catch(() => null);
 

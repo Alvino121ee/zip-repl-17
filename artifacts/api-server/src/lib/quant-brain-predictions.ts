@@ -1,8 +1,12 @@
 /**
  * Quant Bot — Per-Brain Standalone Predictions
  * Setiap brain (Technical, Fundamental, Macro) membuat prediksinya SENDIRI,
- * lepas dari ensemble vote — dengan jarak SL/TP yang SAMA & ADIL untuk ketiganya:
- * 100 pips XAUUSD (1 pip gold = $0.10 → 100 pips = $10.00).
+ * lepas dari ensemble vote.
+ *
+ * TP/SL dihitung dinamis dari ATR saat prediksi dibuat:
+ *   TP = clamp(ATR × 0.8, $3, $10)   — target realistis, di bawah 1 full ATR
+ *   SL = clamp(ATR × 0.5, $2, $10)   — stop lebih ketat, RR ~1.6:1
+ * Max 100 pips ($10) adalah batas atas, bukan nilai tetap.
  *
  * Improvements:
  * Fix #2 — Reinforcement: boost/decay brain entries based on verified outcomes
@@ -21,10 +25,21 @@ import { and, desc, eq, sql } from "drizzle-orm";
 
 export type BrainType = "technical" | "fundamental" | "macro";
 
-// Fair, fixed risk distance shared by all 3 brains — 100 pips gold ($0.10/pip).
+// Gold pip value: 1 pip = $0.10, 100 pips = $10.00
 const GOLD_PIP_VALUE = 0.1;
-export const FIXED_PIPS = 100;
-const FIXED_DISTANCE = FIXED_PIPS * GOLD_PIP_VALUE; // $10.00
+export const MAX_PIPS = 100;
+const MAX_DISTANCE   = MAX_PIPS * GOLD_PIP_VALUE; // $10.00 — batas atas, bukan nilai tetap
+
+// Hitung TP/SL dinamis dari ATR dengan batas atas MAX_DISTANCE.
+// TP = ATR × 0.8 → target realistis di bawah 1 full ATR
+// SL = ATR × 0.5 → stop lebih ketat, rasio RR ~1.6:1
+// Minimum TP $3 / SL $2 agar tidak terlalu sempit
+function calcDynamicDistances(atr: number): { tpDist: number; slDist: number; pips: number } {
+  const tpDist = Math.min(Math.max(atr * 0.8, 3.0), MAX_DISTANCE);
+  const slDist = Math.min(Math.max(atr * 0.5, 2.0), MAX_DISTANCE);
+  const pips   = Math.round(tpDist / GOLD_PIP_VALUE);
+  return { tpDist, slDist, pips };
+}
 
 export interface BrainPredictionRecord {
   id: number;
@@ -217,6 +232,7 @@ export async function generateBrainPrediction(params: {
   signal: "BUY" | "SELL" | "HOLD";
   confidence: number;
   entryPrice: number;
+  atr?: number | null;   // ATR dari scanner — dasar perhitungan TP/SL dinamis
   reasoning?: string;
   symbol?: string;
 }): Promise<BrainPredictionRecord | null> {
@@ -228,8 +244,12 @@ export async function generateBrainPrediction(params: {
   _lastPredictionAt[params.brainType] = now;
 
   const direction: "up" | "down" = params.signal === "BUY" ? "up" : "down";
-  const tp = direction === "up" ? params.entryPrice + FIXED_DISTANCE : params.entryPrice - FIXED_DISTANCE;
-  const sl = direction === "up" ? params.entryPrice - FIXED_DISTANCE : params.entryPrice + FIXED_DISTANCE;
+
+  // Hitung TP/SL dinamis dari ATR — max 100 pips ($10), bukan nilai tetap.
+  // Fallback ke $8/$5 jika ATR tidak tersedia.
+  const { tpDist, slDist, pips } = calcDynamicDistances(params.atr ?? 10);
+  const tp = direction === "up" ? params.entryPrice + tpDist : params.entryPrice - tpDist;
+  const sl = direction === "up" ? params.entryPrice - slDist : params.entryPrice + slDist;
 
   const [row] = await db
     .insert(quantBrainPredictionsTable)
@@ -242,7 +262,7 @@ export async function generateBrainPrediction(params: {
       entryPrice: params.entryPrice,
       tp,
       sl,
-      pips: FIXED_PIPS,
+      pips,
       reasoning: params.reasoning?.slice(0, 500) ?? null,
     })
     .returning();

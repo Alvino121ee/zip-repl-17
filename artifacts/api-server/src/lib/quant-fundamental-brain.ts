@@ -265,6 +265,7 @@ async function runLearningCycle() {
       signal: signal.signal,
       confidence: signal.confidence,
       entryPrice: price,
+      atr: indicators?.atr14,
       reasoning: signal.fundamentalBias,
     }).catch(() => null);
 

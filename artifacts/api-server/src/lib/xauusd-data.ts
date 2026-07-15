@@ -217,7 +217,7 @@ const TV_INDICATOR_COLUMNS = [
   "BB.upper",                                   // 17
   "BB.lower",                                   // 18
   "BB.basis",                                   // 19 — BB middle
-  "ATR",                                        // 20 — ATR 14
+  "ATR|60",                                     // 20 — ATR 14 (1H timeframe, explicit interval)
   "Pivot.M.Classic.S1",                         // 21 — monthly support
   "Pivot.M.Classic.R1",                         // 22 — monthly resistance
   "Recommend.All",                              // 23 — aggregate signal: -1 (strong sell) → +1 (strong buy)
