@@ -292,16 +292,14 @@ async function runLearningCycle() {
     // Fix #2: reinforce brain entries berdasarkan hasil verifikasi
     if (verifyResult.correct > 0) await reinforceQuantBrain("technical", true).catch(() => {});
     if (verifyResult.wrong > 0)   await reinforceQuantBrain("technical", false).catch(() => {});
-    // Fix #3: prediksi baru hanya di awal candle 1H
-    if (isNewHourlyCandle()) {
-      await generateBrainPrediction({
-        brainType: "technical",
-        signal: signal.signal,
-        confidence: signal.confidence,
-        entryPrice: snap.price,
-        reasoning: signal.keySetup,
-      }).catch(() => null);
-    }
+    // Buat prediksi — cooldown 30 menit diatur di dalam generateBrainPrediction
+    await generateBrainPrediction({
+      brainType: "technical",
+      signal: signal.signal,
+      confidence: signal.confidence,
+      entryPrice: snap.price,
+      reasoning: signal.keySetup,
+    }).catch(() => null);
 
     await db.insert(quantLearningLogTable).values({
       brainType: "technical",

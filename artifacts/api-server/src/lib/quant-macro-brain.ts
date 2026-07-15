@@ -219,15 +219,14 @@ async function runLearningCycle() {
     ).catch(() => ({ verified: 0, correct: 0, wrong: 0 }));
     if (verifyResult.correct > 0) await reinforceQuantBrain("macro", true).catch(() => {});
     if (verifyResult.wrong > 0)   await reinforceQuantBrain("macro", false).catch(() => {});
-    if (isNewHourlyCandle()) {
-      await generateBrainPrediction({
-        brainType: "macro",
-        signal: signal.signal,
-        confidence: signal.confidence,
-        entryPrice: price,
-        reasoning: signal.macroRegime,
-      }).catch(() => null);
-    }
+    // Buat prediksi — cooldown 30 menit diatur di dalam generateBrainPrediction
+    await generateBrainPrediction({
+      brainType: "macro",
+      signal: signal.signal,
+      confidence: signal.confidence,
+      entryPrice: price,
+      reasoning: signal.macroRegime,
+    }).catch(() => null);
 
     await db.insert(quantLearningLogTable).values({
       brainType: "macro",

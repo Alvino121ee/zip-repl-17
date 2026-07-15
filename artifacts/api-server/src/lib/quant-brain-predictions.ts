@@ -45,11 +45,18 @@ export interface BrainPredictionRecord {
   verifiedAt: Date | null;
 }
 
-// ─── Fix #3: Candle-alignment helper ──────────────────────────────────────────
-// Prediksi baru hanya dibuat di menit 0–4 UTC (awal candle 1H).
-// Ini mencegah prediksi dibuat di tengah candle dengan entry price yang bias.
+// ─── Per-brain prediction cooldown ────────────────────────────────────────────
+// Prediksi baru boleh dibuat max 1x per 30 menit per brain (bukan lagi hanya
+// di menit 0–4 UTC, karena window itu terlalu sempit — 8% hit rate saja).
+const PREDICTION_COOLDOWN_MS = 30 * 60 * 1000; // 30 menit
+const _lastPredictionAt: Record<BrainType, number> = {
+  technical: 0, fundamental: 0, macro: 0,
+};
+
+// Tetap diekspor agar tidak merusak import di brain files, tapi selalu true.
+// Gate sebenarnya ada di dalam generateBrainPrediction (cooldown 30 menit).
 export function isNewHourlyCandle(): boolean {
-  return new Date().getUTCMinutes() < 5;
+  return true;
 }
 
 // ─── Fix #2: Reinforcement — boost/decay brain entries after verified outcome ──
@@ -198,8 +205,10 @@ export async function generateBrainPrediction(params: {
 }): Promise<BrainPredictionRecord | null> {
   if (params.signal === "HOLD") return null;
 
-  // Fix #3: hanya generate prediksi baru di awal candle 1H
-  if (!isNewHourlyCandle()) return null;
+  // Cooldown 30 menit per brain — max 1 prediksi per 30 menit
+  const now = Date.now();
+  if (now - _lastPredictionAt[params.brainType] < PREDICTION_COOLDOWN_MS) return null;
+  _lastPredictionAt[params.brainType] = now;
 
   const direction: "up" | "down" = params.signal === "BUY" ? "up" : "down";
   const tp = direction === "up" ? params.entryPrice + FIXED_DISTANCE : params.entryPrice - FIXED_DISTANCE;
